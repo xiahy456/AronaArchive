@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 
 
 def _format_transcript(messages: list[dict[str, str]]) -> str:
@@ -37,9 +38,17 @@ class ConversationManager:
     def get_history(self, session_id: str) -> list[dict[str, str]]:
         return list(self._sessions.get(session_id, []))
 
-    def append(self, session_id: str, role: str, content: str) -> None:
+    def append(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        *,
+        at: datetime | None = None,
+    ) -> None:
         history = self._sessions.setdefault(session_id, [])
-        history.append({"role": role, "content": content})
+        stamp = (at or datetime.now()).strftime("%Y-%m-%dT%H:%M:%S")
+        history.append({"role": role, "content": content, "time": stamp})
         # Keep last N turns = 2N messages (user+assistant)
         max_messages = max(1, self.max_history_turns) * 2
         if len(history) > max_messages:

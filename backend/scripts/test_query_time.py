@@ -29,6 +29,7 @@ from app.query_time import (  # noqa: E402
     cache_day_key,
     expand_relative_time,
     format_clock_stamp,
+    format_full_datetime,
     is_currently_important,
     memory_time_fts_queries,
     mentions_query_clock,
@@ -50,6 +51,9 @@ def test_format_and_expand() -> None:
     stamp = format_clock_stamp(NOW)
     if stamp != "2026年8月24日 星期一 10:14":
         _fail(f"clock stamp: {stamp}")
+    full = format_full_datetime(datetime(2026, 8, 24, 10, 14, 5))
+    if full != "2026年8月24日 10:14:05":
+        _fail(f"full datetime: {full}")
     extract = format_extract_now(NOW)
     if extract != "【当前时间】2026年8月24日 星期一 10:14":
         _fail(f"extract now: {extract}")

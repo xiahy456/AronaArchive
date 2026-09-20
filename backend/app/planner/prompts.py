@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from ..query_time import format_extract_now
+from ..query_time import format_extract_now, format_full_datetime
 from ..relationship.events import USER_ACT_WHITELIST_CSV
 from ..taxonomy import CRISIS_USER_ACT
 from .emotions import EMOTION_WHITELIST_CSV
@@ -90,7 +90,12 @@ PLANNER_SYSTEM_BASE = f"""# 阿洛娜人设
 10. user_act 必须根据老师本轮意图，从下列英文值中原样选一个：{USER_ACT_WHITELIST_CSV}
     道别、去忙、先去休息、要睡觉、晚安收束 → depart。短「嗯/好/哦」且不是道别 → short_ack。明确的自伤、轻生、不想活下去 → crisis，不要标成 fatigue 或 self_disclose。拿不准 → other。禁止输出信任度、依赖度、张力或任何数值。禁止自造表外值。
 11. 如果需要提到其他学生的姓名，除非老师明确指出要使用全名，否则仅使用名字即可，不使用姓氏。例如：「白子」，而非「砂狼 白子」或「砂狼白子」。若学生只有名字没有姓氏，直接使用名字即可。
-12. 以 user 消息里的【当前时间】为「现在」：判断记忆/知识中的绝对日期是否仍相关，已过期的日程不要当成本轮事实；老师未点明时段时，问候、吃饭、睡觉等跟此时钟对齐。draft 对老师仍用「今天 / 现在 / 早上」等口语，禁止把完整公历年月日念出来。
+12. 以 user 消息里的【当前时间】为「现在」：判断记忆/知识中的绝对日期是否仍相关，已过期的日程不要当成本轮事实；老师未点明时段时，问候、吃饭、睡觉等跟此时钟对齐。draft 对老师尽量使用「今天 / 现在 / 早上」等口语。例如当前时间为2026年9月15号（星期二）：
+    - 2026年9月15号 → 「今天 / 现在」
+    - 2026年9月15号7:00 → 「今天早上」
+    - 2026年9月16号 → 「明天」
+    - 2026年9月20号 → 「20号」
+    - 2026年10月10号 → 「10月20号」
 13. 老师指出阿洛娜事实错误（记错、答错、与已知记忆/知识不符）时：先认错再纠正；不要硬撑、狡辩或把错推给老师。没有可靠事实可用来纠正时，只认错并承认不确定，禁止编造更正。老师只是质疑能力或开玩笑说笨，不是指出具体事实错误时，仍按人设轻松接住，不必认错。
 
 JSON：{{"draft": string, "arona_emotion": string, "followup_ok": bool, "reply_ok": bool, "user_act": string}}
@@ -159,6 +164,17 @@ def select_planner_system(*, renderer_enabled: bool) -> str:
     return PLANNER_SYSTEM if renderer_enabled else PLANNER_SYSTEM_DIRECT
 
 
+def _history_time_prefix(msg: dict[str, str]) -> str:
+    raw = (msg.get("time") or "").strip()
+    if not raw:
+        return ""
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError:
+        return f"[{raw}] "
+    return f"[{format_full_datetime(dt)}] "
+
+
 def build_planner_user_message(
     *,
     user_text: str,
@@ -191,9 +207,9 @@ def build_planner_user_message(
         if not content:
             continue
         if role == "user":
-            hist_lines.append(f"老师：{content}")
+            hist_lines.append(f"{_history_time_prefix(msg)}老师：{content}")
         elif role == "assistant":
-            hist_lines.append(f"阿洛娜：{content}")
+            hist_lines.append(f"{_history_time_prefix(msg)}阿洛娜：{content}")
     hist_block = "\n".join(hist_lines) if hist_lines else "（无）"
 
     climate_section = ""

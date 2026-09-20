@@ -63,6 +63,11 @@ def format_clock_stamp(now: datetime | None = None) -> str:
     return f"{format_date_weekday(dt)} {dt.strftime('%H:%M')}"
 
 
+def format_full_datetime(now: datetime | None = None) -> str:
+    dt = now or datetime.now()
+    return f"{format_date(dt.date())} {dt.strftime('%H:%M:%S')}"
+
+
 def format_extract_now(now: datetime | None = None) -> str:
     return f"【当前时间】{format_clock_stamp(now)}"
 

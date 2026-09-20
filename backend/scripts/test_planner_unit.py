@@ -9,6 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.config import load_config
+from app.conversation import ConversationManager
 from app.planner import EMOTION_WHITELIST, normalize_emotion, parse_and_gate_intent
 from app.planner.prompts import (
     PLANNER_PREFIX_DIRECT,
@@ -32,6 +33,62 @@ from app.relationship.events import USER_ACT_WHITELIST, USER_ACT_WHITELIST_CSV, 
 
 
 def main() -> None:
+    frozen = datetime(2026, 8, 24, 10, 14)
+    timed_hist = [
+        {
+            "role": "user",
+            "content": "早上好",
+            "time": "2026-08-24T10:14:05",
+        },
+        {
+            "role": "assistant",
+            "content": "老师早上好。",
+            "time": "2026-08-24T10:14:07",
+        },
+    ]
+    timed_msg = build_planner_user_message(
+        user_text="还没睡",
+        history=timed_hist,
+        memories=[],
+        knowledge=[],
+        now=frozen,
+    )
+    assert "[2026年8月24日 10:14:05] 老师：早上好" in timed_msg
+    assert "[2026年8月24日 10:14:07] 阿洛娜：老师早上好。" in timed_msg
+    assert "内部时序依据" in PLANNER_SYSTEM
+    assert "内部时序依据" in PLANNER_SYSTEM_CRISIS
+
+    untimed_msg = build_planner_user_message(
+        user_text="还没睡",
+        history=[
+            {"role": "user", "content": "早上好"},
+            {"role": "assistant", "content": "老师早上好。"},
+        ],
+        memories=[],
+        knowledge=[],
+        now=frozen,
+    )
+    assert "老师：早上好" in untimed_msg
+    assert "[2026年8月24日" not in untimed_msg.split("【近期对话】", 1)[1].split(
+        "【老师本轮消息】", 1
+    )[0]
+
+    conv = ConversationManager()
+    conv.append("s1", "user", "早上好", at=datetime(2026, 8, 24, 10, 14, 5))
+    conv.append("s1", "assistant", "老师早上好。", at=datetime(2026, 8, 24, 10, 14, 7))
+    stored = conv.get_history("s1")
+    assert stored[0]["time"] == "2026-08-24T10:14:05"
+    assert stored[1]["time"] == "2026-08-24T10:14:07"
+    from_store = build_planner_user_message(
+        user_text="还没睡",
+        history=stored,
+        memories=[],
+        knowledge=[],
+        now=frozen,
+    )
+    assert "[2026年8月24日 10:14:05] 老师：早上好" in from_store
+    assert "[2026年8月24日 10:14:07] 阿洛娜：老师早上好。" in from_store
+
     assert normalize_emotion("SMILE") == "smile"
     assert normalize_emotion("nope") == "normal"
 
@@ -131,7 +188,7 @@ def main() -> None:
     m = msg_chat_response("ok", emotion="shy")
     assert m["emotion"] == "shy"
 
-    assert "【阿洛娜主要人设】" in PLANNER_SYSTEM
+    assert "【阿洛娜主要人设】" in PLANNER_SYSTEM_CRISIS
     assert "什亭之匣" in PLANNER_SYSTEM
     assert "温柔活泼" in PLANNER_SYSTEM
     assert "规划参谋" in PLANNER_SYSTEM
