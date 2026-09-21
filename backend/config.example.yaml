@@ -148,7 +148,7 @@ life:
   enabled: true
   persist_path: "data/memory/life.json"
   tick_sec: 5
-  look_hold_sec: 180
+  look_hold_sec: 60
   think_hold_sec: 120
 
 interact:

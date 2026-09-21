@@ -18,6 +18,7 @@ from .engine import LifeEngine
 from .events import WorldEvent, WorldKind, world_event
 from .loop import run_life_loop, tick_once
 from .policy import LifeDecision, LifeSettings, decide
+from .presence import PresenceGate, presence_emotion, publish_presence, schedule_presence
 from .state import InnerState, Rumination
 from .store import LifeStore
 
@@ -27,11 +28,15 @@ __all__ = [
     "LifeEngine",
     "LifeSettings",
     "LifeStore",
+    "PresenceGate",
     "Rumination",
     "WorldEvent",
     "WorldKind",
     "decide",
+    "presence_emotion",
+    "publish_presence",
     "run_life_loop",
+    "schedule_presence",
     "tick_once",
     "world_event",
 ]

@@ -137,3 +137,4 @@ docs/unused/
 /docs/**
 !/docs/architecture.md
 !/docs/hot_word.txt
+!/docs/常见问题.txt

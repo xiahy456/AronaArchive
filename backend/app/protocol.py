@@ -39,6 +39,7 @@ TYPE_RESULT = "result"
 TYPE_PONG = "pong"
 TYPE_COMPUTER_USE_ACTION = "computer_use_action"
 TYPE_COMPUTER_USE_DONE = "computer_use_done"
+TYPE_PRESENCE = "presence"
 
 CODE_INVALID_JSON = "INVALID_JSON"
 CODE_INTERNAL = "INTERNAL_ERROR"
@@ -83,6 +84,14 @@ def msg_stats(payload: dict[str, Any]) -> dict[str, Any]:
 
 def msg_computer_use_action(payload: dict[str, Any]) -> dict[str, Any]:
     return {"type": TYPE_COMPUTER_USE_ACTION, **payload}
+
+
+def msg_presence(emotion: str, *, activity: str = "") -> dict[str, Any]:
+    return {
+        "type": TYPE_PRESENCE,
+        "emotion": emotion,
+        "activity": activity,
+    }
 
 
 def msg_computer_use_done(

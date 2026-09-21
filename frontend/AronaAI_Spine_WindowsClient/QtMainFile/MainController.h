@@ -88,8 +88,9 @@ private slots:
 	void onPcmFrame(const QByteArray& frame);
 	// WebSocket 相关槽函数
 	void onWebSocketConnected(const QString& sessionId);
-	void onWebSocketChatResponse(const QString& content, const QString& contextUsed, double latency, const QString& emotion);
-	void onWebSocketError(WebSocketController::ErrorCode code, const QString& message);
+    void onWebSocketChatResponse(const QString& content, const QString& contextUsed, double latency, const QString& emotion);
+    void onWebSocketPresence(const QString& emotion);
+    void onWebSocketError(WebSocketController::ErrorCode code, const QString& message);
 	void onWebSocketStateChanged(WebSocketController::ConnectionState state);
 	void onPatEnded(int durationMs);
 	void onComputerUseAction(const QJsonObject& action);
@@ -107,6 +108,7 @@ private:
 	AronaTtsRef::Map m_ttsRefMap;	// emotion -> 参考音频 / prompt_text
 	QString m_currentText = "";	// 当前正在处理的文本
 	QString m_currentEmotion = "normal";	// 当前回复表情（英文值）
+	QString m_presenceEmotion = "normal";	// 生命循环在场脸（英文值，独立于台词）
 	bool m_waitingForAIResponse = false;	// 是否正在等待AI回复（仅文本输入）
 	bool m_listening = false;	// 持续聆听是否开启
 	int m_transcriptSeq = 0;
@@ -146,6 +148,9 @@ private:
 	void presentOutputError(const QString& text, const QString& emotion);
 	void holdOrPresentOutput(const QByteArray& audioData, const QString& mediaType, bool isError, const QString& text, const QString& emotion, bool isStream = false);
 	void applySilentEmotion(const QString& emotion);
+	void applyPresenceFace(const QString& emotion);
+	void restorePresenceFace();
+	bool isOutputPresenting() const;
 	void dismissSplashOnUnrecoverableError();
 
 };

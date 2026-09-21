@@ -21,6 +21,8 @@ import logging
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from .presence import schedule_presence
+
 if TYPE_CHECKING:
     from ..ws_handler import AppState
 
@@ -66,3 +68,4 @@ def tick_once(state: "AppState", now: datetime | None = None) -> None:
     if engine is None:
         return
     engine.tick(now, climate=_climate(state))
+    schedule_presence(state)

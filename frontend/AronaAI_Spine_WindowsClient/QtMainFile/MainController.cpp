@@ -132,6 +132,8 @@ MainController::MainController(MainWidget* mainWidget, TTSManager* ttsManager, A
         this, &MainController::onWebSocketConnected);
     connect(m_webSocketController, &WebSocketController::chatResponseReceived,
         this, &MainController::onWebSocketChatResponse);
+    connect(m_webSocketController, &WebSocketController::presenceReceived,
+        this, &MainController::onWebSocketPresence);
     connect(m_webSocketController, &WebSocketController::errorOccurred,
         this, &MainController::onWebSocketError);
     connect(m_webSocketController, &WebSocketController::connectionStateChanged,
@@ -203,7 +205,7 @@ void MainController::onTtsPlaybackEnded()
     m_streamingPresentation = false;
     m_mainWidget->hideOutputText();
     m_mainWidget->clearAnimation(2, 0.2f);
-    m_mainWidget->clearAnimation(1, 0.2f);
+    restorePresenceFace();
     m_audioRecorder->setPlaybackGuard(false);
 }
 
@@ -246,7 +248,7 @@ void MainController::presentOutput(const QByteArray& audioData, const QString& m
         }
         m_mainWidget->hideOutputText();
         m_mainWidget->clearAnimation(2, 0.2f);
-        m_mainWidget->clearAnimation(1, 0.2f);
+        restorePresenceFace();
         m_audioRecorder->setPlaybackGuard(false);
     });
 }
@@ -294,7 +296,7 @@ void MainController::presentOutputError(const QString& text, const QString& emot
             return;
         }
         m_mainWidget->hideOutputText();
-        m_mainWidget->clearAnimation(1, 0.2f);
+        restorePresenceFace();
         });
     m_ttsManager->notifyPlaybackFinished();
 }
@@ -590,7 +592,7 @@ void MainController::interruptOutput()
     m_measuringUserTurn = false;
     m_mainWidget->hideOutputText();
     m_mainWidget->clearAnimation(2, 0.2f);
-    m_mainWidget->clearAnimation(1, 0.2f);
+    restorePresenceFace();
     if (m_computerUseActive || (m_computerUseExecutor && m_computerUseExecutor->isBusy())) {
         m_computerUseStopRequested = true;
     }
@@ -762,19 +764,54 @@ void MainController::onPatEnded(int durationMs)
     FINE_DEBUG_OUTPUT(QString("[Interact] Sent pat_head durationMs=%1").arg(durationMs));
 }
 
+void MainController::onWebSocketPresence(const QString& emotion)
+{
+    const QString face = emotion.isEmpty() ? QStringLiteral("normal") : emotion;
+    m_presenceEmotion = face;
+    FINE_DEBUG_OUTPUT(QString("[Presence] emotion=%1 presenting=%2")
+        .arg(face)
+        .arg(isOutputPresenting() ? QStringLiteral("yes") : QStringLiteral("no")));
+    if (isOutputPresenting()) {
+        return;
+    }
+    applyPresenceFace(face);
+}
+
+void MainController::applyPresenceFace(const QString& emotion)
+{
+    if (!m_mainWidget) {
+        return;
+    }
+    const QString face = emotion.isEmpty() ? QStringLiteral("normal") : emotion;
+    const QString expressionAnim = AronaEmotion::toAnimationName(face);
+    m_mainWidget->setAnimation(expressionAnim, 1, true);
+}
+
+void MainController::restorePresenceFace()
+{
+    applyPresenceFace(m_presenceEmotion);
+}
+
+bool MainController::isOutputPresenting() const
+{
+    if (m_streamingPresentation || m_hasPendingOutput) {
+        return true;
+    }
+    return m_ttsManager && m_ttsManager->isPlayingAudio();
+}
+
 void MainController::applySilentEmotion(const QString& emotion)
 {
     const QString face = emotion.isEmpty() ? QStringLiteral("normal") : emotion;
     m_currentEmotion = face;
     ++m_outputGeneration;
     const int gen = m_outputGeneration;
-    const QString expressionAnim = AronaEmotion::toAnimationName(face);
-    m_mainWidget->setAnimation(expressionAnim, 1, true);
+    applyPresenceFace(face);
     QTimer::singleShot(kSilentInteractEmotionMs, this, [this, gen]() {
         if (gen != m_outputGeneration) {
             return;
         }
-        m_mainWidget->clearAnimation(1, 0.2f);
+        restorePresenceFace();
     });
 }
 

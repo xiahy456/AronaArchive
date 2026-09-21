@@ -60,7 +60,14 @@ from .input_filter import (
     is_unusable_user_text,
 )
 from .interact import parse_duration_ms, resolve_interact_action
-from .life import LifeEngine, WorldKind, world_event
+from .life import (
+    LifeEngine,
+    PresenceGate,
+    WorldKind,
+    publish_presence,
+    schedule_presence,
+    world_event,
+)
 from .logging_utils import begin_trace, format_interactive_log, preview, reset_trace
 from .orchestrator import Orchestrator
 from .proactive import ConnectionHub, ProactiveScheduler, WelcomeState, resolve_welcome_context
@@ -118,6 +125,8 @@ class AppState:
         self.hub = hub or ConnectionHub()
         self.scheduler = scheduler
         self.life = life
+        self.presence = PresenceGate()
+        self.hub.set_on_all_idle(lambda: schedule_presence(self))
 
 
 async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
@@ -177,8 +186,11 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
         if state.life is None:
             return
         state.life.apply(world_event(kind, session_id=session_id))
+        schedule_presence(state)
 
     _note_life("teacher_arrived")
+    if state.life is not None:
+        await publish_presence(state, force_session=session_id)
 
     chat_task: asyncio.Task[None] | None = None
     inflight_kind: str | None = None

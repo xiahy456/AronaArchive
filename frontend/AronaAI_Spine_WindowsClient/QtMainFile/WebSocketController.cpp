@@ -572,6 +572,9 @@ void WebSocketController::handleMessage(const QJsonObject& message)
     if (type == "chat_response") {
         handleChatResponse(message);
     }
+    else if (type == "presence") {
+        handlePresence(message);
+    }
     else if (type == "computer_use_action") {
         handleComputerUseAction(message);
     }
@@ -616,6 +619,18 @@ void WebSocketController::handleChatResponse(const QJsonObject& message)
     if (m_onChatResponseCallback) {
         m_onChatResponseCallback(message);
     }
+}
+
+void WebSocketController::handlePresence(const QJsonObject& message)
+{
+    QString emotion = message["emotion"].toString("normal");
+    if (emotion.trimmed().isEmpty()) {
+        emotion = QStringLiteral("normal");
+    }
+    FINE_DEBUG_OUTPUT(QString("[WebSocketController] Received presence emotion=%1 activity=%2")
+        .arg(emotion)
+        .arg(message["activity"].toString()));
+    emit presenceReceived(emotion);
 }
 
 void WebSocketController::handleComputerUseAction(const QJsonObject& message)

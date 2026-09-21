@@ -13,7 +13,7 @@ arona-ai/
 │   │   ├── interact/           # 非对话手势（摸头等）；系统事件指令 + 白名单
 │   │   ├── proactive/          # 主动事件（上线欢迎、空闲搭话、时刻照料、goal 回访、节日）
 │   │   ├── relationship/       # 关系气候（信任/依赖/张力、决策）
-│   │   ├── life/               # 生命循环（阿洛娜内状态、世界事件、墙钟 tick）
+│   │   ├── life/               # 生命循环（阿洛娜内状态、世界事件、墙钟 tick；换脸走 presence，不经 Planner）
 │   │   ├── knowledge.py        # 世界观知识 RAG
 │   │   ├── conversation.py     # 多轮对话历史
 │   │   ├── prompt.py           # Prompt / Renderer 消息组装

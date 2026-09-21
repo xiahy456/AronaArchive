@@ -154,6 +154,7 @@ signals:
     // emotion 为英文表情值（如 smile），由客户端映射到 Spine 动画值
     void chatResponseReceived(const QString& content,
         const QString& contextUsed, double latency, const QString& emotion);
+    void presenceReceived(const QString& emotion);
     void computerUseActionReceived(const QJsonObject& action);
     void computerUseDoneReceived(const QJsonObject& message);
 
@@ -189,6 +190,7 @@ private:
 
     // 处理聊天响应
     void handleChatResponse(const QJsonObject& message);
+    void handlePresence(const QJsonObject& message);
     void handleComputerUseAction(const QJsonObject& message);
     void handleComputerUseDone(const QJsonObject& message);
 

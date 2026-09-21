@@ -6,6 +6,7 @@ Run from backend/:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 import tempfile
@@ -21,12 +22,17 @@ from app.life import (  # noqa: E402
     LifeEngine,
     LifeSettings,
     LifeStore,
+    PresenceGate,
     Rumination,
     decide,
+    presence_emotion,
+    publish_presence,
     world_event,
 )
 from app.life.loop import tick_once  # noqa: E402
 from app.life.policy import LifeDecision  # noqa: E402
+from app.proactive.hub import ConnectionHub  # noqa: E402
+from app.protocol import TYPE_PRESENCE, msg_presence  # noqa: E402
 from app.relationship import RelationshipState, RelationshipStore  # noqa: E402
 
 
@@ -271,6 +277,115 @@ def test_loop_tick_once_with_fake_state() -> None:
     print("  ok")
 
 
+def test_presence_emotion_mapping() -> None:
+    print("== presence_emotion maps activity/mood onto whitelist ==")
+    cases = [
+        (InnerState(activity="resting", private_mood="sleepy"), "sleep"),
+        (InnerState(activity="resting", private_mood="bright"), "sleep_very_content"),
+        (InnerState(activity="looking_at_teacher", private_mood="bright"), "normal"),
+        (InnerState(activity="looking_at_teacher", private_mood="calm"), "normal"),
+        (InnerState(activity="looking_at_teacher", private_mood="sleepy"), "sleep"),
+        (InnerState(activity="thinking", private_mood="preoccupied"), "curious"),
+        (InnerState(activity="thinking", private_mood="weary"), "frustration"),
+        (InnerState(activity="thinking", private_mood="sleepy"), "sleep"),
+        (InnerState(activity="idle_in_classroom", private_mood="calm"), "normal"),
+        (InnerState(activity="idle_in_classroom", private_mood="bright"), "smile"),
+        (InnerState(activity="idle_in_classroom", private_mood="weary"), "frustration"),
+        (InnerState(activity="idle_in_classroom", private_mood="preoccupied"), "curious"),
+        (InnerState(activity="idle_in_classroom", private_mood="sleepy"), "sleep"),
+        (
+            InnerState.from_dict(
+                {"activity": "idle_in_classroom", "private_mood": "not-a-mood"}
+            ),
+            "normal",
+        ),
+    ]
+    for state, expected in cases:
+        got = presence_emotion(state)
+        if got != expected:
+            _fail(f"activity={state.activity} mood={state.private_mood} -> {got} want {expected}")
+    print("  ok")
+
+
+def test_msg_presence_has_no_content() -> None:
+    print("== msg_presence is not a chat_response ==")
+    payload = msg_presence("sleep", activity="resting")
+    if payload.get("type") != TYPE_PRESENCE:
+        _fail(payload.get("type"))
+    if "content" in payload:
+        _fail("presence must not carry content")
+    if payload.get("emotion") != "sleep":
+        _fail(payload.get("emotion"))
+    if payload.get("activity") != "resting":
+        _fail(payload.get("activity"))
+    print("  ok")
+
+
+def _presence_state(engine: LifeEngine, hub: ConnectionHub) -> SimpleNamespace:
+    return SimpleNamespace(
+        life=engine,
+        hub=hub,
+        presence=PresenceGate(),
+        orchestrator=SimpleNamespace(relationship=None),
+        config=SimpleNamespace(proactive=SimpleNamespace(relationship=None)),
+    )
+
+
+def test_presence_publish_change_busy_and_listen() -> None:
+    print("== presence pushes on emotion change; busy defers; listen still receives ==")
+
+    async def _run() -> None:
+        sent: list[dict] = []
+
+        async def send(payload: dict) -> None:
+            sent.append(dict(payload))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = LifeEngine.from_path(Path(tmp) / "life.json", _settings())
+            hub = ConnectionHub()
+            hub.register("s1", send)
+            hub.set_listening("s1", True)
+            state = _presence_state(engine, hub)
+
+            await publish_presence(state)
+            if not sent:
+                _fail("first presence should send current face")
+            if sent[-1]["type"] != "presence":
+                _fail(sent[-1]["type"])
+            if "content" in sent[-1]:
+                _fail("presence payload must not include content")
+            if sent[-1]["emotion"] != "normal":
+                _fail(sent[-1]["emotion"])
+            n = len(sent)
+            await publish_presence(state)
+            if len(sent) != n:
+                _fail("same face must not resend")
+
+            hub.set_busy("s1", True)
+            engine.apply(world_event("clock_tick", at=_night()))
+            await publish_presence(state)
+            if len(sent) != n:
+                _fail("busy must defer presence")
+            if not state.presence.pending:
+                _fail("deferred presence should be pending")
+            hub.set_busy("s1", False)
+            await publish_presence(state)
+            if len(sent) != n + 1:
+                _fail(f"flush after busy sent {len(sent) - n} extra")
+            if sent[-1]["emotion"] != "sleep":
+                _fail(sent[-1]["emotion"])
+            if sent[-1]["activity"] != "resting":
+                _fail(sent[-1]["activity"])
+
+            tick_once(state, now=_night() + timedelta(seconds=5))
+            await asyncio.sleep(0)
+            if len(sent) != n + 1:
+                _fail("tick with same face must not push")
+
+    asyncio.run(_run())
+    print("  ok")
+
+
 def main() -> None:
     test_json_roundtrip_isolated_from_relationship()
     test_look_hold_decays_to_idle()
@@ -280,6 +395,9 @@ def main() -> None:
     test_listen_on_does_not_freeze_ticks()
     test_engine_ticks_never_speak_or_chat()
     test_loop_tick_once_with_fake_state()
+    test_presence_emotion_mapping()
+    test_msg_presence_has_no_content()
+    test_presence_publish_change_busy_and_listen()
     print("all life unit tests passed")
 
 
