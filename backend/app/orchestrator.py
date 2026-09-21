@@ -646,7 +646,7 @@ class Orchestrator:
         """Generate a system-event line (welcome / idle / care / goal / continue / interact).
 
         sent: a line was pushed (including silent interact with empty content).
-        declined: lunch/sleep Planner refused (no fallback).
+        declined: care Planner refused (no fallback).
         failed: generate miss; caller may retry.
         """
         user_text = instruction

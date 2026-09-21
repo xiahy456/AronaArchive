@@ -15,7 +15,7 @@ from types import SimpleNamespace
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BACKEND_DIR))
 
-from app.config import load_config  # noqa: E402
+from app.config import CareConfig, load_config  # noqa: E402
 from app.memory.store import MemoryStore  # noqa: E402
 from app.planner.schema import parse_and_gate_intent  # noqa: E402
 from app.proactive.care import (  # noqa: E402
@@ -35,6 +35,7 @@ from app.proactive.goal import (  # noqa: E402
     HISTORY_GOAL_MARKER,
     build_goal_instruction,
     can_attempt_goal,
+    goal_defers_to_care,
     goal_is_due_soon,
     has_important_goal,
     history_follows_proactive_marker,
@@ -83,6 +84,22 @@ def _idle_kwargs(**overrides: object) -> dict[str, object]:
     return base
 
 
+def _care_cfg(**overrides: object) -> SimpleNamespace:
+    base: dict[str, object] = {
+        "enabled": True,
+        "breakfast_start": "06:30",
+        "breakfast_end": "08:00",
+        "lunch_start": "11:30",
+        "lunch_end": "13:00",
+        "dinner_start": "17:30",
+        "dinner_end": "19:00",
+        "sleep_start": "23:00",
+        "sleep_end": "23:20",
+    }
+    base.update(overrides)
+    return SimpleNamespace(**base)
+
+
 def test_idle_fire_rules() -> None:
     print("== idle fire / cooldown / rest / depart ==")
     now = datetime(2026, 8, 13, 15, 0, 0)
@@ -124,19 +141,45 @@ def test_idle_fire_rules() -> None:
 
 def test_care_window_once_per_day() -> None:
     print("== care window / daily once ==")
-    lunch = datetime(2026, 8, 13, 12, 10, 0)
-    if not in_window(lunch, "12:00", "12:30"):
-        _fail("12:10 should be in lunch window")
-    if in_window(datetime(2026, 8, 13, 12, 30, 0), "12:00", "12:30"):
-        _fail("12:30 should be exclusive end")
+    breakfast = datetime(2026, 8, 13, 7, 40, 0)
+    if not in_window(breakfast, "06:30", "08:00"):
+        _fail("07:40 should be in breakfast window")
     if not should_fire_care(
-        "lunch", lunch, done_today=[], start="12:00", end="12:30"
+        "breakfast", breakfast, done_today=[], start="06:30", end="08:00"
+    ):
+        _fail("breakfast should fire in window")
+    if should_fire_care(
+        "breakfast",
+        breakfast,
+        done_today=["breakfast"],
+        start="06:30",
+        end="08:00",
+    ):
+        _fail("breakfast already done today")
+    lunch = datetime(2026, 8, 13, 12, 10, 0)
+    if not in_window(lunch, "11:30", "13:00"):
+        _fail("12:10 should be in lunch window")
+    if in_window(datetime(2026, 8, 13, 13, 0, 0), "11:30", "13:00"):
+        _fail("13:00 should be exclusive end")
+    if not should_fire_care(
+        "lunch", lunch, done_today=[], start="11:30", end="13:00"
     ):
         _fail("lunch should fire in window")
     if should_fire_care(
-        "lunch", lunch, done_today=["lunch"], start="12:00", end="12:30"
+        "lunch", lunch, done_today=["lunch"], start="11:30", end="13:00"
     ):
         _fail("lunch already done today")
+    dinner = datetime(2026, 8, 13, 18, 10, 0)
+    if not in_window(dinner, "17:30", "19:00"):
+        _fail("18:10 should be in dinner window")
+    if not should_fire_care(
+        "dinner", dinner, done_today=[], start="17:30", end="19:00"
+    ):
+        _fail("dinner should fire in window")
+    if should_fire_care(
+        "dinner", dinner, done_today=["dinner"], start="17:30", end="19:00"
+    ):
+        _fail("dinner already done today")
     sleep = datetime(2026, 8, 13, 23, 5, 0)
     if not should_fire_care(
         "sleep", sleep, done_today=[], start="23:00", end="23:20"
@@ -150,18 +193,38 @@ def test_care_window_once_per_day() -> None:
         "lunch",
         lunch,
         done_today=[],
-        start="12:00",
-        end="12:30",
+        start="11:30",
+        end="13:00",
         last_proactive_at=lunch - timedelta(seconds=60),
         after_sec=900,
     ):
         _fail("welcome gap (after_sec) should block lunch")
+    if should_fire_care(
+        "breakfast",
+        breakfast,
+        done_today=[],
+        start="06:30",
+        end="08:00",
+        last_proactive_at=breakfast - timedelta(seconds=60),
+        after_sec=900,
+    ):
+        _fail("welcome gap (after_sec) should block breakfast")
+    if should_fire_care(
+        "dinner",
+        dinner,
+        done_today=[],
+        start="17:30",
+        end="19:00",
+        last_proactive_at=dinner - timedelta(seconds=60),
+        after_sec=900,
+    ):
+        _fail("welcome gap (after_sec) should block dinner")
     if not should_fire_care(
         "lunch",
         lunch,
         done_today=[],
-        start="12:00",
-        end="12:30",
+        start="11:30",
+        end="13:00",
         last_proactive_at=lunch - timedelta(seconds=1000),
         after_sec=900,
     ):
@@ -170,8 +233,8 @@ def test_care_window_once_per_day() -> None:
         "lunch",
         lunch,
         done_today=[],
-        start="12:00",
-        end="12:30",
+        start="11:30",
+        end="13:00",
         last_proactive_at=None,
         after_sec=900,
     ):
@@ -179,11 +242,21 @@ def test_care_window_once_per_day() -> None:
     text = build_care_instruction("lunch", climate="cling_risk")
     if "更短" not in text or HISTORY_CARE_MARKER != "【提醒】":
         _fail("cling care should be shorter")
+    breakfast_text = build_care_instruction("breakfast")
+    if "已吃早饭" not in breakfast_text or "reply_ok 必须 false" not in breakfast_text:
+        _fail("breakfast instruction should gate on already-addressed meal")
+    if "正在聊" not in breakfast_text or "还在想" not in breakfast_text:
+        _fail("breakfast instruction should ban citing the current topic")
     lunch_text = build_care_instruction("lunch")
     if "已吃午饭" not in lunch_text or "reply_ok 必须 false" not in lunch_text:
         _fail("lunch instruction should gate on already-addressed meal")
     if "正在聊" not in lunch_text or "还在想" not in lunch_text:
         _fail("lunch instruction should ban citing the current topic")
+    dinner_text = build_care_instruction("dinner")
+    if "已吃晚饭" not in dinner_text or "reply_ok 必须 false" not in dinner_text:
+        _fail("dinner instruction should gate on already-addressed meal")
+    if "正在聊" not in dinner_text or "还在想" not in dinner_text:
+        _fail("dinner instruction should ban citing the current topic")
     sleep_text = build_care_instruction("sleep")
     if "待会再睡" not in sleep_text or "晚安收束" not in sleep_text:
         _fail("sleep instruction should gate on already-addressed rest")
@@ -193,13 +266,21 @@ def test_care_window_once_per_day() -> None:
 
 
 def test_care_planner_declined() -> None:
-    print("== care planner declined is lunch/sleep reply_ok=false only ==")
+    print("== care planner declined is care kinds reply_ok=false only ==")
+    if not care_planner_declined("breakfast", reply_ok=False):
+        _fail("breakfast reply_ok=false should decline")
     if not care_planner_declined("lunch", reply_ok=False):
         _fail("lunch reply_ok=false should decline")
+    if not care_planner_declined("dinner", reply_ok=False):
+        _fail("dinner reply_ok=false should decline")
     if not care_planner_declined("sleep", reply_ok=False):
         _fail("sleep reply_ok=false should decline")
+    if care_planner_declined("breakfast", reply_ok=True):
+        _fail("breakfast reply_ok=true should not decline")
     if care_planner_declined("lunch", reply_ok=True):
         _fail("lunch reply_ok=true should not decline")
+    if care_planner_declined("dinner", reply_ok=True):
+        _fail("dinner reply_ok=true should not decline")
     if care_planner_declined("idle", reply_ok=False):
         _fail("idle must not use care decline")
     if care_planner_declined("welcome", reply_ok=False):
@@ -239,6 +320,10 @@ def test_decide_proactive_policy() -> None:
         _fail("idle initiate should be checked_in")
     if map_arona_act("initiate", "secure_play", motive_kind="lunch") != "cared":
         _fail("care initiate should be cared")
+    if map_arona_act("initiate", "secure_play", motive_kind="breakfast") != "cared":
+        _fail("breakfast initiate should be cared")
+    if map_arona_act("initiate", "secure_play", motive_kind="dinner") != "cared":
+        _fail("dinner initiate should be cared")
     goal_ok = decide_proactive(play, "goal")
     if goal_ok.action != "initiate":
         _fail(f"secure_play goal should initiate, got {goal_ok.action}")
@@ -277,15 +362,22 @@ def test_scheduler_persist_and_priority(tmp: Path) -> None:
     idle_cfg = SimpleNamespace(
         enabled=True, after_sec=900, cooldown_sec=1800, max_per_day=3
     )
-    care_cfg = SimpleNamespace(
-        enabled=True,
-        lunch_start="12:00",
-        lunch_end="12:30",
-        sleep_start="23:00",
-        sleep_end="23:20",
-    )
+    care_cfg = _care_cfg()
     path = tmp / "proactive.json"
     sched = ProactiveScheduler(path, idle_cfg=idle_cfg, care_cfg=care_cfg)
+    morning = datetime(2026, 8, 13, 7, 40, 0)
+    sched.note_user_activity(morning - timedelta(seconds=2000))
+    sched.note_proactive(morning - timedelta(seconds=2000))
+    breakfast = sched.pick_motive(
+        morning,
+        last_user_act="other",
+        climate="secure_play",
+        goals=_sample_goals(),
+    )
+    if breakfast is None or breakfast.kind != "breakfast":
+        _fail(f"expected breakfast over goal/idle, got {breakfast}")
+    sched.mark_fired("breakfast", morning)
+
     noon = datetime(2026, 8, 13, 12, 10, 0)
     sched.note_user_activity(noon - timedelta(seconds=2000))
     sched.note_proactive(noon - timedelta(seconds=2000))
@@ -303,6 +395,8 @@ def test_scheduler_persist_and_priority(tmp: Path) -> None:
         _fail("lunch should not fire twice the same day")
 
     loaded = ProactiveScheduler(path, idle_cfg=idle_cfg, care_cfg=care_cfg)
+    if "breakfast" not in loaded.state.care_done:
+        _fail("breakfast care_done should persist")
     if "lunch" not in loaded.state.care_done:
         _fail("care_done should persist")
 
@@ -323,13 +417,7 @@ def test_welcome_does_not_eat_idle_cooldown(tmp: Path) -> None:
     idle_cfg = SimpleNamespace(
         enabled=True, after_sec=30, cooldown_sec=1800, max_per_day=10
     )
-    care_cfg = SimpleNamespace(
-        enabled=True,
-        lunch_start="12:00",
-        lunch_end="12:30",
-        sleep_start="23:00",
-        sleep_end="23:20",
-    )
+    care_cfg = _care_cfg()
     path = tmp / "proactive_welcome_idle.json"
     sched = ProactiveScheduler(path, idle_cfg=idle_cfg, care_cfg=care_cfg)
     now = datetime(2026, 8, 13, 15, 10, 0)
@@ -357,13 +445,7 @@ def test_care_waits_after_welcome(tmp: Path) -> None:
     idle_cfg = SimpleNamespace(
         enabled=True, after_sec=900, cooldown_sec=1800, max_per_day=3
     )
-    care_cfg = SimpleNamespace(
-        enabled=True,
-        lunch_start="12:00",
-        lunch_end="12:30",
-        sleep_start="23:00",
-        sleep_end="23:20",
-    )
+    care_cfg = _care_cfg()
     sched = ProactiveScheduler(
         tmp / "proactive_care_welcome.json",
         idle_cfg=idle_cfg,
@@ -395,6 +477,44 @@ def test_care_waits_after_welcome(tmp: Path) -> None:
     if picked is None or picked.kind != "lunch":
         _fail(f"lunch should fire after after_sec, got {picked}")
 
+    breakfast_at = datetime(2026, 8, 13, 7, 40, 0)
+    breakfast_sched = ProactiveScheduler(
+        tmp / "proactive_care_breakfast.json",
+        idle_cfg=idle_cfg,
+        care_cfg=care_cfg,
+    )
+    breakfast_sched.note_proactive(breakfast_at - timedelta(seconds=60))
+    blocked_breakfast = breakfast_sched.pick_motive(
+        breakfast_at, last_user_act="other"
+    )
+    if blocked_breakfast is not None:
+        _fail(
+            f"breakfast should wait after_sec after welcome, got {blocked_breakfast}"
+        )
+    breakfast_ready = breakfast_sched.pick_motive(
+        breakfast_at + timedelta(seconds=840),
+        last_user_act="other",
+    )
+    if breakfast_ready is None or breakfast_ready.kind != "breakfast":
+        _fail(f"breakfast should fire after after_sec, got {breakfast_ready}")
+
+    dinner_at = datetime(2026, 8, 13, 18, 10, 0)
+    dinner_sched = ProactiveScheduler(
+        tmp / "proactive_care_dinner.json",
+        idle_cfg=idle_cfg,
+        care_cfg=care_cfg,
+    )
+    dinner_sched.note_proactive(dinner_at - timedelta(seconds=60))
+    blocked_dinner = dinner_sched.pick_motive(dinner_at, last_user_act="other")
+    if blocked_dinner is not None:
+        _fail(f"dinner should wait after_sec after welcome, got {blocked_dinner}")
+    dinner_ready = dinner_sched.pick_motive(
+        dinner_at + timedelta(seconds=840),
+        last_user_act="other",
+    )
+    if dinner_ready is None or dinner_ready.kind != "dinner":
+        _fail(f"dinner should fire after after_sec, got {dinner_ready}")
+
     night = datetime(2026, 8, 13, 23, 5, 0)
     night_sched = ProactiveScheduler(
         tmp / "proactive_care_sleep.json",
@@ -419,13 +539,7 @@ def test_mark_care_addressed_skips_without_proactive_stamp(tmp: Path) -> None:
     idle_cfg = SimpleNamespace(
         enabled=True, after_sec=900, cooldown_sec=1800, max_per_day=3
     )
-    care_cfg = SimpleNamespace(
-        enabled=True,
-        lunch_start="12:00",
-        lunch_end="12:30",
-        sleep_start="23:00",
-        sleep_end="23:20",
-    )
+    care_cfg = _care_cfg()
     sched = ProactiveScheduler(
         tmp / "proactive_care_addressed.json",
         idle_cfg=idle_cfg,
@@ -443,6 +557,24 @@ def test_mark_care_addressed_skips_without_proactive_stamp(tmp: Path) -> None:
     picked = sched.pick_motive(noon, last_user_act="other")
     if picked is not None and picked.kind == "lunch":
         _fail(f"addressed lunch should not be picked, got {picked}")
+
+    evening = datetime(2026, 8, 13, 18, 10, 0)
+    dinner_sched = ProactiveScheduler(
+        tmp / "proactive_care_addressed_dinner.json",
+        idle_cfg=idle_cfg,
+        care_cfg=care_cfg,
+    )
+    dinner_sched.note_user_activity(evening - timedelta(seconds=2000))
+    dinner_sched.note_proactive(evening - timedelta(seconds=2000))
+    dinner_before = dinner_sched.state.last_proactive_at
+    dinner_sched.mark_care_addressed("dinner", evening)
+    if "dinner" not in dinner_sched.state.care_done:
+        _fail("dinner should be in care_done after addressed")
+    if dinner_sched.state.last_proactive_at != dinner_before:
+        _fail("last_proactive_at must not change when dinner is only addressed")
+    dinner_picked = dinner_sched.pick_motive(evening, last_user_act="other")
+    if dinner_picked is not None and dinner_picked.kind == "dinner":
+        _fail(f"addressed dinner should not be picked, got {dinner_picked}")
     print("  ok")
 
 
@@ -474,8 +606,19 @@ def test_config_loads() -> None:
         _fail(f"after_sec {cfg.proactive.idle.after_sec}")
     if "proactive.json" not in cfg.proactive.care.persist_path:
         _fail(f"persist_path {cfg.proactive.care.persist_path}")
-    if cfg.proactive.care.lunch_start != "12:00":
+    if cfg.proactive.care.lunch_start != "11:30":
         _fail("lunch_start")
+    if cfg.proactive.care.breakfast_start != "06:30":
+        _fail("breakfast_start")
+    if cfg.proactive.care.dinner_start != "17:30":
+        _fail("dinner_start")
+    defaults = CareConfig()
+    if defaults.breakfast_start != "06:30" or defaults.breakfast_end != "08:00":
+        _fail("breakfast window defaults")
+    if defaults.lunch_start != "11:30" or defaults.lunch_end != "13:00":
+        _fail("lunch window defaults")
+    if defaults.dinner_start != "17:30" or defaults.dinner_end != "19:00":
+        _fail("dinner window defaults")
     if not cfg.proactive.goal.enabled:
         _fail("goal should default enabled")
     if cfg.proactive.goal.min_after_user_sec != 300:
@@ -822,13 +965,7 @@ def test_mute_last_goal_phrase(tmp: Path) -> None:
     idle_cfg = SimpleNamespace(
         enabled=True, after_sec=900, cooldown_sec=1800, max_per_day=3
     )
-    care_cfg = SimpleNamespace(
-        enabled=True,
-        lunch_start="12:00",
-        lunch_end="12:30",
-        sleep_start="23:00",
-        sleep_end="23:20",
-    )
+    care_cfg = _care_cfg()
     sched = ProactiveScheduler(
         tmp / "proactive_mute.json",
         idle_cfg=idle_cfg,
@@ -875,6 +1012,12 @@ def test_goal_ack_and_due_soon(tmp: Path) -> None:
     noon = datetime(2026, 9, 20, 12, 26, 0)
     due = datetime(2026, 9, 20, 13, 10, 0)
 
+    breakfast_goal = "老师约定2026年9月20日早上7点半吃早饭"
+    dinner_goal = "老师约定2026年9月20日晚上6点吃晚饭"
+    if not goal_defers_to_care(breakfast_goal, care_enabled=True):
+        _fail("breakfast goal should defer to care")
+    if not goal_defers_to_care(dinner_goal, care_enabled=True):
+        _fail("dinner goal should defer to care")
     if goal_is_due_soon(
         sleep_goal["content"],
         datetime(2026, 9, 20, 22, 10, 0),
@@ -882,6 +1025,20 @@ def test_goal_ack_and_due_soon(tmp: Path) -> None:
         care_enabled=True,
     ):
         _fail("sleep goal must not due-soon when care is enabled")
+    if goal_is_due_soon(
+        breakfast_goal,
+        datetime(2026, 9, 20, 6, 40, 0),
+        due_soon_sec=3600,
+        care_enabled=True,
+    ):
+        _fail("breakfast goal must not due-soon when care is enabled")
+    if goal_is_due_soon(
+        dinner_goal,
+        datetime(2026, 9, 20, 17, 10, 0),
+        due_soon_sec=3600,
+        care_enabled=True,
+    ):
+        _fail("dinner goal must not due-soon when care is enabled")
     if not goal_is_due_soon(
         ticket_goal["content"],
         due,
@@ -913,13 +1070,7 @@ def test_goal_ack_and_due_soon(tmp: Path) -> None:
     idle_cfg = SimpleNamespace(
         enabled=True, after_sec=900, cooldown_sec=1800, max_per_day=3
     )
-    care_cfg = SimpleNamespace(
-        enabled=True,
-        lunch_start="12:00",
-        lunch_end="12:30",
-        sleep_start="23:00",
-        sleep_end="23:20",
-    )
+    care_cfg = _care_cfg()
     sched = ProactiveScheduler(
         tmp / "proactive_ack.json",
         idle_cfg=idle_cfg,
@@ -1037,13 +1188,7 @@ def test_goal_after_welcome_not_blocked_by_idle(tmp: Path) -> None:
     idle_cfg = SimpleNamespace(
         enabled=True, after_sec=30, cooldown_sec=1800, max_per_day=10
     )
-    care_cfg = SimpleNamespace(
-        enabled=True,
-        lunch_start="12:00",
-        lunch_end="12:30",
-        sleep_start="23:00",
-        sleep_end="23:20",
-    )
+    care_cfg = _care_cfg()
     sched = ProactiveScheduler(
         tmp / "proactive_goal_welcome.json",
         idle_cfg=idle_cfg,
@@ -1088,13 +1233,7 @@ def test_important_goal_bypasses_daily_cap_pick(tmp: Path) -> None:
     idle_cfg = SimpleNamespace(
         enabled=True, after_sec=900, cooldown_sec=1800, max_per_day=3
     )
-    care_cfg = SimpleNamespace(
-        enabled=True,
-        lunch_start="12:00",
-        lunch_end="12:30",
-        sleep_start="23:00",
-        sleep_end="23:20",
-    )
+    care_cfg = _care_cfg()
     sched = ProactiveScheduler(
         tmp / "proactive_important_goal.json",
         idle_cfg=idle_cfg,
@@ -1127,13 +1266,7 @@ def test_goal_global_gap_blocks_other_keys(tmp: Path) -> None:
     idle_cfg = SimpleNamespace(
         enabled=True, after_sec=900, cooldown_sec=1800, max_per_day=3
     )
-    care_cfg = SimpleNamespace(
-        enabled=True,
-        lunch_start="12:00",
-        lunch_end="12:30",
-        sleep_start="23:00",
-        sleep_end="23:20",
-    )
+    care_cfg = _care_cfg()
     sched = ProactiveScheduler(
         tmp / "proactive_goal_gap.json",
         idle_cfg=idle_cfg,
@@ -1181,13 +1314,7 @@ def test_stale_dated_goal_uses_daily_cap(tmp: Path) -> None:
     idle_cfg = SimpleNamespace(
         enabled=True, after_sec=900, cooldown_sec=1800, max_per_day=3
     )
-    care_cfg = SimpleNamespace(
-        enabled=True,
-        lunch_start="12:00",
-        lunch_end="12:30",
-        sleep_start="23:00",
-        sleep_end="23:20",
-    )
+    care_cfg = _care_cfg()
     sched = ProactiveScheduler(
         tmp / "proactive_stale_goal.json",
         idle_cfg=idle_cfg,
@@ -1253,13 +1380,7 @@ def test_festival_calendar_and_once(tmp: Path) -> None:
     idle_cfg = SimpleNamespace(
         enabled=True, after_sec=900, cooldown_sec=1800, max_per_day=3
     )
-    care_cfg = SimpleNamespace(
-        enabled=True,
-        lunch_start="12:00",
-        lunch_end="12:30",
-        sleep_start="23:00",
-        sleep_end="23:20",
-    )
+    care_cfg = _care_cfg()
     sched = ProactiveScheduler(
         tmp / "proactive_festival.json",
         idle_cfg=idle_cfg,
@@ -1616,13 +1737,7 @@ def test_mood_followup_select_and_gates(tmp: Path) -> None:
     idle_cfg = SimpleNamespace(
         enabled=True, after_sec=900, cooldown_sec=1800, max_per_day=3
     )
-    care_cfg = SimpleNamespace(
-        enabled=True,
-        lunch_start="12:00",
-        lunch_end="12:30",
-        sleep_start="23:00",
-        sleep_end="23:20",
-    )
+    care_cfg = _care_cfg()
     path = tmp / "proactive_mood.json"
     moods = [
         {

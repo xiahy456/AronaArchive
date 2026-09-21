@@ -172,8 +172,12 @@ class IdleConfig(BaseModel):
 class CareConfig(BaseModel):
     enabled: bool = True
     persist_path: str = "data/memory/proactive.json"
-    lunch_start: str = "12:00"
-    lunch_end: str = "12:30"
+    breakfast_start: str = "06:30"
+    breakfast_end: str = "08:00"
+    lunch_start: str = "11:30"
+    lunch_end: str = "13:00"
+    dinner_start: str = "17:30"
+    dinner_end: str = "19:00"
     sleep_start: str = "23:00"
     sleep_end: str = "23:20"
 

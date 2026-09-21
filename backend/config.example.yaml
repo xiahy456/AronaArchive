@@ -121,8 +121,12 @@ proactive:
   care:
     enabled: true
     persist_path: "data/memory/proactive.json"
-    lunch_start: "12:00"
-    lunch_end: "12:30"
+    breakfast_start: "06:30"
+    breakfast_end: "08:00"
+    lunch_start: "11:30"
+    lunch_end: "13:00"
+    dinner_start: "17:30"
+    dinner_end: "19:00"
     sleep_start: "23:00"
     sleep_end: "23:20"
   goal:

@@ -608,7 +608,7 @@ def test_msg_computer_use_done() -> None:
 
 def test_router_deny_words() -> None:
     print("== router deny words ==")
-    for text in ("晚安", "老师晚安", "摸头", "想你了", "吃饭了吗"):
+    for text in ("晚安", "老师晚安", "摸头", "想你了", "吃饭了吗", "早饭吃了吗", "晚饭好了"):
         if not is_denied_computer_use(text):
             _fail(f"should deny {text!r}")
     for text in ("按 Win 打开开始菜单", "帮我点那个蓝色按钮", "在当前输入框打：你好"):

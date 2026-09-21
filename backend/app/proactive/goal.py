@@ -34,7 +34,7 @@ FOLLOWUP_HISTORY_MARKERS = frozenset(
 
 _MUTE_RE = re.compile(r"(先别提|别提这个|不要再提|别再问|不用提了)")
 _CARE_SLEEP_RE = re.compile(r"睡觉|入睡|早睡|早点睡|别熬")
-_CARE_LUNCH_RE = re.compile(r"午饭|午餐|吃饭")
+_CARE_MEAL_RE = re.compile(r"早饭|早餐|午饭|午餐|晚饭|晚餐|吃饭")
 
 
 def wants_goal_mute(text: str) -> bool:
@@ -85,7 +85,7 @@ def goal_defers_to_care(content: str, *, care_enabled: bool) -> bool:
     if not care_enabled:
         return False
     blob = content or ""
-    return bool(_CARE_SLEEP_RE.search(blob) or _CARE_LUNCH_RE.search(blob))
+    return bool(_CARE_SLEEP_RE.search(blob) or _CARE_MEAL_RE.search(blob))
 
 
 def goal_is_due_soon(

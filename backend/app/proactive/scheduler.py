@@ -26,10 +26,12 @@ from typing import Any, Literal
 from ..config import FestivalConfig, GoalConfig, MoodFollowupConfig
 from ..taxonomy import MOOD_FOLLOWUP_KIND
 from .care import (
+    CARE_KINDS,
     CARE_MEMORY_QUERY,
     HISTORY_CARE_MARKER,
     build_care_instruction,
     care_skip_reason,
+    care_window_specs,
 )
 from .festival import (
     HISTORY_FESTIVAL_MARKER,
@@ -61,7 +63,16 @@ from .mood import (
 
 logger = logging.getLogger(__name__)
 
-MotiveKind = Literal["idle", "lunch", "sleep", "goal", "festival", "mood_followup"]
+MotiveKind = Literal[
+    "idle",
+    "breakfast",
+    "lunch",
+    "dinner",
+    "sleep",
+    "goal",
+    "festival",
+    "mood_followup",
+]
 
 
 @dataclass(frozen=True)
@@ -281,8 +292,8 @@ class ProactiveScheduler:
     def mark_care_addressed(
         self, kind: MotiveKind, now: datetime | None = None
     ) -> None:
-        """Mark lunch/sleep done today without touching last_proactive_at."""
-        if kind not in {"lunch", "sleep"}:
+        """Mark a care kind done today without touching last_proactive_at."""
+        if kind not in CARE_KINDS:
             return
         dt = now or datetime.now()
         self.state.roll_day(dt)
@@ -415,12 +426,9 @@ class ProactiveScheduler:
         if getattr(self.care_cfg, "enabled", True):
             after_sec = float(getattr(self.idle_cfg, "after_sec", 0) or 0)
             last_proactive_at = _parse_iso(self.state.last_proactive_at)
-            for kind, start, end in (
-                ("lunch", self.care_cfg.lunch_start, self.care_cfg.lunch_end),
-                ("sleep", self.care_cfg.sleep_start, self.care_cfg.sleep_end),
-            ):
+            for kind, start, end in care_window_specs(self.care_cfg):
                 reason = care_skip_reason(
-                    kind,  # type: ignore[arg-type]
+                    kind,
                     dt,
                     done_today=self.state.care_done,
                     start=start,
@@ -430,8 +438,8 @@ class ProactiveScheduler:
                 )
                 if reason is None:
                     return Motive(
-                        kind=kind,  # type: ignore[arg-type]
-                        instruction=build_care_instruction(kind, climate),  # type: ignore[arg-type]
+                        kind=kind,
+                        instruction=build_care_instruction(kind, climate),
                         history_marker=HISTORY_CARE_MARKER,
                         retrieve_memory=True,
                         memory_query=CARE_MEMORY_QUERY,
@@ -557,19 +565,16 @@ class ProactiveScheduler:
         return None
 
     def care_block_reason(self, now: datetime | None = None) -> str | None:
-        """Skip reason when lunch/sleep is in window but waiting after_sec."""
+        """Skip reason when a care window is waiting after_sec."""
         if not getattr(self.care_cfg, "enabled", True):
             return None
         dt = now or datetime.now()
         self.state.roll_day(dt)
         after_sec = float(getattr(self.idle_cfg, "after_sec", 0) or 0)
         last_proactive_at = _parse_iso(self.state.last_proactive_at)
-        for kind, start, end in (
-            ("lunch", self.care_cfg.lunch_start, self.care_cfg.lunch_end),
-            ("sleep", self.care_cfg.sleep_start, self.care_cfg.sleep_end),
-        ):
+        for kind, start, end in care_window_specs(self.care_cfg):
             reason = care_skip_reason(
-                kind,  # type: ignore[arg-type]
+                kind,
                 dt,
                 done_today=self.state.care_done,
                 start=start,

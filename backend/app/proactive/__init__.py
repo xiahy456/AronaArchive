@@ -15,10 +15,12 @@
 """Proactive companion actions (welcome, idle, care, goal follow-up)."""
 
 from .care import (
+    CARE_KINDS,
     CARE_MEMORY_QUERY,
     HISTORY_CARE_MARKER,
     build_care_instruction,
     care_planner_declined,
+    care_window_specs,
     in_window,
     should_fire_care,
 )
@@ -72,6 +74,7 @@ from .welcome import (
 )
 
 __all__ = [
+    "CARE_KINDS",
     "CARE_MEMORY_QUERY",
     "ConnectionHub",
     "HISTORY_CARE_MARKER",
@@ -97,6 +100,7 @@ __all__ = [
     "WelcomeState",
     "build_care_instruction",
     "care_planner_declined",
+    "care_window_specs",
     "build_continue_instruction",
     "build_festival_instruction",
     "build_goal_instruction",

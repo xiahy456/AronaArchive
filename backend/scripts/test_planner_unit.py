@@ -259,6 +259,16 @@ def main() -> None:
     assert "reply_ok 必须 false" in lunch_ins
     assert "正在聊" in lunch_ins
     assert "还在想" in lunch_ins
+    breakfast_ins = build_care_instruction("breakfast")
+    assert "已吃早饭" in breakfast_ins
+    assert "reply_ok 必须 false" in breakfast_ins
+    assert "正在聊" in breakfast_ins
+    assert "还在想" in breakfast_ins
+    dinner_ins = build_care_instruction("dinner")
+    assert "已吃晚饭" in dinner_ins
+    assert "reply_ok 必须 false" in dinner_ins
+    assert "正在聊" in dinner_ins
+    assert "还在想" in dinner_ins
     sleep_ins = build_care_instruction("sleep")
     assert "待会再睡" in sleep_ins
     assert "晚安收束" in sleep_ins

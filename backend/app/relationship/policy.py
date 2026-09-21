@@ -33,7 +33,16 @@ Climate = Literal[
 ]
 
 Action = Literal["speak", "continue", "initiate", "refuse", "silence"]
-ProactiveKind = Literal["idle", "lunch", "sleep", "goal", "festival", "mood_followup"]
+ProactiveKind = Literal[
+    "idle",
+    "breakfast",
+    "lunch",
+    "dinner",
+    "sleep",
+    "goal",
+    "festival",
+    "mood_followup",
+]
 
 _IDLE_OK_CLIMATES: frozenset[str] = frozenset({"secure_play", "steady"})
 
@@ -440,7 +449,7 @@ def map_arona_act(
     if action == "initiate":
         if motive_kind in {"idle", "goal", MOOD_FOLLOWUP_KIND}:
             return "checked_in"
-        if motive_kind in {"lunch", "sleep", "care"}:
+        if motive_kind in {"breakfast", "lunch", "dinner", "sleep", "care"}:
             return "cared"
         if motive_kind == "festival":
             return "greeted"

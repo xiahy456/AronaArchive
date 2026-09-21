@@ -12,7 +12,7 @@
 | **服务入口**      | `app/main.py`                            | FastAPI 应用、健康检查、WebSocket 路由；启动时加载关系引擎                    |
 | **对话编排**      | `app/orchestrator.py`                    | 分类/更新关系 → 决策 →（可选）检索 → Planner 或本地 → 生成 → 回写自身行动 → 异步记忆抽取 |
 | **关系气候**      | `app/relationship/`                      | 信任/依赖/张力状态、事件 Δ 表、规则分类、气候分区与行动策略、JSON 落盘                  |
-| **主动事件**      | `app/proactive/`                         | 上线欢迎、空闲轻搭话、午饭/睡觉照料、goal 回访、节日问候、同轮补充；连接表 + 调度落盘           |
+| **主动事件**      | `app/proactive/`                         | 上线欢迎、空闲轻搭话、吃饭与睡觉照料、goal 回访、节日问候、同轮补充；连接表 + 调度落盘           |
 | **Planner**   | `app/planner/`                           | DeepSeek 意图卡、情感白名单；只读气候档位与姿态，不见 A/B/C 数字                  |
 | **模型加载**      | `app/model_loader.py`                    | llama-cpp-python 加载 GGUF；启动时用 Renderer prompt 预热并复用前缀 KV  |
 | **WebSocket** | `app/ws_handler.py`                      | 会话连接、上线欢迎、消息分发、ASR 过滤接入                                   |
@@ -202,7 +202,7 @@ Planner 只看见【关系气候】档位与【建议姿态】，禁止下发 A/
 | 客户端用户输入   | 原样写入，无额外 instruction                         | `Orchestrator.handle_chat()`                             |
 | 上线欢迎      | `build_welcome_instruction()`                | `[app/proactive/welcome.py](app/proactive/welcome.py)`   |
 | 空闲搭话      | `build_idle_instruction()`                   | `[app/proactive/idle.py](app/proactive/idle.py)`         |
-| 午饭 / 睡觉提醒 | `build_care_instruction()` + `_CARE_INTENTS` | `[app/proactive/care.py](app/proactive/care.py)`         |
+| 早/午/晚饭 / 睡觉提醒 | `build_care_instruction()` + `_CARE_INTENTS` | `[app/proactive/care.py](app/proactive/care.py)`         |
 | 节日 / 生日   | `build_festival_instruction()`               | `[app/proactive/festival.py](app/proactive/festival.py)` |
 | goal 回访   | `build_goal_instruction()`                   | `[app/proactive/goal.py](app/proactive/goal.py)`         |
 | 同轮补充      | `build_continue_instruction()`               | `[app/proactive/followup.py](app/proactive/followup.py)` |
@@ -248,7 +248,7 @@ Planner 只看见【关系气候】档位与【建议姿态】，禁止下发 A/
 | 记忆 / 知识 / 历史 / user_text | 运行时拼进 system / user                                                                            |
 
 
-`handle_initiate` 在 planner 失败时，系统 instruction 会直接当 `user_text` 送给本地模型。午饭/睡觉若 Planner 判 `reply_ok=false`（老师已交代过该话题）则不回落、不发送，并把当天该项标为已处理。
+`handle_initiate` 在 planner 失败时，系统 instruction 会直接当 `user_text` 送给本地模型。早/午/晚饭与睡觉照料若 Planner 判 `reply_ok=false`（老师已交代过该话题）则不回落、不发送，并把当天该项标为已处理。
 
 ### 不进这条链路
 
@@ -329,8 +329,10 @@ WebSocket 连接并发送 `connected` 后，若 `proactive.welcome.enabled` 为�
 | ------- | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | 节日问候    | 公历节假日 / 农历年表 / 老师生日                 | 当天第一次上线欢迎直接换成祝福，整天只说一次；凌晨/深夜先祝福再跟一句休息提醒；tick 仅在欢迎没说过时兜底；`depart` 时 tick 不说、欢迎仍可换；历史 `【节日】`；回写 `greeted`               |
 | 空闲轻搭话   | 老师安静 15 分钟；两次搭话间隔默认 30 分钟；每天最多 3 次  | 欢迎/照料之后只需再等 `after_sec`，不占用搭话冷却；深夜/凌晨不闲聊；上一轮是 `depart` 不闲聊；仅 `secure_play` / `steady` 可开口；历史 `【搭话】`；不检索记忆             |
-| goal 回访 | 老师安静 5 分钟后；不重要的 goal 每条冷却 6 小时、每天最多 1 次；content 日期为当天、未来 36 小时内、或过期未超过 36 小时则视为重要，绕过 6 小时与每日上限，改走 30 分钟短间隔；任意两次回访（含不同 key）至少间隔 30 分钟；老师应过后当天不再提同一条（记忆仍保留）；带钟点且照料覆盖不到的事项可在约定前 `due_soon_sec`（默认 1 小时）再轻轻提一次；睡觉/午饭类到点交给照料 | 扫记忆 `category=goal`，重要优先，否则轻轻提起最久未回访的一条；不催、不盘问、不编造进展；老师说「先别提」等则 mute 上一条 7 天；休息时段 / `depart` 不回访；气候闸与空闲相同；历史 `【回访】`；直接注入该条记忆 |
-| 午饭照料    | 12:00–12:30，每天一次                    | 短提醒吃饭，不催；`cling_risk` 更短；可检索作息记忆；欢迎（及任何已写入 `last_proactive_at` 的主动开口）之后再等 `idle.after_sec`；窗口内等待时不改发搭话或回访；Planner 见老师已交代过当前这餐则当天不再提醒（`reply_ok=false` 不回落本地）；Planner 不可用时仍会提醒 |
+| goal 回访 | 老师安静 5 分钟后；不重要的 goal 每条冷却 6 小时、每天最多 1 次；content 日期为当天、未来 36 小时内、或过期未超过 36 小时则视为重要，绕过 6 小时与每日上限，改走 30 分钟短间隔；任意两次回访（含不同 key）至少间隔 30 分钟；老师应过后当天不再提同一条（记忆仍保留）；带钟点且照料覆盖不到的事项可在约定前 `due_soon_sec`（默认 1 小时）再轻轻提一次；睡觉/早午晚饭类到点交给照料 | 扫记忆 `category=goal`，重要优先，否则轻轻提起最久未回访的一条；不催、不盘问、不编造进展；老师说「先别提」等则 mute 上一条 7 天；休息时段 / `depart` 不回访；气候闸与空闲相同；历史 `【回访】`；直接注入该条记忆 |
+| 早饭照料    | 06:30–08:00，每天一次                    | 短提醒吃早饭，不催；`cling_risk` 更短；可检索作息记忆；欢迎（及任何已写入 `last_proactive_at` 的主动开口）之后再等 `idle.after_sec`；窗口内等待时不改发搭话或回访；Planner 见老师已交代过当前这餐则当天不再提醒（`reply_ok=false` 不回落本地）；Planner 不可用时仍会提醒 |
+| 午饭照料    | 11:30–13:00，每天一次                    | 短提醒吃饭，不催；闸门与间隔同早饭照料 |
+| 晚饭照料    | 17:30–19:00，每天一次                    | 短提醒吃晚饭，不催；闸门与间隔同早饭照料 |
 | 睡觉照料    | 23:00–23:20，每天一次                    | 提醒休息；允许在休息时段触发；历史 `【提醒】`；与午饭相同，相对欢迎再等 `idle.after_sec`；节日欢迎里的休息补发仍同一轮发出、不等间隔；Planner 见老师已交代过今晚休息则当天不再提醒；Planner 不可用时仍会提醒 |
 | 同轮补充    | Planner `followup_ok`（按「能否扩展」）      | 仅用户 chat 双模型路径、首句成功后最多再扩 1 句；本地回落 / 欢迎 / idle / care / goal / festival 不续说；历史 `【补充】`                                  |
 
@@ -593,10 +595,12 @@ python scripts/ingest_knowledge.py --rebuild
 
 | 配置项                         | 默认                           | 说明                                      |
 | --------------------------- | ---------------------------- | --------------------------------------- |
-| `enabled`                   | `true`                       | 是否启用午饭 / 睡觉提醒                           |
+| `enabled`                   | `true`                       | 是否启用早/午/晚饭与睡觉提醒                           |
 | `persist_path`              | `data/memory/proactive.json` | 主动调度落盘（含节日标记），idle / goal / festival 共用 |
-| `lunch_start` / `lunch_end` | `12:00` / `12:30`            | 午饭窗口                                    |
-| `sleep_start` / `sleep_end` | `23:00` / `23:20`            | 睡觉提醒窗口                                  |
+| `breakfast_start` / `breakfast_end` | `06:30` / `08:00`            | 早饭窗口                                    |
+| `lunch_start` / `lunch_end` | `11:30` / `13:00`            | 午饭窗口                                    |
+| `dinner_start` / `dinner_end` | `17:30` / `19:00`            | 晚饭窗口                                    |
+吃饭| `sleep_start` / `sleep_end` | `23:00` / `23:20`            | 睡觉提醒窗口                                  |
 
 
 
@@ -611,7 +615,7 @@ python scripts/ingest_knowledge.py --rebuild
 | `cooldown_sec`            | `21600`  | 不重要 goal 的回访冷却（秒，默认 6 小时） |
 | `important_horizon_hours` | `36`     | content 日期为当天、未来该小时数内、或过期未超过该小时数则视为重要；更早的过期走普通冷却 |
 | `important_cooldown_sec`  | `1800`   | 重要 goal 的短间隔，同时是任意两次回访的全局间隔（秒，默认 30 分钟） |
-| `due_soon_sec`            | `3600`   | 老师应过后，带钟点的非照料事项可在约定前该秒数内再提一次；睡觉/午饭类不走二次 goal |
+| `due_soon_sec`            | `3600`   | 老师应过后，带钟点的非照料事项可在约定前该秒数内再提一次；睡觉/早午晚饭类不走二次 goal |
 | `mute_sec`                | `604800` | 老师说「先别提」后静音该条的秒数（默认 7 天）  |
 | `max_per_day`        | `1`      | 每天最多回访次数                  |
 
@@ -701,6 +705,6 @@ python scripts/ingest_knowledge.py --rebuild
 
 `interact` 的回复同样是 `chat_response`，`context_used` 含 `interact+pat_head`；Planner 标 `reply_ok=false` 时 `content` 为空且带 `silence`，但 `emotion` 仍可用于换脸。对话进行中到达的 `interact` 会被丢弃；`interact` 生成中到达的 `chat` 会取消前者。
 
-连接后若欢迎开启，服务端会再推一条 `chat_response`（`context_used` 含 `welcome`，节日当天首次则为 `festival`；凌晨/深夜节日可能再跟一条 `sleep`）。空闲搭话 / 照料 / goal 回访同样推 `chat_response`（`context_used` 含 `idle` / `lunch` / `sleep` / `goal`）。Planner 标 `followup_ok` 时，同一轮用户消息后可能再跟一条 `chat_response`（`context_used` 含 `continue`）。关系层决定沉默或 Planner 标 `reply_ok=false` 时仍发 `chat_response`，但 `content` 为空、`context_used` 为 `silence` / `refuse`，前端保持安静并解除等待。
+连接后若欢迎开启，服务端会再推一条 `chat_response`（`context_used` 含 `welcome`，节日当天首次则为 `festival`；凌晨/深夜节日可能再跟一条 `sleep`）。空闲搭话 / 照料 / goal 回访同样推 `chat_response`（`context_used` 含 `idle` / `breakfast` / `lunch` / `dinner` / `sleep` / `goal`）。Planner 标 `followup_ok` 时，同一轮用户消息后可能再跟一条 `chat_response`（`context_used` 含 `continue`）。关系层决定沉默或 Planner 标 `reply_ok=false` 时仍发 `chat_response`，但 `content` 为空、`context_used` 为 `silence` / `refuse`，前端保持安静并解除等待。
 
 若 `content` 被判定为 ASR 脏文本，仍返回 `chat_response`，但 `context_used` 为 `"asr_filter"`，且不会进入双模型链路。
