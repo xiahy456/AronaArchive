@@ -60,6 +60,19 @@ class PresenceGate:
 
     last_sent: str | None = None
     pending: bool = False
+    sticky_emotion: str | None = None
+    sticky_mapped: str | None = None
+
+    def desired(self, mapped: str) -> str:
+        if self.sticky_emotion and mapped == self.sticky_mapped:
+            return self.sticky_emotion
+        self.sticky_emotion = None
+        self.sticky_mapped = None
+        return mapped
+
+    def set_sticky(self, emotion: str, mapped: str) -> None:
+        self.sticky_emotion = emotion
+        self.sticky_mapped = mapped
 
     def decide(self, desired: str, *, any_busy: bool) -> PresenceVerdict:
         if desired == self.last_sent:
@@ -75,20 +88,18 @@ class PresenceGate:
         self.pending = False
 
 
-def _payload(engine: Any) -> dict[str, Any]:
-    inner: InnerState = engine.state
-    return msg_presence(presence_emotion(inner), activity=inner.activity)
-
-
 async def publish_presence(
     state: Any,
     *,
     force_session: str | None = None,
+    emotion_override: str | None = None,
+    ignore_busy: bool = False,
 ) -> None:
     """Send `presence` to connected sessions when the mapped face changes.
 
     `force_session` always delivers the current face to that session (connect).
     Generation (`hub.any_busy`) defers the broadcast; callers flush when idle.
+    `emotion_override` is a one-activity sticky face (emotion_only).
     """
     engine = getattr(state, "life", None)
     hub = getattr(state, "hub", None)
@@ -99,8 +110,14 @@ async def publish_presence(
         gate = PresenceGate()
         state.presence = gate
 
-    payload = _payload(engine)
-    emotion = str(payload.get("emotion") or "normal")
+    inner: InnerState = engine.state
+    mapped = presence_emotion(inner)
+    override = (emotion_override or "").strip()
+    if override:
+        face = normalize_emotion(override)
+        gate.set_sticky(face, mapped)
+    emotion = gate.desired(mapped)
+    payload = msg_presence(emotion, activity=inner.activity)
 
     if force_session:
         send = hub.get(force_session)
@@ -110,7 +127,7 @@ async def publish_presence(
             except Exception:
                 logger.exception("presence send failed session=%s", force_session)
 
-    any_busy = bool(hub.any_busy())
+    any_busy = bool(hub.any_busy()) and not ignore_busy
     verdict = gate.decide(emotion, any_busy=any_busy)
     if verdict == "skip":
         return
@@ -137,9 +154,16 @@ async def _publish_safe(
     state: Any,
     *,
     force_session: str | None = None,
+    emotion_override: str | None = None,
+    ignore_busy: bool = False,
 ) -> None:
     try:
-        await publish_presence(state, force_session=force_session)
+        await publish_presence(
+            state,
+            force_session=force_session,
+            emotion_override=emotion_override,
+            ignore_busy=ignore_busy,
+        )
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -150,6 +174,8 @@ def schedule_presence(
     state: Any,
     *,
     force_session: str | None = None,
+    emotion_override: str | None = None,
+    ignore_busy: bool = False,
 ) -> None:
     """Queue a presence push; no-op without a running event loop (unit tests)."""
     if getattr(state, "life", None) is None:
@@ -159,6 +185,11 @@ def schedule_presence(
     except RuntimeError:
         return
     loop.create_task(
-        _publish_safe(state, force_session=force_session),
+        _publish_safe(
+            state,
+            force_session=force_session,
+            emotion_override=emotion_override,
+            ignore_busy=ignore_busy,
+        ),
         name="life-presence",
     )

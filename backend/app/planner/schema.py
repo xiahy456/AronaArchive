@@ -68,6 +68,7 @@ class IntentCard:
     followup_ok: bool = False
     reply_ok: bool = True
     user_act: str = DEFAULT_USER_ACT
+    life_action: str = ""
     # Legacy (ignored by Renderer; kept so old payloads / tests don't explode)
     user_emotion: str = ""
     topic: str = ""
@@ -92,6 +93,7 @@ class IntentCard:
             followup_ok=followup_ok,
             reply_ok=reply_ok,
             user_act=normalize_user_act(data.get("user_act")),
+            life_action=_as_str(data.get("life_action")).lower(),
             user_emotion=_as_str(data.get("user_emotion")),
             topic=_as_str(data.get("topic")),
             stance=_as_str(data.get("stance")),
@@ -141,3 +143,34 @@ def parse_and_gate_intent(raw_text: str) -> IntentCard | None:
         logger.info("planner gate failed: empty draft")
         return None
     return card
+
+
+LIFE_ACTIONS: frozenset[str] = frozenset(
+    {"speak", "continue_activity", "emotion_only"}
+)
+
+
+def resolve_life_action(
+    intent: IntentCard | None,
+    *,
+    suggested_silence: bool = False,
+) -> str:
+    """Loop-recognized action. reply_ok remains the speak/silence gate."""
+    if suggested_silence:
+        return "continue_activity"
+    if intent is None:
+        return "speak"
+    raw = (intent.life_action or "").strip().lower()
+    if raw == "glance":
+        raw = "emotion_only"
+    if raw not in LIFE_ACTIONS:
+        raw = ""
+    if not intent.reply_ok:
+        if raw == "emotion_only":
+            return "emotion_only"
+        if raw == "continue_activity":
+            return "continue_activity"
+        if intent.arona_emotion != DEFAULT_EMOTION:
+            return "emotion_only"
+        return "continue_activity"
+    return "speak"

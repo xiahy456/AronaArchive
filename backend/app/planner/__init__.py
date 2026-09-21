@@ -16,7 +16,7 @@
 
 from .client import PlannerClient
 from .emotions import DEFAULT_EMOTION, EMOTION_WHITELIST, normalize_emotion
-from .schema import IntentCard, parse_and_gate_intent
+from .schema import IntentCard, parse_and_gate_intent, resolve_life_action
 
 __all__ = [
     "DEFAULT_EMOTION",
@@ -25,4 +25,5 @@ __all__ = [
     "PlannerClient",
     "normalize_emotion",
     "parse_and_gate_intent",
+    "resolve_life_action",
 ]

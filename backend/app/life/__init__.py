@@ -21,6 +21,7 @@ from .policy import LifeDecision, LifeSettings, decide
 from .presence import PresenceGate, presence_emotion, publish_presence, schedule_presence
 from .state import InnerState, Rumination
 from .store import LifeStore
+from .turn import apply_turn_action, format_interrupt_block, note_teacher_turn
 
 __all__ = [
     "InnerState",
@@ -32,7 +33,10 @@ __all__ = [
     "Rumination",
     "WorldEvent",
     "WorldKind",
+    "apply_turn_action",
     "decide",
+    "format_interrupt_block",
+    "note_teacher_turn",
     "presence_emotion",
     "publish_presence",
     "run_life_loop",

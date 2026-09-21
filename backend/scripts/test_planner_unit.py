@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.config import load_config
 from app.conversation import ConversationManager
-from app.planner import EMOTION_WHITELIST, normalize_emotion, parse_and_gate_intent
+from app.planner import EMOTION_WHITELIST, normalize_emotion, parse_and_gate_intent, resolve_life_action
 from app.planner.prompts import (
     PLANNER_PREFIX_DIRECT,
     PLANNER_PREFIX_RENDERER,
@@ -173,6 +173,19 @@ def main() -> None:
     assert silent.user_act == "depart"
     assert silent.followup_ok is False
     assert silent.arona_emotion == "smile"
+    assert resolve_life_action(silent) == "emotion_only"
+    assert resolve_life_action(silent, suggested_silence=True) == "continue_activity"
+    derived = parse_and_gate_intent(
+        '{"draft":"","arona_emotion":"normal","followup_ok":false,"reply_ok":false}'
+    )
+    assert derived is not None
+    assert resolve_life_action(derived) == "continue_activity"
+    glance = parse_and_gate_intent(
+        '{"draft":"","arona_emotion":"curious","followup_ok":false,'
+        '"reply_ok":false,"life_action":"glance"}'
+    )
+    assert glance is not None
+    assert resolve_life_action(glance) == "emotion_only"
 
     assert parse_and_gate_intent(
         '{"draft":"","arona_emotion":"normal","followup_ok":false,"reply_ok":true}'
@@ -238,6 +251,20 @@ def main() -> None:
     assert "must_say" not in user_msg
     assert "先判断 reply_ok" in user_msg
     assert "电脑屏幕截图" not in user_msg
+    assert "life_action" in PLANNER_SYSTEM
+    assert "禁止把【阿洛娜此刻】或【未出口的心事】写进 draft" in PLANNER_SYSTEM
+    life_msg = build_planner_user_message(
+        user_text="老师回来了",
+        history=[],
+        memories=[],
+        knowledge=[],
+        now=frozen,
+        life_block="【阿洛娜此刻】正在教室发呆",
+    )
+    assert "【阿洛娜此刻】正在教室发呆" in life_msg
+    assert life_msg.index("【阿洛娜此刻】") < life_msg.index("【老师本轮消息】")
+    assert "闯进来的事件" in life_msg
+    assert "禁止把【阿洛娜此刻】或【未出口的心事】写进 draft" in life_msg
 
     vision_msg = build_planner_user_message(
         user_text="屏幕上是什么？",

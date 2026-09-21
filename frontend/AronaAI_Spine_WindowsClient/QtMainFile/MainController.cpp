@@ -674,14 +674,13 @@ void MainController::processInputText(const QString& text)
         return;
     }
 
-    // 检查是否正在等待上一次回复
+    // 文字防重入（不是「阿洛娜在等这轮答完」）；听写路径不加这把锁
     if (m_waitingForAIResponse) {
         FINE_DEBUG_OUTPUT("正在处理上一条消息，请稍候");
-        FINE_DEBUG_OUTPUT("[Main Controller] Waiting for previous AI response");
+        FINE_DEBUG_OUTPUT("[Main Controller] Text send re-entry blocked");
         return;
     }
 
-    // 标记正在等待AI回复
     m_waitingForAIResponse = true;
     m_computerUseStopRequested = false;
 
@@ -723,7 +722,7 @@ void MainController::onWebSocketChatResponse(const QString& content, const QStri
         FINE_DEBUG_OUTPUT("[WebSocket] Startup welcome chat_response received");
     }
 
-    // 重置等待状态
+    // 解除文字防重入（空 chat_response 也会走这里）
     m_waitingForAIResponse = false;
     m_measuringUserTurn = false;
 
@@ -825,7 +824,7 @@ void MainController::onWebSocketError(WebSocketController::ErrorCode code, const
         m_measuringUserTurn = false;
     }
 
-    // 重置等待状态
+    // 解除文字防重入
     m_waitingForAIResponse = false;
 
     // 根据错误类型给出不同的用户提示

@@ -32,12 +32,15 @@ from .conversation import ConversationManager
 from .image_input import ImagePayload
 from .interact import resolve_interact_action
 from .knowledge import KnowledgeRetriever
+from .life.state import InnerState
+from .life.turn import format_interrupt_block
 from .logging_utils import begin_trace, preview, preview_list, reset_trace, update_trace
 from .memory.extractor import MemoryExtractor
 from .memory.store import MemoryStore
 from .memory.trigger import should_extract
 from .model_loader import ModelLoader
 from .planner import DEFAULT_EMOTION, IntentCard, PlannerClient
+from .planner.schema import resolve_life_action
 from .proactive import (
     HISTORY_USER_MARKER,
     WELCOME_CLOSING_QUESTION,
@@ -80,6 +83,7 @@ from .taxonomy import CRISIS_USER_ACT
 logger = logging.getLogger(__name__)
 
 SendFn = Callable[[dict[str, Any]], Awaitable[None]]
+LifeActionFn = Callable[[str, str], None]
 
 
 class Orchestrator:
@@ -139,6 +143,22 @@ class Orchestrator:
             self.memory_store.mark_injected(injected.keys)
         return injected.contents, injected.block
 
+    def _life_block(self, interrupt_ctx: InnerState | None) -> str:
+        return format_interrupt_block(interrupt_ctx)
+
+    def _emit_life_action(
+        self,
+        on_life_action: LifeActionFn | None,
+        action: str,
+        emotion: str = DEFAULT_EMOTION,
+    ) -> None:
+        if on_life_action is None:
+            return
+        try:
+            on_life_action(action, emotion)
+        except Exception:
+            logger.exception("life turn action callback failed action=%s", action)
+
     async def handle_chat(
         self,
         *,
@@ -151,6 +171,8 @@ class Orchestrator:
         abort_check: AbortCheck | None = None,
         on_committed: Callable[[], None] | None = None,
         image: ImagePayload | None = None,
+        interrupt_ctx: InnerState | None = None,
+        on_life_action: LifeActionFn | None = None,
     ) -> bool:
         def _aborted() -> bool:
             return abort_check is not None and abort_check()
@@ -182,6 +204,8 @@ class Orchestrator:
                 abort_check=abort_check,
                 on_committed=on_committed,
                 image=image,
+                interrupt_ctx=interrupt_ctx,
+                on_life_action=on_life_action,
             )
 
         use_rag = bool(options.get("use_rag", self.config.knowledge.enabled))
@@ -209,6 +233,7 @@ class Orchestrator:
         if decision is not None:
             context_parts.append("climate")
         if decision is not None and decision.action in {"silence", "refuse"}:
+            self._emit_life_action(on_life_action, "continue_activity")
             await self._skip_generation(
                 session_id=session_id,
                 user_text=user_text,
@@ -355,6 +380,7 @@ class Orchestrator:
                 climate_block=self._climate_block(decision),
                 image=image,
                 memory_block=memory_block,
+                life_block=self._life_block(interrupt_ctx),
             )
             logger.info(
                 "planner session=%s ok=%s latency=%.3fs",
@@ -382,10 +408,14 @@ class Orchestrator:
                         memories=memories,
                         memory_block=memory_block,
                         image=image,
+                        interrupt_ctx=interrupt_ctx,
+                        on_life_action=on_life_action,
                     )
                 emotion = intent.arona_emotion
                 self._merge_decision_into_intent(intent, decision)
                 if not intent.reply_ok:
+                    action = resolve_life_action(intent)
+                    self._emit_life_action(on_life_action, action, emotion)
                     await self._skip_generation(
                         session_id=session_id,
                         user_text=user_text,
@@ -438,6 +468,7 @@ class Orchestrator:
                 emotion=emotion,
             )
         )
+        self._emit_life_action(on_life_action, "speak", emotion)
         _commit_relationship()
 
         self.conversations.append(session_id, "user", user_text)
@@ -466,6 +497,8 @@ class Orchestrator:
             climate=decision.climate if decision is not None else None,
             decision=decision,
             abort_check=abort_check,
+            interrupt_ctx=interrupt_ctx,
+            on_life_action=on_life_action,
         )
         return True
 
@@ -481,6 +514,8 @@ class Orchestrator:
         memories: list[str] | None = None,
         memory_block: str = "",
         image: ImagePayload | None = None,
+        interrupt_ctx: InnerState | None = None,
+        on_life_action: LifeActionFn | None = None,
     ) -> bool:
         """Speak via crisis planner draft (no renderer); local Arona fallback."""
         history = self.conversations.get_history(session_id)
@@ -496,6 +531,7 @@ class Orchestrator:
                 image=image,
                 crisis=True,
                 memory_block=memory_block,
+                life_block=self._life_block(interrupt_ctx),
             )
             logger.info(
                 "crisis planner session=%s ok=%s latency=%.3fs",
@@ -532,6 +568,7 @@ class Orchestrator:
                 emotion=emotion,
             )
         )
+        self._emit_life_action(on_life_action, "speak", emotion)
         self._commit_crisis_relationship()
         self.conversations.append(session_id, "user", user_text)
         self.conversations.append(session_id, "assistant", draft)
@@ -595,6 +632,8 @@ class Orchestrator:
         action: str,
         duration_ms: int = 0,
         send: SendFn,
+        interrupt_ctx: InnerState | None = None,
+        on_life_action: LifeActionFn | None = None,
     ) -> bool:
         """React to a client gesture. Unknown actions must be rejected by the WS layer."""
         spec = resolve_interact_action(action)
@@ -623,6 +662,8 @@ class Orchestrator:
             climate=climate,
             decision=decision,
             context_tags=["interact", spec.action],
+            interrupt_ctx=interrupt_ctx,
+            on_life_action=on_life_action,
         )
         return result == "sent"
 
@@ -642,6 +683,8 @@ class Orchestrator:
         decision: Decision | None = None,
         continue_previous: str | None = None,
         context_tags: list[str] | None = None,
+        interrupt_ctx: InnerState | None = None,
+        on_life_action: LifeActionFn | None = None,
     ) -> InitiateResult:
         """Generate a system-event line (welcome / idle / care / goal / continue / interact).
 
@@ -731,6 +774,7 @@ class Orchestrator:
                 knowledge=[],
                 climate_block=block,
                 memory_block=memory_block,
+                life_block=self._life_block(interrupt_ctx),
             )
             logger.info(
                 "initiate planner session=%s kind=%s ok=%s latency=%.3fs",
@@ -757,6 +801,8 @@ class Orchestrator:
             ):
                 self.stats["planner_hits"] += 1
                 emotion = intent.arona_emotion
+                action = resolve_life_action(intent)
+                self._emit_life_action(on_life_action, action, emotion)
                 latency = time.perf_counter() - start
                 context_used = "+".join([*context_parts, "silence"])
                 await send(
@@ -845,6 +891,8 @@ class Orchestrator:
                 emotion=emotion,
             )
         )
+        if kind == "interact":
+            self._emit_life_action(on_life_action, "speak", emotion)
 
         self.conversations.append(session_id, "user", history_marker)
         self.conversations.append(session_id, "assistant", full)
@@ -1050,6 +1098,8 @@ class Orchestrator:
         climate: str | None,
         decision: Decision | None,
         abort_check: AbortCheck | None = None,
+        interrupt_ctx: InnerState | None = None,
+        on_life_action: LifeActionFn | None = None,
     ) -> None:
         if intent is None or not intent.followup_ok:
             return
@@ -1081,6 +1131,8 @@ class Orchestrator:
             climate=climate,
             decision=decision,
             continue_previous=previous.strip(),
+            interrupt_ctx=interrupt_ctx,
+            on_life_action=on_life_action,
         )
 
     def _climate_block(self, decision: Decision | None) -> str:

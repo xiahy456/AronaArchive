@@ -13,6 +13,7 @@ import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BACKEND_DIR))
@@ -25,6 +26,8 @@ from app.life import (  # noqa: E402
     PresenceGate,
     Rumination,
     decide,
+    format_interrupt_block,
+    note_teacher_turn,
     presence_emotion,
     publish_presence,
     world_event,
@@ -266,14 +269,16 @@ def test_loop_tick_once_with_fake_state() -> None:
     print("== tick_once on AppState-like object ==")
     with tempfile.TemporaryDirectory() as tmp:
         engine = LifeEngine.from_path(Path(tmp) / "life.json", _settings())
+        planner = MagicMock()
         fake = SimpleNamespace(
             life=engine,
-            orchestrator=SimpleNamespace(relationship=None),
+            orchestrator=SimpleNamespace(relationship=None, planner=planner),
             config=SimpleNamespace(proactive=SimpleNamespace(relationship=None)),
         )
         tick_once(fake, now=_afternoon())
         if engine.state.activity not in {"idle_in_classroom", "resting"}:
             _fail(engine.state.activity)
+        planner.plan.assert_not_called()
     print("  ok")
 
 
@@ -386,6 +391,57 @@ def test_presence_publish_change_busy_and_listen() -> None:
     print("  ok")
 
 
+def test_snapshot_before_apply_and_interrupt_keeps_thinking() -> None:
+    print("== snapshot is pre-apply; teacher_interrupt does not look at teacher ==")
+    now = _afternoon()
+    with tempfile.TemporaryDirectory() as tmp:
+        engine = LifeEngine.from_path(Path(tmp) / "life.json", _settings())
+        concern = Rumination(id="r1", content="老师中午好像没吃饭", created_at=now)
+        engine.state = InnerState(
+            activity="thinking",
+            attention="rumination",
+            private_mood="preoccupied",
+        ).with_rumination([concern])
+        fake = SimpleNamespace(
+            life=engine,
+            hub=ConnectionHub(),
+            presence=PresenceGate(),
+            orchestrator=SimpleNamespace(relationship=None),
+            config=SimpleNamespace(proactive=SimpleNamespace(relationship=None)),
+        )
+        snap = note_teacher_turn(fake, "teacher_spoke", session_id="s1")
+        if snap is None or snap.activity != "thinking":
+            _fail(f"snapshot should be thinking, got {None if snap is None else snap.activity}")
+        if engine.state.activity != "looking_at_teacher":
+            _fail(engine.state.activity)
+        block = format_interrupt_block(snap)
+        if "正在想事情" not in block:
+            _fail(block)
+        if "老师中午好像没吃饭" not in block:
+            _fail(block)
+        if "【老师本轮消息】" in block:
+            _fail("interrupt block must not store teacher text")
+
+        engine.state = InnerState(activity="idle_in_classroom")
+        idle_snap = note_teacher_turn(fake, "teacher_spoke", session_id="s1")
+        if idle_snap is None or idle_snap.activity != "idle_in_classroom":
+            _fail(
+                "idle snapshot should stay idle_in_classroom, got "
+                f"{None if idle_snap is None else idle_snap.activity}"
+            )
+
+        engine.state = InnerState(activity="thinking", attention="rumination")
+        interrupted = decide(
+            engine.state,
+            world_event("teacher_interrupt", at=now),
+            settings=_settings(),
+        )
+        _assert_not_speak(interrupted)
+        if interrupted.state.activity != "thinking":
+            _fail(f"interrupt must keep thinking, got {interrupted.state.activity}")
+    print("  ok")
+
+
 def main() -> None:
     test_json_roundtrip_isolated_from_relationship()
     test_look_hold_decays_to_idle()
@@ -398,6 +454,7 @@ def main() -> None:
     test_presence_emotion_mapping()
     test_msg_presence_has_no_content()
     test_presence_publish_change_busy_and_listen()
+    test_snapshot_before_apply_and_interrupt_keeps_thinking()
     print("all life unit tests passed")
 
 

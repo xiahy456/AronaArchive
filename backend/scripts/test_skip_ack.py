@@ -9,14 +9,14 @@ from __future__ import annotations
 import asyncio
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BACKEND_DIR))
 
 from app.config import AppConfig, ModelConfig  # noqa: E402
 from app.orchestrator import Orchestrator  # noqa: E402
-from app.planner import DEFAULT_EMOTION  # noqa: E402
+from app.planner import DEFAULT_EMOTION, IntentCard  # noqa: E402
 from app.relationship.policy import Decision  # noqa: E402
 
 
@@ -135,9 +135,95 @@ def test_refuse_sends_empty_refuse() -> None:
     print("  ok")
 
 
+def test_relationship_silence_emits_continue_activity() -> None:
+    print("== relationship silence still empty ack and continue_activity ==")
+    orch = _orchestrator()
+    cfg = orch.config
+    cfg.proactive.relationship.enabled = True
+    preview = Decision(
+        action="silence",
+        climate="cling_risk",
+        stance="",
+        user_act="short_ack",
+    )
+    relationship = MagicMock()
+    relationship.preview_user_text.return_value = ("short_ack", preview)
+    relationship.on_user_text.return_value = ("short_ack", preview)
+    relationship.note_planner_user_act.return_value = ("short_ack", False)
+    orch.relationship = relationship
+    planner = MagicMock()
+    planner.enabled = True
+    planner.plan = MagicMock(side_effect=AssertionError("planner must not run"))
+    orch.planner = planner
+    actions: list[tuple[str, str]] = []
+    sent: list[dict] = []
+
+    async def send(payload: dict) -> None:
+        sent.append(payload)
+
+    asyncio.run(
+        orch.handle_chat(
+            session_id="s1",
+            content="嗯",
+            options={},
+            send=send,
+            on_life_action=lambda action, emotion: actions.append((action, emotion)),
+        )
+    )
+    if len(sent) != 1 or sent[0].get("content") != "":
+        _fail(f"expected empty chat_response, got {sent!r}")
+    if sent[0].get("context_used") != "silence":
+        _fail(sent[0].get("context_used"))
+    if actions != [("continue_activity", "normal")]:
+        _fail(f"life action {actions!r}")
+    orch.planner.plan.assert_not_called()
+    print("  ok")
+
+
+def test_reply_ok_false_emits_life_action() -> None:
+    print("== reply_ok=false empty ack and emotion_only ==")
+    orch = _orchestrator()
+    orch.conversations.get_history.return_value = []
+    card = IntentCard(
+        draft="",
+        arona_emotion="smile",
+        followup_ok=False,
+        reply_ok=False,
+        user_act="short_ack",
+    )
+    planner = MagicMock()
+    planner.enabled = True
+    planner.plan = AsyncMock(return_value=card)
+    orch.planner = planner
+    actions: list[tuple[str, str]] = []
+    sent: list[dict] = []
+
+    async def send(payload: dict) -> None:
+        sent.append(payload)
+
+    asyncio.run(
+        orch.handle_chat(
+            session_id="s1",
+            content="嗯",
+            options={"use_rag": False, "use_memory": False},
+            send=send,
+            on_life_action=lambda action, emotion: actions.append((action, emotion)),
+        )
+    )
+    if len(sent) != 1 or sent[0].get("content") != "":
+        _fail(f"expected empty chat_response, got {sent!r}")
+    if sent[0].get("context_used") != "silence":
+        _fail(sent[0].get("context_used"))
+    if actions != [("emotion_only", "smile")]:
+        _fail(f"life action {actions!r}")
+    print("  ok")
+
+
 def main() -> None:
     test_reply_ok_false_sends_empty_silence()
     test_refuse_sends_empty_refuse()
+    test_relationship_silence_emits_continue_activity()
+    test_reply_ok_false_emits_life_action()
     print("ALL PASS")
 
 

@@ -193,6 +193,11 @@ def decide(
         nxt = replace(state.clone(), can_hear=False)
         return _decision(nxt, "continue_activity")
 
+    if kind == "teacher_interrupt":
+        nxt = state.clone()
+        nxt.last_event_at = now
+        return _decision(nxt, "continue_activity")
+
     if kind == "teacher_left":
         nxt = _after_teacher_gone(state, now)
         return _decision(nxt, "shift_activity")

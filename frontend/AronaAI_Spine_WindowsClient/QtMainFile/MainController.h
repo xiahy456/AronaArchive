@@ -109,7 +109,7 @@ private:
 	QString m_currentText = "";	// 当前正在处理的文本
 	QString m_currentEmotion = "normal";	// 当前回复表情（英文值）
 	QString m_presenceEmotion = "normal";	// 生命循环在场脸（英文值，独立于台词）
-	bool m_waitingForAIResponse = false;	// 是否正在等待AI回复（仅文本输入）
+	bool m_waitingForAIResponse = false;	// 文字输入防重入，不是「阿洛娜在等这轮答完」；听写不加这把锁，靠空 chat_response 解锁
 	bool m_listening = false;	// 持续聆听是否开启
 	int m_transcriptSeq = 0;
 	QString m_latestTranscript;	// 最近一次 ASR 文本（含未结束的 partial）

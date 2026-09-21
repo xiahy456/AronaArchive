@@ -61,9 +61,12 @@ from .input_filter import (
 )
 from .interact import parse_duration_ms, resolve_interact_action
 from .life import (
+    InnerState,
     LifeEngine,
     PresenceGate,
     WorldKind,
+    apply_turn_action,
+    note_teacher_turn,
     publish_presence,
     schedule_presence,
     world_event,
@@ -188,6 +191,12 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
         state.life.apply(world_event(kind, session_id=session_id))
         schedule_presence(state)
 
+    def _note_teacher_turn(kind: WorldKind) -> InnerState | None:
+        return note_teacher_turn(state, kind, session_id=session_id)
+
+    def _on_life_action(action: str, emotion: str) -> None:
+        apply_turn_action(state, action, emotion)
+
     _note_life("teacher_arrived")
     if state.life is not None:
         await publish_presence(state, force_session=session_id)
@@ -231,6 +240,7 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
         image: ImagePayload | None = None,
         send_fn: Any | None = None,
         release_busy: bool = True,
+        interrupt_ctx: InnerState | None = None,
     ) -> None:
         nonlocal inflight_kind
         inflight_kind = "chat"
@@ -257,6 +267,8 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
                 abort_check=abort_check,
                 on_committed=_clear_inflight,
                 image=image,
+                interrupt_ctx=interrupt_ctx,
+                on_life_action=_on_life_action,
             )
             if inflight_user:
                 turn_buffer.prepend(inflight_user)
@@ -519,6 +531,7 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
         started_at: float,
         abort_check,
         image: ImagePayload | None,
+        interrupt_ctx: InnerState | None = None,
     ) -> None:
         nonlocal inflight_user
         cfg = state.config.computer_use
@@ -530,6 +543,7 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
                 started_at,
                 abort_check,
                 image,
+                interrupt_ctx=interrupt_ctx,
             )
             return
 
@@ -552,6 +566,7 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
                     image,
                     send_fn=gated_send,
                     release_busy=False,
+                    interrupt_ctx=interrupt_ctx,
                 )
 
             async def run_cu() -> None:
@@ -619,7 +634,7 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
             inflight_user = None
             chat_task = asyncio.create_task(_run_computer_use_probe())
             return
-        _note_life("teacher_transcript")
+        transcript_ctx = _note_teacher_turn("teacher_transcript")
         my_id = generation_id
         inflight_user = drained
         started = time.perf_counter()
@@ -639,6 +654,7 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
                 started,
                 lambda: generation_id != my_id,
                 image,
+                interrupt_ctx=transcript_ctx,
             )
         )
 
@@ -759,13 +775,15 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
         state.hub.set_busy(session_id, True)
         if state.scheduler is not None:
             state.scheduler.note_user_activity()
-        _note_life("teacher_touched")
+        interact_ctx = _note_teacher_turn("teacher_touched")
         try:
             await state.orchestrator.handle_interact(
                 session_id=session_id,
                 action=action,
                 duration_ms=duration_ms,
                 send=send,
+                interrupt_ctx=interact_ctx,
+                on_life_action=_on_life_action,
             )
         except asyncio.CancelledError:
             logger.info("interact cancelled session=%s action=%s", session_id, action)
@@ -892,7 +910,7 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
                         logger.info("WS computer_use probe session=%s", session_id)
                         chat_task = asyncio.create_task(_run_computer_use_probe())
                         continue
-                    _note_life("teacher_spoke")
+                    spoke_ctx = _note_teacher_turn("teacher_spoke")
                     chat_task = asyncio.create_task(
                         _run_routed_user_turn(
                             str(content),
@@ -901,6 +919,7 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
                             chat_recv_at,
                             None,
                             image,
+                            interrupt_ctx=spoke_ctx,
                         )
                     )
                 elif msg_type == TYPE_COMPUTER_USE_OBSERVATION:
@@ -1043,6 +1062,7 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
                     _schedule_commit()
                 elif msg_type == TYPE_INTERRUPT:
                     logger.info("WS interrupt session=%s", session_id)
+                    _note_teacher_turn("teacher_interrupt")
                     await _interrupt_generation(restore_inflight=True)
                     if state.scheduler is not None:
                         state.scheduler.note_user_activity()

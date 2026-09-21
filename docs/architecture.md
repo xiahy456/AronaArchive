@@ -7,13 +7,13 @@ arona-ai/
 ├── backend/                    # Python 后端服务（FastAPI + WebSocket）
 │   ├── app/                    # 应用核心
 │   │   ├── main.py             # 服务入口
-│   │   ├── orchestrator.py     # 对话编排（关系决策 → 检索 → Planner/本地 → 生成 → 记忆抽取）
+│   │   ├── orchestrator.py     # 对话编排（世界事件快照 → 关系决策 → Planner【阿洛娜此刻】→ life_action → 生成）
 │   │   ├── model_loader.py     # GGUF 模型加载（llama-cpp-python）
 │   │   ├── planner/            # 双模型 Planner（DeepSeek 意图卡 → Renderer）
 │   │   ├── interact/           # 非对话手势（摸头等）；系统事件指令 + 白名单
 │   │   ├── proactive/          # 主动事件（上线欢迎、空闲搭话、时刻照料、goal 回访、节日）
 │   │   ├── relationship/       # 关系气候（信任/依赖/张力、决策）
-│   │   ├── life/               # 生命循环（阿洛娜内状态、世界事件、墙钟 tick；换脸走 presence，不经 Planner）
+│   │   ├── life/               # 生命循环
 │   │   ├── knowledge.py        # 世界观知识 RAG
 │   │   ├── conversation.py     # 多轮对话历史
 │   │   ├── prompt.py           # Prompt / Renderer 消息组装
@@ -107,3 +107,5 @@ arona-ai/
 ```
 
 后端模块职责见 [`backend/README.md`](../backend/README.md)；模型放置见 [`models/README.md`](../models/README.md)。
+
+老师的 `chat` / `transcript` / `interact` 先快照内状态再作为世界事件进入生命循环，打断上下文写入 Planner 的【阿洛娜此刻】。墙钟 tick 不调 Planner。`interrupt` 只取消生成并继续当前活动。老师回合（含空 ack）优先于主动事件（会话 busy）；空 ack 之后主动事件仍可能开口，直到第 4 层把动机收成冲动。

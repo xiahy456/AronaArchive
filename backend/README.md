@@ -10,9 +10,9 @@
 | 模块            | 路径                                       | 功能描述                                                      |
 | ------------- | ---------------------------------------- | --------------------------------------------------------- |
 | **服务入口**      | `app/main.py`                            | FastAPI 应用、健康检查、WebSocket 路由；启动时加载关系引擎                    |
-| **对话编排**      | `app/orchestrator.py`                    | 分类/更新关系 → 决策 →（可选）检索 → Planner 或本地 → 生成 → 回写自身行动 → 异步记忆抽取 |
+| **对话编排**      | `app/orchestrator.py`                    | 老师输入先快照内状态再进循环；关系决策 → Planner（含【阿洛娜此刻】）或本地 → 循环认 `life_action` → 生成 / 空 ack |
 | **关系气候**      | `app/relationship/`                      | 信任/依赖/张力状态、事件 Δ 表、规则分类、气候分区与行动策略、JSON 落盘                  |
-| **生命循环**      | `app/life/`                              | 阿洛娜内状态（活动/注意/心情/心事）与世界事件；墙钟 tick 缓回；换脸走 `presence`，不经 Planner |
+| **生命循环**      | `app/life/`                              | 阿洛娜内状态与世界事件（老师 chat/听写/触摸/打断）；墙钟 tick 只换脸，永不调 Planner |
 | **主动事件**      | `app/proactive/`                         | 上线欢迎、空闲轻搭话、吃饭与睡觉照料、goal 回访、节日问候、同轮补充；连接表 + 调度落盘           |
 | **Planner**   | `app/planner/`                           | DeepSeek 意图卡、情感白名单；只读气候档位与姿态，不见 A/B/C 数字                  |
 | **模型加载**      | `app/model_loader.py`                    | llama-cpp-python 加载 GGUF；启动时用 Renderer prompt 预热并复用前缀 KV  |
@@ -105,8 +105,8 @@ python scripts/test_taxonomy_unit.py       # P0 词汇表契约（不加载 GGUF
 python scripts/test_crisis_unit.py         # 危机检测 / 禁静音 / 禁抽取 / 跳过 Renderer
 python scripts/test_episode_memory_unit.py # 情景/情绪记忆分栏、同日合并、抽取触发
 python scripts/test_relationship_unit.py   # 关系公式 / 分区 / 分类 / 沉默（不加载 GGUF）
-python scripts/test_life_unit.py           # 生命循环内状态 / 墙钟缓回 / presence 换脸 / 落盘隔离（不加载 GGUF）
-python scripts/test_skip_ack.py            # 沉默/拒绝仍发空 chat_response（不加载 GGUF）
+python scripts/test_life_unit.py           # 生命循环内状态 / 墙钟缓回 / 快照与 interrupt / presence 换脸（不加载 GGUF）
+python scripts/test_skip_ack.py            # 沉默/拒绝仍发空 chat_response，并提交循环动作（不加载 GGUF）
 python scripts/test_welcome_unit.py        # 欢迎时段与指令（不加载 GGUF）
 python scripts/test_proactive_unit.py      # 空闲 / 照料 / goal / 心情回访 / 节日 / continue / 调度落盘（不加载 GGUF）
 python scripts/test_image_input_unit.py   # 截图解析 / 日志脱敏 / logs 目录保留最近 8 张
@@ -131,21 +131,30 @@ python scripts/eval_affect.py --json-out logs/affect_eval.json
     └── 使用本地单模型 AronaLM-Generator-V2.x 或 AronaLM-Renderer-V2.x，若无则无法回复
 ```
 
-每条用户 `chat` 先过关系层，再决定是否生成：
+每条用户 `chat` / `transcript` / `interact` 先作为世界事件进入生命循环（**先快照内状态再 apply**），再过关系层决定是否开口：
 
 ```text
-用户文本
+老师输入
+  → 快照 InnerState（发呆 / 想事 / 休息 / 看老师）→ apply teacher_spoke|transcript|touched
   → 规则分类 user_act
   → 查表 Δ 更新信任 / 依赖 / 张力
   → 气候分区 + 姿态（action / stance / must_not）
-  → silence / refuse：写入历史，不调用 LLM，发空 content 的 chat_response（context_used=silence/refuse）
+  → silence / refuse：不调 Planner；提交 life_action=continue_activity；发空 content 的 chat_response
   → speak：本轮 query embedding 只算一次 → 记忆/知识检索（知识近义命中可复用）
-       → Planner 或本地 → Renderer（复用 system 前缀 KV）→ chat_response
+       → Planner（用户栏【阿洛娜此刻】在【老师本轮消息】之前）或本地
+       → reply_ok=false：提交 continue_activity 或 emotion_only，发空 chat_response
+       → reply_ok=true：Renderer（复用 system 前缀 KV）→ 非空 chat_response（life_action=speak）
   → 规则为 other 且 Planner 给出非 other（且非 crisis / touch）时，按 Planner 的 user_act 补一次用户 Δ
   → 回写阿洛娜自身行动（followed_up / gave_space / teased / greeted）
 ```
 
-Planner 只看见【关系气候】档位与【建议姿态】，禁止下发 A/B/C 浮点或「提升信任度」。
+`interrupt` 取消正在生成的台词，并投递 `teacher_interrupt`（继续当前活动，不改成看着老师）。危机通路必须开口，不经「想不想理」的动作选择。
+
+墙钟 tick 只 `engine.tick` + `presence`，永不调 Planner、永不 `speak`。
+
+老师回合（含空 ack）期间 `hub.set_busy`，主动事件不打进该会话。空 ack 之后会话重新空闲，欢迎 / 搭话 / 照料 / 回访仍可能开口——这是已知双嘴，第 4 层再把动机降为冲动。本层不改 `pick_motive` / listening 冻结。
+
+Planner 只看见【关系气候】档位与【建议姿态】，禁止下发 A/B/C 浮点或「提升信任度」。禁止把【阿洛娜此刻】或【未出口的心事】写进 draft。
 
 `action` 目前实际用到的是 `speak`（开口）、`silence`（沉默）、`initiate`（欢迎 / 空闲 / 照料 / goal 回访 / 节日）与 `continue`（同轮补一句）。欢迎与节日回写 `greeted`，空闲与 goal 回写 `checked_in`，照料回写 `cared`（均不抬依赖）；同轮补充回写 `followed_up`。
 
@@ -389,7 +398,7 @@ python scripts/ingest_knowledge.py --rebuild
 | `memory`       | SQLite + Chroma 记忆、混合检索、注入冷却、去重/调和、DeepSeek 抽取器 |
 | `planner`      | 双模型 Planner（DeepSeek 意图卡）与轮次路由器                 |
 | `listen`       | 连续听写的静音提交与接话窗口                                  |
-| `life`         | 生命循环：阿洛娜内状态落盘、墙钟 tick、`presence` 换脸 |
+| `life`         | 生命循环：内状态落盘、老师输入作世界事件、墙钟 tick 只换脸 |
 | `proactive`    | 上线欢迎、关系气候、空闲搭话、照料、goal 回访、节日、同轮补充               |
 | `token_budget` | 注入 prompt 的 memory / knowledge / history 预算     |
 | `logging`      | 日志目录、文件名、级别与滚动                                  |
@@ -545,7 +554,7 @@ python scripts/ingest_knowledge.py --rebuild
 
 ### `life`
 
-墙钟驱动的阿洛娜内状态（教室发呆 / 看着老师 / 想事 / 休息）。WebSocket 旁路记录世界事件；活动或心情映射的表情变化时推 `presence`（只改客户端 Track 1），不发 `chat_response`，不调用 Planner。与关系气候分文件落盘。
+墙钟驱动的阿洛娜内状态（教室发呆 / 看着老师 / 想事 / 休息）。老师的 `chat` / `transcript` / `interact` 是世界事件：投递前先快照，快照进 Planner 的【阿洛娜此刻】。墙钟 tick 只推进内状态并推 `presence`（Track 1），永不调 Planner、永不 `speak`。`interrupt` 投递 `teacher_interrupt`，不把活动改成看着老师。老师原文不写入 `life.json`。与关系气候分文件落盘。
 
 | 配置项 | 默认 | 说明 |
 | --- | --- | --- |
@@ -706,7 +715,7 @@ python scripts/ingest_knowledge.py --rebuild
 
 ## 协议摘要
 
-连接后服务端发送 `{"type":"connected","session_id":"..."}`，随即再推一条当前在场：`{"type":"presence","emotion":"...","activity":"..."}`（无台词、无 TTS；`emotion` 为 `arona_emotion` 白名单英文值；`activity` 仅调试，客户端不要用它切 Track 0）。生命循环在内状态映射的表情变化时继续推 `presence`。听写中也会收到；正在生成台词时推迟，生成结束后补发。
+连接后服务端发送 `{"type":"connected","session_id":"..."}`，随即再推一条当前在场：`{"type":"presence","emotion":"...","activity":"..."}`（无台词、无 TTS；`emotion` 为 `arona_emotion` 白名单英文值；`activity` 仅调试，客户端不要用它切 Track 0）。生命循环在内状态映射的表情变化时继续推 `presence`。听写中也会收到；正在生成台词时推迟，生成结束后补发。`emotion_only`（沉默只换脸）会覆盖推一条 `presence`，不经过空 `chat_response.emotion`。
 
 客户端 `chat`：
 

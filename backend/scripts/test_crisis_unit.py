@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT))
 
 from app.config import AppConfig, ExtractorConfig, ModelConfig  # noqa: E402
 from app.conversation import ConversationManager  # noqa: E402
+from app.life.state import InnerState  # noqa: E402
 from app.memory.extractor import MemoryExtractor  # noqa: E402
 from app.orchestrator import Orchestrator  # noqa: E402
 from app.planner.schema import IntentCard  # noqa: E402
@@ -146,7 +147,13 @@ def _orch(*, planner: MagicMock) -> Orchestrator:
     )
 
 
-async def _chat(orch: Orchestrator, text: str) -> list[dict]:
+async def _chat(
+    orch: Orchestrator,
+    text: str,
+    *,
+    interrupt_ctx: InnerState | None = None,
+    on_life_action=None,
+) -> list[dict]:
     sent: list[dict] = []
 
     async def send(payload: dict) -> None:
@@ -157,6 +164,8 @@ async def _chat(orch: Orchestrator, text: str) -> list[dict]:
         content=text,
         options={},
         send=send,
+        interrupt_ctx=interrupt_ctx or InnerState(),
+        on_life_action=on_life_action,
     )
     return sent
 
@@ -167,7 +176,14 @@ def test_rule_hit_uses_crisis_planner_not_renderer() -> None:
     planner.enabled = True
     planner.plan = AsyncMock(return_value=_crisis_card())
     orch = _orch(planner=planner)
-    sent = asyncio.run(_chat(orch, "我不想活了"))
+    actions: list[tuple[str, str]] = []
+    sent = asyncio.run(
+        _chat(
+            orch,
+            "我不想活了",
+            on_life_action=lambda action, emotion: actions.append((action, emotion)),
+        )
+    )
     if len(sent) != 1:
         _fail(f"expected one payload, got {sent!r}")
     payload = sent[0]
@@ -180,6 +196,10 @@ def test_rule_hit_uses_crisis_planner_not_renderer() -> None:
     kwargs = planner.plan.await_args.kwargs
     if not kwargs.get("crisis"):
         _fail("crisis planner flag missing")
+    if "【阿洛娜此刻】正在教室发呆" not in str(kwargs.get("life_block") or ""):
+        _fail(f"crisis should receive interrupt context, got {kwargs.get('life_block')!r}")
+    if actions != [("speak", "worried")]:
+        _fail(f"crisis must speak, got {actions!r}")
     orch.model.generate.assert_not_called()
     orch.extractor.enqueue.assert_not_called()
     orch.relationship.on_user_act.assert_called_with(CRISIS_USER_ACT)
