@@ -109,6 +109,9 @@ python scripts/test_welcome_unit.py        # 欢迎时段与指令（不加载 G
 python scripts/test_proactive_unit.py      # 空闲 / 照料 / goal / 心情回访 / 节日 / continue / 调度落盘（不加载 GGUF）
 python scripts/test_image_input_unit.py   # 截图解析 / 日志脱敏 / logs 目录保留最近 8 张
 python scripts/test_interact_unit.py       # 非对话 interact 白名单 / 摸头指令 / touch Δ / reply_ok
+python scripts/test_affect_unit.py         # 情感质量评测夹具 / 规则 / judge 解析（不调 API）
+python scripts/eval_affect.py              # Planner 草稿情感质量：empathy / sycophancy / repair / boundary（需 planner Key；不达阈值非 0）
+python scripts/eval_affect.py --json-out logs/affect_eval.json
 ```
 
 确保服务已启动后再跑 `smoke_ws.py`。脚本会发送 `ping` / `chat` / `interact`，并打印响应。
