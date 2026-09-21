@@ -33,6 +33,7 @@ from app.query_time import (  # noqa: E402
     is_currently_important,
     memory_time_fts_queries,
     mentions_query_clock,
+    parse_content_clocked_datetimes,
     parse_content_datetimes,
     relative_dates_in,
     relative_months_in,
@@ -142,6 +143,14 @@ def test_content_importance() -> None:
     nap_at = parse_content_datetimes(nap)
     if not nap_at or nap_at[0] != datetime(2026, 8, 24, 16, 0):
         _fail(f"nap datetime: {nap_at}")
+    club = "老师2026年9月7日成功加入了一个社团"
+    club_at = parse_content_datetimes(club)
+    if not club_at or club_at[0] != datetime(2026, 9, 7, 0, 0):
+        _fail(f"date-only club: {club_at}")
+    if parse_content_clocked_datetimes(club):
+        _fail("date-only club should not be clocked")
+    if parse_content_clocked_datetimes(ticket) != parsed:
+        _fail("ticket should stay clocked")
     print("  content datetime / importance ok")
 
 

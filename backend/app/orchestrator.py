@@ -46,6 +46,7 @@ from .proactive import (
     care_planner_declined,
     pick_welcome_closing_hint,
 )
+from .proactive.goal import history_follows_proactive_marker
 from .proactive.followup import (
     HISTORY_CONTINUE_MARKER,
     build_continue_instruction,
@@ -1179,12 +1180,17 @@ class Orchestrator:
             not is_crisis_text(user_text)
             and classify_user_act(user_text) == "self_disclose"
         )
-        if not disclose and not should_extract(
-            user_text,
-            turn_count=turn_count,
-            every_n_turns=ext.every_n_turns,
-            buffer_turns=buffer_turns,
-            extract_buffer_turns=ext.extract_buffer_turns,
+        follows_followup = history_follows_proactive_marker(history)
+        if (
+            not disclose
+            and not follows_followup
+            and not should_extract(
+                user_text,
+                turn_count=turn_count,
+                every_n_turns=ext.every_n_turns,
+                buffer_turns=buffer_turns,
+                extract_buffer_turns=ext.extract_buffer_turns,
+            )
         ):
             logger.info(
                 "memory extract skipped session=%s turns=%d buffer_turns=%d",

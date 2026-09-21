@@ -38,8 +38,10 @@ logger = logging.getLogger(__name__)
 _HOT_KEYS = frozenset({"user_name", "preference_color", "user_birthday"})
 
 EXTRACT_SYSTEM = """你是记忆抽取助手。根据「用户（老师）」与「阿洛娜」的对话片段、【当前时间】，以及可选的【已有相关记忆】，提取需要长期记住或需要更新/清除的用户（老师）事实。
+
 只输出 JSON，格式：
 {"memories":[{"op":"upsert或delete","key":"英文蛇形键","content":"短中文陈述句","category":"preference|profile|goal|other|episodic|emotional"}]}
+
 规则：
 - 只提取已确认的精确事实（名字、偏好、约定、未完成的计划）、已确认的共处事件、已确认的心情披露，不要闲聊、不要世界观百科。
 - 无值得记忆的内容时返回 {"memories":[]}
@@ -67,6 +69,7 @@ EXTRACT_SYSTEM = """你是记忆抽取助手。根据「用户（老师）」与
   - 优先复用已有记忆的 key；仅当主题全新时才新建 key
   - 对照集里出现的同主题旧条目，若本轮要写入新事实，必须在输出中点名（upsert 或 delete），不要默不作声地另开一条
   - goal：对话表明该计划已执行、正在执行或已取消时，对该 goal 的 key 输出 op=delete，不要再 upsert。对照集里的过期/已完成 goal 必须 delete
+  - 已发生且无后续待办的事实不要写成 goal（例如「老师成功加入了社团」用 episodic 或 other），并 delete 对照集里同主题的旧 goal。若老师只是答应以后再做，不算已完成，不要 delete
 - 高频稳定 key（若适用请直接使用）：user_name、preference_color、user_birthday
 - 只记录与用户（老师）相关的记忆；例如「老师喜欢蓝色」
 - 记忆必须来自于用户（老师）所述。对于阿洛娜口述的老师记忆，除非得到老师肯定，否则判定为无效。

@@ -213,6 +213,7 @@ async def tick_once(state: "AppState", now: datetime | None = None) -> bool:
             dt,
             goal_key=motive.goal_key,
             mood_key=motive.mood_key,
+            due_soon=motive.due_soon,
         )
         logger.info(
             "proactive fired session=%s kind=%s", session_id, motive.kind

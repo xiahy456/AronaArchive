@@ -33,8 +33,11 @@ from app.proactive.festival import (  # noqa: E402
 )
 from app.proactive.goal import (  # noqa: E402
     HISTORY_GOAL_MARKER,
+    build_goal_instruction,
     can_attempt_goal,
+    goal_is_due_soon,
     has_important_goal,
+    history_follows_proactive_marker,
     last_any_goal_at,
     select_goal,
     wants_goal_mute,
@@ -487,6 +490,8 @@ def test_config_loads() -> None:
         _fail(f"horizon {cfg.proactive.goal.important_horizon_hours}")
     if cfg.proactive.goal.important_cooldown_sec != 1800:
         _fail(f"important cooldown {cfg.proactive.goal.important_cooldown_sec}")
+    if cfg.proactive.goal.due_soon_sec != 3600:
+        _fail(f"due_soon_sec {cfg.proactive.goal.due_soon_sec}")
     if not cfg.proactive.mood_followup.enabled:
         _fail("mood_followup should default enabled")
     if cfg.proactive.mood_followup.min_after_user_sec != 900:
@@ -517,6 +522,7 @@ def _goal_cfg(**overrides: object) -> SimpleNamespace:
         "max_per_day": 1,
         "important_horizon_hours": 36,
         "important_cooldown_sec": 1800,
+        "due_soon_sec": 3600,
     }
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -845,6 +851,184 @@ def test_mute_last_goal_phrase(tmp: Path) -> None:
     )
     if picked is None or picked["key"] != "new_exam":
         _fail(f"muted last key should skip old_trip, got {picked}")
+    print("  ok")
+
+
+def test_goal_ack_and_due_soon(tmp: Path) -> None:
+    print("== goal ack skips until due-soon; sleep defers to care ==")
+    sleep_goal = {
+        "key": "goal_early_sleep",
+        "content": "老师约定2026年9月20日晚上11点多睡觉",
+        "updated_at": 1.0,
+    }
+    ticket_goal = {
+        "key": "ticket",
+        "content": "老师2026年9月20日下午2点要订回深圳的车票",
+        "updated_at": 2.0,
+    }
+    movie_goal = {
+        "key": "goal_movie",
+        "content": "老师答应2026年9月20日陪阿洛娜一起看一部电影",
+        "updated_at": 3.0,
+    }
+    morning = datetime(2026, 9, 20, 10, 21, 0)
+    noon = datetime(2026, 9, 20, 12, 26, 0)
+    due = datetime(2026, 9, 20, 13, 10, 0)
+
+    if goal_is_due_soon(
+        sleep_goal["content"],
+        datetime(2026, 9, 20, 22, 10, 0),
+        due_soon_sec=3600,
+        care_enabled=True,
+    ):
+        _fail("sleep goal must not due-soon when care is enabled")
+    if not goal_is_due_soon(
+        ticket_goal["content"],
+        due,
+        due_soon_sec=3600,
+        care_enabled=True,
+    ):
+        _fail("ticket should be due-soon an hour before 14:00")
+
+    first = build_goal_instruction(sleep_goal["content"])
+    if "尚未完成的计划" not in first:
+        _fail(f"first visit instruction: {first}")
+    nudge = build_goal_instruction(ticket_goal["content"], due_soon=True)
+    if "约定时间快到了" not in nudge or "再确认计划还在不在" not in nudge:
+        _fail(f"due-soon instruction: {nudge}")
+
+    history = [
+        {"role": "user", "content": "你好"},
+        {"role": "assistant", "content": "老师好"},
+        {"role": "user", "content": HISTORY_GOAL_MARKER},
+        {"role": "assistant", "content": "今晚11点睡觉哦"},
+        {"role": "user", "content": "嗯，当然啦"},
+        {"role": "assistant", "content": "那阿洛娜就记下啦"},
+    ]
+    if not history_follows_proactive_marker(history):
+        _fail("reply after 【回访】 should force extract")
+    if history_follows_proactive_marker(history[:4]):
+        _fail("the follow-up turn itself is not a reply-after-followup")
+
+    idle_cfg = SimpleNamespace(
+        enabled=True, after_sec=900, cooldown_sec=1800, max_per_day=3
+    )
+    care_cfg = SimpleNamespace(
+        enabled=True,
+        lunch_start="12:00",
+        lunch_end="12:30",
+        sleep_start="23:00",
+        sleep_end="23:20",
+    )
+    sched = ProactiveScheduler(
+        tmp / "proactive_ack.json",
+        idle_cfg=idle_cfg,
+        care_cfg=care_cfg,
+        goal_cfg=_goal_cfg(max_per_day=1),
+    )
+    sched.note_user_activity(morning - timedelta(seconds=400))
+    sched.mark_fired("goal", morning, goal_key="goal_early_sleep")
+    acked = sched.ack_pending_followups(morning + timedelta(seconds=20))
+    if "goal_early_sleep" not in acked:
+        _fail(f"sleep should be acked, got {acked}")
+    sched.note_user_activity(morning + timedelta(seconds=20))
+
+    skipped = select_goal(
+        [sleep_goal, movie_goal],
+        noon,
+        goal_last=sched.state.goal_last,
+        goal_mute=sched.state.goal_mute,
+        cooldown_sec=21600,
+        important_horizon_hours=36,
+        important_cooldown_sec=1800,
+        goal_acked=sched.state.goal_acked,
+        due_soon_sec=3600,
+        care_enabled=True,
+    )
+    if skipped is None or skipped["key"] != "goal_movie":
+        _fail(f"acked sleep should yield movie, got {skipped}")
+
+    later = sched.pick_motive(
+        noon,
+        last_user_act="other",
+        climate="secure_play",
+        goals=[sleep_goal],
+    )
+    if later is not None and later.kind == "goal" and later.goal_key == "goal_early_sleep":
+        _fail("acked sleep must not be revisited at noon")
+
+    sched.mark_fired("goal", morning + timedelta(minutes=30), goal_key="ticket")
+    sched.ack_pending_followups(morning + timedelta(minutes=31))
+    sched.note_user_activity(morning + timedelta(minutes=31))
+    picked = sched.pick_motive(
+        due,
+        last_user_act="other",
+        climate="secure_play",
+        goals=[ticket_goal, sleep_goal],
+    )
+    if picked is None or picked.kind != "goal" or picked.goal_key != "ticket":
+        _fail(f"ticket due-soon should fire, got {picked}")
+    if not picked.due_soon:
+        _fail("ticket motive should be due_soon")
+    if "约定时间快到了" not in picked.instruction:
+        _fail(f"due-soon pick instruction: {picked.instruction}")
+    sched.mark_fired("goal", due, goal_key="ticket", due_soon=True)
+    again = sched.pick_motive(
+        due + timedelta(minutes=35),
+        last_user_act="other",
+        climate="secure_play",
+        goals=[ticket_goal],
+    )
+    if again is not None and again.kind == "goal" and again.goal_key == "ticket":
+        _fail("due-soon ticket must not loop after fire")
+
+    loaded = ProactiveScheduler(
+        tmp / "proactive_ack.json",
+        idle_cfg=idle_cfg,
+        care_cfg=care_cfg,
+        goal_cfg=_goal_cfg(),
+    )
+    if "goal_early_sleep" not in loaded.state.goal_acked:
+        _fail("goal_acked should persist")
+    print("  ok")
+
+
+def test_mood_ack_skips_same_day(tmp: Path) -> None:
+    print("== mood ack skips same key for the rest of the day ==")
+    now = datetime(2026, 9, 18, 16, 0, 0)
+    aged = (now - timedelta(hours=3)).timestamp()
+    moods = [
+        {
+            "key": "emo_ok",
+            "content": "老师2026年9月18日因加班感到难过",
+            "category": "emotional",
+            "updated_at": aged,
+        }
+    ]
+    skip = mood_entry_skip_reason(
+        moods[0],
+        now,
+        mood_last={},
+        mood_mute={},
+        min_age_sec=7200,
+        max_age_hours=72,
+        cooldown_sec=21600,
+        mood_acked={"emo_ok": now.isoformat(timespec="seconds")},
+    )
+    if skip != "acked":
+        _fail(f"same-day mood ack should skip, got {skip}")
+    next_day = mood_entry_skip_reason(
+        moods[0],
+        now + timedelta(days=1),
+        mood_last={},
+        mood_mute={},
+        min_age_sec=7200,
+        max_age_hours=72,
+        cooldown_sec=21600,
+        mood_acked={"emo_ok": now.isoformat(timespec="seconds")},
+    )
+    if next_day == "acked":
+        _fail("mood ack must not block the next calendar day")
     print("  ok")
 
 
@@ -1567,6 +1751,8 @@ def main() -> None:
         test_care_waits_after_welcome(Path(tmp))
         test_mark_care_addressed_skips_without_proactive_stamp(Path(tmp))
         test_mute_last_goal_phrase(Path(tmp))
+        test_goal_ack_and_due_soon(Path(tmp))
+        test_mood_ack_skips_same_day(Path(tmp))
         test_goal_after_welcome_not_blocked_by_idle(Path(tmp))
         test_important_goal_bypasses_daily_cap_pick(Path(tmp))
         test_goal_global_gap_blocks_other_keys(Path(tmp))

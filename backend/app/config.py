@@ -184,6 +184,7 @@ class GoalConfig(BaseModel):
     cooldown_sec: float = 21600
     important_horizon_hours: float = 36
     important_cooldown_sec: float = 1800
+    due_soon_sec: float = 3600
     mute_sec: float = 604800
     max_per_day: int = 1
 

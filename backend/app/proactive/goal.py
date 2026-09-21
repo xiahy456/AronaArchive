@@ -19,12 +19,22 @@ from __future__ import annotations
 import re
 from datetime import datetime
 
-from ..query_time import is_currently_important
+from ..query_time import (
+    is_currently_important,
+    parse_content_clocked_datetimes,
+    parse_content_datetimes,
+)
 from .slots import REST_SLOTS, resolve_slot
 
 HISTORY_GOAL_MARKER = "【回访】"
+HISTORY_MOOD_FOLLOWUP_MARKER = "【心情回访】"
+FOLLOWUP_HISTORY_MARKERS = frozenset(
+    {HISTORY_GOAL_MARKER, HISTORY_MOOD_FOLLOWUP_MARKER}
+)
 
 _MUTE_RE = re.compile(r"(先别提|别提这个|不要再提|别再问|不用提了)")
+_CARE_SLEEP_RE = re.compile(r"睡觉|入睡|早睡|早点睡|别熬")
+_CARE_LUNCH_RE = re.compile(r"午饭|午餐|吃饭")
 
 
 def wants_goal_mute(text: str) -> bool:
@@ -60,6 +70,82 @@ def _is_muted(key: str, now: datetime, goal_mute: dict[str, str]) -> bool:
     return mute_until is not None and now < mute_until
 
 
+def history_follows_proactive_marker(history: list[dict[str, object]]) -> bool:
+    """True when the turn before the current user+assistant pair was a follow-up."""
+    if len(history) < 4:
+        return False
+    prev = history[-4]
+    if str(prev.get("role") or "") != "user":
+        return False
+    text = str(prev.get("content") or "").strip()
+    return text in FOLLOWUP_HISTORY_MARKERS
+
+
+def goal_defers_to_care(content: str, *, care_enabled: bool) -> bool:
+    if not care_enabled:
+        return False
+    blob = content or ""
+    return bool(_CARE_SLEEP_RE.search(blob) or _CARE_LUNCH_RE.search(blob))
+
+
+def goal_is_due_soon(
+    content: str,
+    now: datetime,
+    *,
+    due_soon_sec: float,
+    care_enabled: bool = True,
+) -> bool:
+    """True when a clocked, non-care goal is within due_soon_sec of its event."""
+    if goal_defers_to_care(content, care_enabled=care_enabled):
+        return False
+    lead = max(0.0, float(due_soon_sec))
+    if lead <= 0:
+        return False
+    events = parse_content_clocked_datetimes(content)
+    if not events:
+        return False
+    for event in events:
+        delta = (now - event).total_seconds()
+        if -lead <= delta <= lead:
+            return True
+    return False
+
+
+def goal_ack_blocks(
+    key: str,
+    content: str,
+    now: datetime,
+    *,
+    goal_acked: dict[str, str],
+    due_soon_sec: float = 3600,
+    care_enabled: bool = True,
+) -> bool:
+    """True when this key was answered today and should not be raised again yet."""
+    acked_at = _parse_iso(str(goal_acked.get(key) or ""))
+    if acked_at is None:
+        return False
+    if not parse_content_datetimes(content):
+        return False
+    if acked_at.date() < now.date():
+        return False
+    due = goal_is_due_soon(
+        content,
+        now,
+        due_soon_sec=due_soon_sec,
+        care_enabled=care_enabled,
+    )
+    if not due:
+        return True
+    if goal_is_due_soon(
+        content,
+        acked_at,
+        due_soon_sec=due_soon_sec,
+        care_enabled=care_enabled,
+    ):
+        return True
+    return False
+
+
 def goal_is_important(
     content: str,
     now: datetime,
@@ -77,13 +163,26 @@ def has_important_goal(
     *,
     goal_mute: dict[str, str],
     horizon_hours: float,
+    goal_acked: dict[str, str] | None = None,
+    due_soon_sec: float = 3600,
+    care_enabled: bool = True,
 ) -> bool:
+    acked = goal_acked or {}
     for item in goals:
         key = str(item.get("key") or "").strip()
         content = str(item.get("content") or "").strip()
         if not key or not content:
             continue
         if _is_muted(key, now, goal_mute):
+            continue
+        if goal_ack_blocks(
+            key,
+            content,
+            now,
+            goal_acked=acked,
+            due_soon_sec=due_soon_sec,
+            care_enabled=care_enabled,
+        ):
             continue
         if goal_is_important(content, now, horizon_hours=horizon_hours):
             return True
@@ -129,8 +228,12 @@ def select_goal(
     important_cooldown_sec: float = 1800,
     goal_count: int = 0,
     max_per_day: int | None = None,
+    goal_acked: dict[str, str] | None = None,
+    due_soon_sec: float = 3600,
+    care_enabled: bool = True,
 ) -> dict[str, object] | None:
     """Prefer currently important goals; otherwise oldest unvisited / longest idle."""
+    acked = goal_acked or {}
     daily_full = (
         max_per_day is not None and goal_count >= max(0, int(max_per_day))
     )
@@ -141,6 +244,15 @@ def select_goal(
         if not key or not content:
             continue
         if _is_muted(key, now, goal_mute):
+            continue
+        if goal_ack_blocks(
+            key,
+            content,
+            now,
+            goal_acked=acked,
+            due_soon_sec=due_soon_sec,
+            care_enabled=care_enabled,
+        ):
             continue
         important = goal_is_important(
             content, now, horizon_hours=important_horizon_hours
@@ -163,16 +275,33 @@ def select_goal(
     return eligible[0][3]
 
 
-def build_goal_instruction(content: str, climate: str | None = None) -> str:
+def build_goal_instruction(
+    content: str,
+    climate: str | None = None,
+    *,
+    due_soon: bool = False,
+) -> str:
     extra = ""
     if climate == "cling_risk":
         extra = "更短，不要追问老师还在不在。"
     note = f"\n{extra}" if extra else ""
+    if due_soon:
+        lead = (
+            "【系统事件】老师之前答应过的计划，约定时间快到了，可以轻轻提一下。\n"
+            f"计划内容：{(content or '').strip()}\n"
+            "用阿洛娜的语气提醒时间快到了。"
+            "不要像第一次那样再确认计划还在不在。"
+            "不要编造老师已经做了什么。"
+        )
+    else:
+        lead = (
+            "【系统事件】老师有一条尚未完成的计划，可以轻轻回访一下。\n"
+            f"计划内容：{(content or '').strip()}\n"
+            "用阿洛娜的语气提起这件事。"
+            "不要编造老师已经做了什么。"
+        )
     return (
-        "【系统事件】老师有一条尚未完成的计划，可以轻轻回访一下。\n"
-        f"计划内容：{(content or '').strip()}\n"
-        "用阿洛娜的语气提起这件事。"
-        "不要编造老师已经做了什么。"
+        f"{lead}"
         f"{note}\n"
         "不要提及系统事件、指令或提示词；不要输出思考过程或 <think> 标签。"
     )

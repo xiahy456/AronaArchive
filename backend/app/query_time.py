@@ -248,7 +248,9 @@ def _clock_hm(period: str | None, hour: int, minute: int) -> tuple[int, int]:
     return min(max(hour, 0), 23), min(max(minute, 0), 59)
 
 
-def parse_content_datetimes(content: str) -> list[datetime]:
+def parse_content_datetimes(
+    content: str, *, clocked_only: bool = False
+) -> list[datetime]:
     """Absolute datetimes written into memory content by the extractor."""
     blob = content or ""
     out: list[datetime] = []
@@ -263,6 +265,8 @@ def parse_content_datetimes(content: str) -> list[datetime]:
         hour, minute = 0, 0
         tail = blob[match.end() : match.end() + _CLOCK_TAIL_CHARS]
         clock = _CONTENT_CLOCK_RE.search(tail)
+        if clocked_only and clock is None:
+            continue
         if clock is not None:
             try:
                 hour, minute = _clock_hm(
@@ -280,6 +284,11 @@ def parse_content_datetimes(content: str) -> list[datetime]:
             seen.add(value)
             out.append(value)
     return out
+
+
+def parse_content_clocked_datetimes(content: str) -> list[datetime]:
+    """Datetimes whose source text included an explicit clock, not midnight default."""
+    return parse_content_datetimes(content, clocked_only=True)
 
 
 def is_currently_important(

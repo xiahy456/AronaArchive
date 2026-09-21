@@ -68,6 +68,8 @@ def test_extract_schema_and_normalize() -> None:
         _fail("EXTRACT_SYSTEM must list episodic/emotional")
     if "ep_20260918_fireworks" not in EXTRACT_SYSTEM:
         _fail("EXTRACT_SYSTEM should suggest dated episodic keys")
+    if "成功加入了社团" not in EXTRACT_SYSTEM:
+        _fail("EXTRACT_SYSTEM should tell completed past facts not to stay as goal")
     item = normalize_memory_item(
         {
             "op": "upsert",

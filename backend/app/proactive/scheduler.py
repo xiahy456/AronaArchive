@@ -41,6 +41,7 @@ from .goal import (
     HISTORY_GOAL_MARKER,
     build_goal_instruction,
     can_attempt_goal,
+    goal_is_due_soon,
     has_important_goal,
     last_any_goal_at,
     select_goal,
@@ -74,6 +75,7 @@ class Motive:
     mood_key: str = ""
     festival_id: str = ""
     extra_memories: tuple[str, ...] = ()
+    due_soon: bool = False
 
 
 @dataclass
@@ -86,10 +88,12 @@ class ProactiveState:
     care_done: list[str] = field(default_factory=list)
     goal_last: dict[str, str] = field(default_factory=dict)
     goal_mute: dict[str, str] = field(default_factory=dict)
+    goal_acked: dict[str, str] = field(default_factory=dict)
     goal_count: int = 0
     last_goal_key: str = ""
     mood_last: dict[str, str] = field(default_factory=dict)
     mood_mute: dict[str, str] = field(default_factory=dict)
+    mood_acked: dict[str, str] = field(default_factory=dict)
     mood_count: int = 0
     last_mood_key: str = ""
     festival_done: list[str] = field(default_factory=list)
@@ -114,10 +118,12 @@ class ProactiveState:
             "care_done": list(self.care_done),
             "goal_last": dict(self.goal_last),
             "goal_mute": dict(self.goal_mute),
+            "goal_acked": dict(self.goal_acked),
             "goal_count": self.goal_count,
             "last_goal_key": self.last_goal_key,
             "mood_last": dict(self.mood_last),
             "mood_mute": dict(self.mood_mute),
+            "mood_acked": dict(self.mood_acked),
             "mood_count": self.mood_count,
             "last_mood_key": self.last_mood_key,
             "festival_done": list(self.festival_done),
@@ -142,10 +148,12 @@ class ProactiveState:
             care_done=[str(item) for item in done if item],
             goal_last=_as_str_dict(data.get("goal_last")),
             goal_mute=_as_str_dict(data.get("goal_mute")),
+            goal_acked=_as_str_dict(data.get("goal_acked")),
             goal_count=int(data.get("goal_count") or 0),
             last_goal_key=str(data.get("last_goal_key") or ""),
             mood_last=_as_str_dict(data.get("mood_last")),
             mood_mute=_as_str_dict(data.get("mood_mute")),
+            mood_acked=_as_str_dict(data.get("mood_acked")),
             mood_count=int(data.get("mood_count") or 0),
             last_mood_key=str(data.get("last_mood_key") or ""),
             festival_done=[str(item) for item in festivals if item],
@@ -239,6 +247,7 @@ class ProactiveScheduler:
         goal_key: str = "",
         festival_id: str = "",
         mood_key: str = "",
+        due_soon: bool = False,
     ) -> None:
         dt = now or datetime.now()
         self.state.roll_day(dt)
@@ -253,6 +262,8 @@ class ProactiveScheduler:
             if key:
                 self.state.last_goal_key = key
                 self.state.goal_last[key] = stamp
+                if due_soon:
+                    self.state.goal_acked[key] = stamp
         elif kind == MOOD_FOLLOWUP_KIND:
             self.state.mood_count += 1
             key = (mood_key or "").strip()
@@ -290,6 +301,45 @@ class ProactiveScheduler:
         self.save()
         logger.info("goal muted key=%s until=%s", key, self.state.goal_mute[key])
         return key
+
+    def ack_pending_followups(self, now: datetime | None = None) -> list[str]:
+        """Ack goal/mood keys fired since last_user_at. Does not stamp user activity."""
+        dt = now or datetime.now()
+        stamp = dt.isoformat(timespec="seconds")
+        since = _parse_iso(self.state.last_user_at)
+        acked: list[str] = []
+        goal_keys: list[str]
+        mood_keys: list[str]
+        if since is None:
+            goal_keys = [self.state.last_goal_key] if self.state.last_goal_key else []
+            mood_keys = [self.state.last_mood_key] if self.state.last_mood_key else []
+        else:
+            goal_keys = []
+            for key, fired in self.state.goal_last.items():
+                parsed = _parse_iso(fired)
+                if parsed is not None and parsed >= since:
+                    goal_keys.append(key)
+            mood_keys = []
+            for key, fired in self.state.mood_last.items():
+                parsed = _parse_iso(fired)
+                if parsed is not None and parsed >= since:
+                    mood_keys.append(key)
+        for key in goal_keys:
+            k = (key or "").strip()
+            if not k:
+                continue
+            self.state.goal_acked[k] = stamp
+            acked.append(k)
+        for key in mood_keys:
+            k = (key or "").strip()
+            if not k:
+                continue
+            self.state.mood_acked[k] = stamp
+            acked.append(k)
+        if acked:
+            self.save()
+            logger.info("followup acked keys=%s", acked)
+        return acked
 
     def _mute_mood(self, key: str, now: datetime) -> str:
         mute_sec = float(getattr(self.mood_cfg, "mute_sec", 604800))
@@ -396,12 +446,19 @@ class ProactiveScheduler:
             important_cd = float(
                 getattr(self.goal_cfg, "important_cooldown_sec", 1800) or 1800
             )
+            due_soon_sec = float(
+                getattr(self.goal_cfg, "due_soon_sec", 3600) or 0
+            )
+            care_enabled = bool(getattr(self.care_cfg, "enabled", True))
             goals_list = goals or []
             has_important = has_important_goal(
                 goals_list,
                 dt,
                 goal_mute=self.state.goal_mute,
                 horizon_hours=horizon,
+                goal_acked=self.state.goal_acked,
+                due_soon_sec=due_soon_sec,
+                care_enabled=care_enabled,
             )
             if can_attempt_goal(
                 dt,
@@ -424,17 +481,29 @@ class ProactiveScheduler:
                     important_cooldown_sec=important_cd,
                     goal_count=self.state.goal_count,
                     max_per_day=int(self.goal_cfg.max_per_day),
+                    goal_acked=self.state.goal_acked,
+                    due_soon_sec=due_soon_sec,
+                    care_enabled=care_enabled,
                 )
                 if selected is not None:
                     key = str(selected.get("key") or "").strip()
                     content = str(selected.get("content") or "").strip()
                     if key and content:
+                        due_soon = goal_is_due_soon(
+                            content,
+                            dt,
+                            due_soon_sec=due_soon_sec,
+                            care_enabled=care_enabled,
+                        )
                         return Motive(
                             kind="goal",
-                            instruction=build_goal_instruction(content, climate),
+                            instruction=build_goal_instruction(
+                                content, climate, due_soon=due_soon
+                            ),
                             history_marker=HISTORY_GOAL_MARKER,
                             goal_key=key,
                             extra_memories=(content,),
+                            due_soon=due_soon,
                         )
 
         if getattr(self.mood_cfg, "enabled", True) and can_attempt_mood(
@@ -452,6 +521,7 @@ class ProactiveScheduler:
                 dt,
                 mood_last=self.state.mood_last,
                 mood_mute=self.state.mood_mute,
+                mood_acked=self.state.mood_acked,
                 min_age_sec=float(self.mood_cfg.min_age_sec),
                 max_age_hours=float(self.mood_cfg.max_age_hours),
                 cooldown_sec=float(self.mood_cfg.cooldown_sec),

@@ -213,11 +213,15 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
         outbound = send_fn or send
         state.hub.set_busy(session_id, True)
         if state.scheduler is not None:
-            state.scheduler.note_user_activity()
             if wants_goal_mute(content):
                 muted = state.scheduler.mute_last_followup()
                 if muted:
                     logger.info("followup muted by user key=%s", muted)
+            else:
+                acked = state.scheduler.ack_pending_followups()
+                if acked:
+                    logger.info("followup acked by user keys=%s", acked)
+            state.scheduler.note_user_activity()
         try:
             await state.orchestrator.handle_chat(
                 session_id=session_id,

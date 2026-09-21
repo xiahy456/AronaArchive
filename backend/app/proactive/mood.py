@@ -77,6 +77,7 @@ def mood_entry_skip_reason(
     min_age_sec: float,
     max_age_hours: float,
     cooldown_sec: float,
+    mood_acked: dict[str, str] | None = None,
 ) -> str | None:
     key = str(item.get("key") or "").strip()
     content = str(item.get("content") or "").strip()
@@ -88,6 +89,9 @@ def mood_entry_skip_reason(
         return "crisis"
     if _is_muted(key, now, mood_mute):
         return "muted"
+    acked_at = _parse_iso(str((mood_acked or {}).get(key) or ""))
+    if acked_at is not None and acked_at.date() >= now.date():
+        return "acked"
     age = mood_entry_age_seconds(item, now)
     if age is None:
         return "too_old"
@@ -139,6 +143,7 @@ def select_mood_entry(
     min_age_sec: float,
     max_age_hours: float,
     cooldown_sec: float,
+    mood_acked: dict[str, str] | None = None,
 ) -> dict[str, object] | None:
     """Oldest still-in-window emotional memory; skip crisis / muted / too new."""
     eligible: list[tuple[float, dict[str, object]]] = []
@@ -151,6 +156,7 @@ def select_mood_entry(
             min_age_sec=min_age_sec,
             max_age_hours=max_age_hours,
             cooldown_sec=cooldown_sec,
+            mood_acked=mood_acked,
         ):
             continue
         age = mood_entry_age_seconds(item, now)

@@ -131,6 +131,7 @@ proactive:
     cooldown_sec: 21600
     important_horizon_hours: 36
     important_cooldown_sec: 1800
+    due_soon_sec: 3600
     mute_sec: 604800
     max_per_day: 1
   continue:
