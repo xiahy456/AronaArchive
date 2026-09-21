@@ -579,7 +579,7 @@ def test_mark_care_addressed_skips_without_proactive_stamp(tmp: Path) -> None:
 
 
 def test_hub_busy() -> None:
-    print("== hub busy filter ==")
+    print("== hub busy filter; listening stays idle ==")
     hub = ConnectionHub()
 
     async def _send(_payload: dict) -> None:
@@ -591,9 +591,304 @@ def test_hub_busy() -> None:
     idle = hub.idle_sessions()
     if len(idle) != 1 or idle[0][0] != "b":
         _fail(f"expected only b idle, got {idle}")
+    hub.set_listening("b", True)
+    idle = hub.idle_sessions()
+    if len(idle) != 1 or idle[0][0] != "b":
+        _fail(f"listening must not freeze idle_sessions, got {idle}")
     hub.unregister("b")
     if hub.idle_sessions():
         _fail("no idle sessions after unregister")
+    print("  ok")
+
+
+def test_tick_once_enqueues_care_without_initiate() -> None:
+    print("== proactive tick enqueues care impulse and does not initiate on simmer ==")
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    from app.life import LifeEngine, LifeSettings
+    from app.proactive.care import CARE_MEMORY_QUERY, HISTORY_CARE_MARKER
+    from app.proactive.loop import tick_once as proactive_tick
+    from app.proactive.scheduler import Motive
+
+    with tempfile.TemporaryDirectory() as tmp:
+        engine = LifeEngine.from_path(Path(tmp) / "life.json", LifeSettings())
+        hub = ConnectionHub()
+
+        async def _send(_payload: dict) -> None:
+            return None
+
+        hub.register("s1", _send)
+        hub.set_listening("s1", True)
+        orch = MagicMock()
+        orch.relationship = None
+        orch.handle_initiate = AsyncMock(
+            side_effect=AssertionError("must not initiate during simmer")
+        )
+        orch.memory_store.list_by_category.return_value = []
+        scheduler = MagicMock()
+        scheduler.goal_cfg.enabled = False
+        scheduler.mood_cfg.enabled = False
+        scheduler.festival_cfg.enabled = False
+        scheduler.pick_motive.return_value = Motive(
+            kind="lunch",
+            instruction="【系统事件】午饭",
+            history_marker=HISTORY_CARE_MARKER,
+            retrieve_memory=True,
+            memory_query=CARE_MEMORY_QUERY,
+        )
+        fake = SimpleNamespace(
+            hub=hub,
+            life=engine,
+            orchestrator=orch,
+            scheduler=scheduler,
+            config=SimpleNamespace(
+                proactive=SimpleNamespace(
+                    relationship=SimpleNamespace(enabled=False)
+                )
+            ),
+        )
+        now = datetime(2026, 8, 13, 12, 0, 0)
+        spoke = asyncio.run(proactive_tick(fake, now=now))
+        if spoke:
+            _fail("care simmer must not speak")
+        pending = engine.state.pending_impulse
+        if pending is None or pending.kind != "lunch":
+            _fail(f"lunch impulse should stay queued, got {pending}")
+        orch.handle_initiate.assert_not_called()
+        if engine.state.activity != "thinking":
+            _fail(engine.state.activity)
+    print("  ok")
+
+
+def test_welcome_impulse_flush_speaks() -> None:
+    print("== welcome impulse flush sends via handle_initiate ==")
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    from app.life import Impulse, LifeEngine, LifeSettings, offer_impulse
+    from app.life.impulse import flush_impulse
+
+    with tempfile.TemporaryDirectory() as tmp:
+        engine = LifeEngine.from_path(Path(tmp) / "life.json", LifeSettings())
+        hub = ConnectionHub()
+
+        async def _send(_payload: dict) -> None:
+            return None
+
+        hub.register("s1", _send)
+        orch = MagicMock()
+        orch.relationship = None
+        orch.handle_initiate = AsyncMock(return_value="sent")
+        scheduler = MagicMock()
+        now = datetime(2026, 8, 13, 15, 0, 0)
+        offer_impulse(
+            engine,
+            Impulse(
+                kind="welcome",
+                created_at=now,
+                instruction="【系统事件】老师上线了",
+                history_marker="【上线】",
+                allow_speak=True,
+                first_in_slot=True,
+                slot_id="afternoon",
+                date_key="2026-08-13",
+            ),
+        )
+        fake = SimpleNamespace(
+            hub=hub,
+            life=engine,
+            orchestrator=orch,
+            scheduler=scheduler,
+            welcome=MagicMock(),
+            config=SimpleNamespace(
+                proactive=SimpleNamespace(
+                    relationship=SimpleNamespace(enabled=False)
+                )
+            ),
+        )
+        spoke = asyncio.run(flush_impulse(fake, now=now))
+        if not spoke:
+            _fail("welcome should speak")
+        orch.handle_initiate.assert_called_once()
+        kwargs = orch.handle_initiate.await_args.kwargs
+        if kwargs.get("kind") != "welcome":
+            _fail(kwargs.get("kind"))
+        if engine.state.pending_impulse is not None:
+            _fail("spoken welcome should clear impulse")
+        scheduler.note_proactive.assert_called()
+        fake.welcome.mark_period_greeted.assert_called_with(
+            "2026-08-13", "afternoon"
+        )
+    print("  ok")
+
+
+def test_climate_withhold_care_does_not_initiate() -> None:
+    print("== climate withhold care is emotion_only and marks addressed ==")
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    from app.life import LifeEngine, LifeSettings
+    from app.proactive.care import CARE_MEMORY_QUERY, HISTORY_CARE_MARKER
+    from app.proactive.loop import tick_once as proactive_tick
+    from app.proactive.scheduler import Motive
+
+    with tempfile.TemporaryDirectory() as tmp:
+        engine = LifeEngine.from_path(Path(tmp) / "life.json", LifeSettings())
+        hub = ConnectionHub()
+
+        async def _send(_payload: dict) -> None:
+            return None
+
+        hub.register("s1", _send)
+        rel = MagicMock()
+        rel.peek_climate.return_value = "fragile"
+        rel.decide_proactive.return_value = SimpleNamespace(
+            action="silence", climate="fragile"
+        )
+        rel.state.last_user_act = "other"
+        orch = MagicMock()
+        orch.relationship = rel
+        orch.handle_initiate = AsyncMock(
+            side_effect=AssertionError("climate withhold must not initiate")
+        )
+        orch.memory_store.list_by_category.return_value = []
+        scheduler = MagicMock()
+        scheduler.goal_cfg.enabled = False
+        scheduler.mood_cfg.enabled = False
+        scheduler.festival_cfg.enabled = False
+        scheduler.pick_motive.return_value = Motive(
+            kind="lunch",
+            instruction="【系统事件】午饭",
+            history_marker=HISTORY_CARE_MARKER,
+            retrieve_memory=True,
+            memory_query=CARE_MEMORY_QUERY,
+        )
+        fake = SimpleNamespace(
+            hub=hub,
+            life=engine,
+            orchestrator=orch,
+            scheduler=scheduler,
+            config=SimpleNamespace(
+                proactive=SimpleNamespace(
+                    relationship=SimpleNamespace(enabled=True)
+                )
+            ),
+        )
+        now = datetime(2026, 8, 13, 12, 0, 0)
+        spoke = asyncio.run(proactive_tick(fake, now=now))
+        if spoke:
+            _fail("withheld care must not speak")
+        orch.handle_initiate.assert_not_called()
+        if engine.state.pending_impulse is not None:
+            _fail("withheld care should drop the impulse")
+        scheduler.mark_care_addressed.assert_called()
+        scheduler.mark_fired.assert_not_called()
+    print("  ok")
+
+
+def test_generate_fail_does_not_mark_fired() -> None:
+    print("== generate failure keeps impulse and does not mark_fired ==")
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    from app.life import Impulse, LifeEngine, LifeSettings, offer_impulse
+    from app.life.impulse import flush_impulse
+
+    with tempfile.TemporaryDirectory() as tmp:
+        engine = LifeEngine.from_path(Path(tmp) / "life.json", LifeSettings())
+        hub = ConnectionHub()
+
+        async def _send(_payload: dict) -> None:
+            return None
+
+        hub.register("s1", _send)
+        orch = MagicMock()
+        orch.relationship = None
+        orch.handle_initiate = AsyncMock(return_value="failed")
+        scheduler = MagicMock()
+        now = datetime(2026, 8, 13, 15, 0, 0)
+        offer_impulse(
+            engine,
+            Impulse(
+                kind="idle",
+                created_at=now,
+                instruction="【系统事件】轻在场",
+                history_marker="【搭话】",
+                allow_speak=True,
+            ),
+        )
+        fake = SimpleNamespace(
+            hub=hub,
+            life=engine,
+            orchestrator=orch,
+            scheduler=scheduler,
+            config=SimpleNamespace(
+                proactive=SimpleNamespace(
+                    relationship=SimpleNamespace(enabled=False)
+                )
+            ),
+        )
+        spoke = asyncio.run(flush_impulse(fake, now=now))
+        if spoke:
+            _fail("failed generate must not count as spoke")
+        if engine.state.pending_impulse is None:
+            _fail("failed generate must keep the impulse")
+        scheduler.mark_fired.assert_not_called()
+    print("  ok")
+
+
+def test_busy_defers_impulse_speak() -> None:
+    print("== hub busy defers speak and keeps impulse ==")
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+
+    from app.life import Impulse, LifeEngine, LifeSettings, offer_impulse
+    from app.life.impulse import flush_impulse
+
+    with tempfile.TemporaryDirectory() as tmp:
+        engine = LifeEngine.from_path(Path(tmp) / "life.json", LifeSettings())
+        hub = ConnectionHub()
+
+        async def _send(_payload: dict) -> None:
+            return None
+
+        hub.register("s1", _send)
+        hub.set_busy("s1", True)
+        orch = MagicMock()
+        orch.relationship = None
+        orch.handle_initiate = AsyncMock(
+            side_effect=AssertionError("busy must not initiate")
+        )
+        scheduler = MagicMock()
+        now = datetime(2026, 8, 13, 15, 0, 0)
+        offer_impulse(
+            engine,
+            Impulse(
+                kind="welcome",
+                created_at=now,
+                instruction="【系统事件】老师上线了",
+                allow_speak=True,
+            ),
+        )
+        fake = SimpleNamespace(
+            hub=hub,
+            life=engine,
+            orchestrator=orch,
+            scheduler=scheduler,
+            config=SimpleNamespace(
+                proactive=SimpleNamespace(
+                    relationship=SimpleNamespace(enabled=False)
+                )
+            ),
+        )
+        spoke = asyncio.run(flush_impulse(fake, now=now))
+        if spoke:
+            _fail("busy must not speak")
+        if engine.state.pending_impulse is None:
+            _fail("busy must keep the impulse")
+        orch.handle_initiate.assert_not_called()
+        scheduler.mark_fired.assert_not_called()
     print("  ok")
 
 
@@ -1875,6 +2170,11 @@ def main() -> None:
         test_festival_calendar_and_once(Path(tmp))
         test_mood_followup_select_and_gates(Path(tmp))
     test_hub_busy()
+    test_tick_once_enqueues_care_without_initiate()
+    test_welcome_impulse_flush_speaks()
+    test_climate_withhold_care_does_not_initiate()
+    test_generate_fail_does_not_mark_fired()
+    test_busy_defers_impulse_speak()
     test_config_loads()
     print("ALL PASS")
 

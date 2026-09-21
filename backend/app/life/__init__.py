@@ -16,14 +16,22 @@
 
 from .engine import LifeEngine
 from .events import WorldEvent, WorldKind, world_event
+from .impulse import (
+    deliver_impulse,
+    flush_impulse,
+    impulse_from_motive,
+    offer_impulse,
+    schedule_impulse_delivery,
+)
 from .loop import run_life_loop, tick_once
 from .policy import LifeDecision, LifeSettings, decide
 from .presence import PresenceGate, presence_emotion, publish_presence, schedule_presence
-from .state import InnerState, Rumination
+from .state import Impulse, InnerState, Rumination
 from .store import LifeStore
 from .turn import apply_turn_action, format_interrupt_block, note_teacher_turn
 
 __all__ = [
+    "Impulse",
     "InnerState",
     "LifeDecision",
     "LifeEngine",
@@ -35,11 +43,16 @@ __all__ = [
     "WorldKind",
     "apply_turn_action",
     "decide",
+    "deliver_impulse",
+    "flush_impulse",
     "format_interrupt_block",
+    "impulse_from_motive",
     "note_teacher_turn",
+    "offer_impulse",
     "presence_emotion",
     "publish_presence",
     "run_life_loop",
+    "schedule_impulse_delivery",
     "schedule_presence",
     "tick_once",
     "world_event",

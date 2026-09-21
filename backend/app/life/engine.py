@@ -34,6 +34,8 @@ class LifeEngine:
         self.settings = settings
         self.store = store
         self.state = store.load()
+        self.last_decision: LifeDecision | None = None
+        self._impulse_busy = False
 
     @classmethod
     def from_path(cls, path: Path, settings: LifeSettings) -> LifeEngine:
@@ -49,23 +51,48 @@ class LifeEngine:
 
     def _commit(self, decision: LifeDecision, *, climate: str | None) -> LifeDecision:
         before = self.state.to_dict()
+        had_impulse = self.state.pending_impulse is not None
         self.state = decision.state
         action = decision.action
-        if action not in {"continue_activity", "shift_activity"}:
+        if action == "glance":
+            action = "emotion_only"
+            decision = LifeDecision(
+                state=self.state,
+                action=action,
+                next_activity=self.state.activity,
+                impulse_followup=decision.impulse_followup,
+                impulse_kind=decision.impulse_kind,
+                impulse_source_id=decision.impulse_source_id,
+                impulse_due_soon=decision.impulse_due_soon,
+            )
+        allowed = {"continue_activity", "shift_activity"}
+        if had_impulse or self.state.pending_impulse is not None:
+            allowed.update({"speak", "emotion_only"})
+        if action not in allowed:
             action = "continue_activity"
             decision = LifeDecision(
-                state=self.state, action=action, next_activity=self.state.activity
+                state=self.state,
+                action=action,
+                next_activity=self.state.activity,
+                impulse_followup="keep",
+                impulse_kind=decision.impulse_kind,
+                impulse_source_id=decision.impulse_source_id,
+                impulse_due_soon=decision.impulse_due_soon,
             )
         if self.state.to_dict() != before:
             self.store.save(self.state)
             logger.info(
-                "life action=%s activity=%s attention=%s mood=%s climate=%s",
+                "life action=%s activity=%s attention=%s mood=%s climate=%s "
+                "impulse=%s followup=%s",
                 decision.action,
                 self.state.activity,
                 self.state.attention,
                 self.state.private_mood,
                 climate or "-",
+                (self.state.pending_impulse.kind if self.state.pending_impulse else "-"),
+                decision.impulse_followup,
             )
+        self.last_decision = decision
         return decision
 
     def apply(

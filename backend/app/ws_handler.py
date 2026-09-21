@@ -61,21 +61,34 @@ from .input_filter import (
 )
 from .interact import parse_duration_ms, resolve_interact_action
 from .life import (
+    Impulse,
     InnerState,
     LifeEngine,
     PresenceGate,
     WorldKind,
     apply_turn_action,
+    flush_impulse,
     note_teacher_turn,
+    offer_impulse,
     publish_presence,
     schedule_presence,
     world_event,
 )
 from .logging_utils import begin_trace, format_interactive_log, preview, reset_trace
 from .orchestrator import Orchestrator
-from .proactive import ConnectionHub, ProactiveScheduler, WelcomeState, resolve_welcome_context
+from .proactive import (
+    ConnectionHub,
+    HISTORY_FESTIVAL_MARKER,
+    HISTORY_USER_MARKER,
+    ProactiveScheduler,
+    WelcomeState,
+    build_festival_instruction,
+    build_welcome_instruction,
+    pick_welcome_closing_hint,
+    resolve_welcome_context,
+)
 from .proactive.goal import wants_goal_mute
-from .proactive.loop import deliver_festival, load_birthday_content
+from .proactive.loop import load_birthday_content
 from .protocol import (
     CODE_BAD_REQUEST,
     CODE_INTERNAL,
@@ -679,7 +692,6 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
     async def _run_welcome() -> None:
         nonlocal inflight_kind
         inflight_kind = "welcome"
-        state.hub.set_busy(session_id, True)
         try:
             slot, first = resolve_welcome_context(state.welcome)
             logger.info(
@@ -689,6 +701,10 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
                 first,
                 slot.date_key,
             )
+            engine = state.life
+            if engine is None:
+                logger.info("welcome skipped session=%s reason=no_life_engine", session_id)
+                return
             climate = None
             relationship = state.orchestrator.relationship
             if (
@@ -697,69 +713,75 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
             ):
                 climate = relationship.peek_climate()
 
+            now = datetime.now()
             hit = None
             if state.scheduler is not None:
                 birthday = await load_birthday_content(state)
                 hit = state.scheduler.pending_festival(birthday_content=birthday)
             if hit is not None:
-                decision = None
+                allow_speak = True
                 if (
                     relationship is not None
                     and state.config.proactive.relationship.enabled
                 ):
-                    decision = relationship.decide_proactive("festival")
-                    if decision.action != "initiate":
+                    gate = relationship.decide_proactive("festival")
+                    allow_speak = gate.action == "initiate"
+                    if not allow_speak:
                         logger.info(
-                            "festival welcome skipped by policy climate=%s action=%s",
-                            decision.climate,
-                            decision.action,
+                            "festival welcome withheld by climate climate=%s action=%s",
+                            gate.climate,
+                            gate.action,
                         )
-                        hit = None
-                if hit is not None:
-                    ok = await deliver_festival(
-                        state,
-                        session_id=session_id,
-                        send=send,
-                        hit=hit,
-                        now=datetime.now(),
-                        climate=climate,
-                        decision=decision,
-                    )
-                    if ok and first:
-                        state.welcome.mark_period_greeted(
-                            slot.date_key, slot.slot_id
-                        )
-                        logger.info(
-                            "welcome period marked session=%s date=%s slot=%s via=festival",
-                            session_id,
-                            slot.date_key,
-                            slot.slot_id,
-                        )
-                    elif not ok:
-                        logger.warning(
-                            "festival welcome failed session=%s (not marked)",
-                            session_id,
-                        )
-                    return
-
-            ok = await state.orchestrator.handle_welcome(
-                session_id=session_id,
-                slot=slot,
-                first_in_slot=first,
-                send=send,
-            )
-            if ok and first:
-                state.welcome.mark_period_greeted(slot.date_key, slot.slot_id)
-                logger.info(
-                    "welcome period marked session=%s date=%s slot=%s",
-                    session_id,
-                    slot.date_key,
-                    slot.slot_id,
+                extras = (hit.extra_memory,) if hit.extra_memory else ()
+                offer_impulse(
+                    engine,
+                    Impulse(
+                        kind="festival",
+                        created_at=now.replace(microsecond=0),
+                        source_id=hit.id,
+                        instruction=build_festival_instruction(hit, climate),
+                        history_marker=HISTORY_FESTIVAL_MARKER,
+                        extra_memories=extras,
+                        allow_speak=allow_speak,
+                        first_in_slot=first,
+                        slot_id=str(slot.slot_id),
+                        date_key=slot.date_key,
+                    ),
                 )
-            if ok and state.scheduler is not None:
-                state.scheduler.note_proactive()
-            elif not ok:
-                logger.warning("welcome failed session=%s (period not marked)", session_id)
+            else:
+                closing_hint = pick_welcome_closing_hint()
+                offer_impulse(
+                    engine,
+                    Impulse(
+                        kind="welcome",
+                        created_at=now.replace(microsecond=0),
+                        instruction=build_welcome_instruction(
+                            slot,
+                            first_in_slot=first,
+                            climate=climate,
+                            closing_hint=closing_hint,
+                        ),
+                        history_marker=HISTORY_USER_MARKER,
+                        allow_speak=True,
+                        first_in_slot=first,
+                        slot_id=str(slot.slot_id),
+                        date_key=slot.date_key,
+                    ),
+                )
+            ok = await flush_impulse(state, now=now, session_id=session_id)
+            if not ok:
+                pending = engine.state.pending_impulse
+                if pending is not None:
+                    logger.warning(
+                        "welcome impulse deferred session=%s pending=%s",
+                        session_id,
+                        pending.kind,
+                    )
+                else:
+                    logger.info(
+                        "welcome impulse withheld session=%s",
+                        session_id,
+                    )
         except asyncio.CancelledError:
             logger.info("welcome cancelled session=%s", session_id)
             raise
@@ -767,7 +789,6 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
             logger.exception("welcome error session=%s", session_id)
         finally:
             inflight_kind = None
-            state.hub.set_busy(session_id, False)
 
     async def _run_interact(action: str, duration_ms: int) -> None:
         nonlocal inflight_kind

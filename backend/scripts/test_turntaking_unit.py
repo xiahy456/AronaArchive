@@ -93,8 +93,12 @@ def main() -> None:
     hub.register("s1", _noop)
     assert len(hub.idle_sessions()) == 1
     hub.set_listening("s1", True)
-    assert hub.idle_sessions() == []
+    assert len(hub.idle_sessions()) == 1
     hub.set_listening("s1", False)
+    assert len(hub.idle_sessions()) == 1
+    hub.set_busy("s1", True)
+    assert hub.idle_sessions() == []
+    hub.set_busy("s1", False)
     assert len(hub.idle_sessions()) == 1
 
     cfg = load_config()

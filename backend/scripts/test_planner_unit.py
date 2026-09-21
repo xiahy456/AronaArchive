@@ -263,7 +263,7 @@ def main() -> None:
     )
     assert "【阿洛娜此刻】正在教室发呆" in life_msg
     assert life_msg.index("【阿洛娜此刻】") < life_msg.index("【老师本轮消息】")
-    assert "闯进来的事件" in life_msg
+    assert "突然加入的事件" in life_msg
     assert "禁止把【阿洛娜此刻】或【未出口的心事】写进 draft" in life_msg
 
     vision_msg = build_planner_user_message(

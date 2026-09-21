@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Deterministic life policy: update inner state, never speak. No I/O, no LLM."""
+"""Deterministic life policy: update inner state. Speak only from a pending impulse."""
 
 from __future__ import annotations
 
@@ -39,11 +39,19 @@ LifeAction = Literal[
     "glance",
     "emotion_only",
 ]
+ImpulseFollowup = Literal["keep", "drop", "mark_fired", "mark_care"]
 
-# Layer 1 may only return these two.
+# Empty wall-clock ticks may only continue or shift.
 _LAYER1_ACTIONS: frozenset[str] = frozenset(
     {"continue_activity", "shift_activity"}
 )
+_IMPULSE_ACTIONS: frozenset[str] = frozenset(
+    {"continue_activity", "shift_activity", "speak", "emotion_only", "glance"}
+)
+_CARE_KINDS: frozenset[str] = frozenset(
+    {"breakfast", "lunch", "dinner", "sleep"}
+)
+SIMMER_SEC = 30.0
 
 
 @dataclass(frozen=True)
@@ -51,6 +59,10 @@ class LifeDecision:
     state: InnerState
     action: LifeAction
     next_activity: Activity
+    impulse_followup: ImpulseFollowup = "keep"
+    impulse_kind: str = ""
+    impulse_source_id: str = ""
+    impulse_due_soon: bool = False
 
 
 @dataclass(frozen=True)
@@ -104,12 +116,44 @@ def _shift(
     return next_state
 
 
-def _decision(state: InnerState, action: LifeAction) -> LifeDecision:
-    if action not in _LAYER1_ACTIONS:
+def _impulse_meta(state: InnerState) -> tuple[str, str, bool]:
+    impulse = state.pending_impulse
+    if impulse is None:
+        return "", "", False
+    return impulse.kind, impulse.source_id, impulse.due_soon
+
+
+def _decision(
+    state: InnerState,
+    action: LifeAction,
+    *,
+    allow_impulse: bool = False,
+    followup: ImpulseFollowup = "keep",
+    impulse_kind: str = "",
+    impulse_source_id: str = "",
+    impulse_due_soon: bool = False,
+) -> LifeDecision:
+    if action == "glance":
+        action = "emotion_only"
+    allowed = _IMPULSE_ACTIONS if allow_impulse else _LAYER1_ACTIONS
+    if action not in allowed:
         action = "continue_activity"
+        followup = "keep"
     return LifeDecision(
-        state=state, action=action, next_activity=state.activity
+        state=state,
+        action=action,
+        next_activity=state.activity,
+        impulse_followup=followup,
+        impulse_kind=impulse_kind,
+        impulse_source_id=impulse_source_id,
+        impulse_due_soon=impulse_due_soon,
     )
+
+
+def _clear_impulse(state: InnerState) -> InnerState:
+    nxt = state.clone()
+    nxt.pending_impulse = None
+    return nxt
 
 
 def _after_teacher_gone(state: InnerState, now: datetime) -> InnerState:
@@ -159,6 +203,73 @@ def _release_look(state: InnerState, now: datetime) -> InnerState:
     )
 
 
+def _resolve_pending(
+    state: InnerState,
+    now: datetime,
+) -> LifeDecision | None:
+    """Pick an effector for a pending impulse. None means leave the base tick."""
+    impulse = state.pending_impulse
+    if impulse is None:
+        return None
+    kind = impulse.kind
+    allow = impulse.allow_speak
+    age = _elapsed_sec(impulse.created_at, now)
+    meta_kind, meta_source, meta_due = _impulse_meta(state)
+
+    def _pick(
+        nxt: InnerState,
+        action: LifeAction,
+        followup: ImpulseFollowup,
+    ) -> LifeDecision:
+        return _decision(
+            nxt,
+            action,
+            allow_impulse=True,
+            followup=followup,
+            impulse_kind=meta_kind,
+            impulse_source_id=meta_source,
+            impulse_due_soon=meta_due,
+        )
+
+    if kind in {"welcome", "festival"}:
+        if allow:
+            return _pick(state.clone(), "speak", "keep")
+        return _pick(_clear_impulse(state), "emotion_only", "drop")
+
+    if kind in _CARE_KINDS:
+        if not allow:
+            return _pick(_clear_impulse(state), "emotion_only", "mark_care")
+        if age < SIMMER_SEC:
+            nxt = _shift(
+                state,
+                now,
+                activity="thinking",
+                attention="rumination",
+                mood="preoccupied",
+                last_event_at=now,
+            )
+            nxt.pending_impulse = state.pending_impulse
+            return _pick(nxt, "emotion_only", "keep")
+        return _pick(state.clone(), "speak", "keep")
+
+    if kind == "idle":
+        if not allow:
+            return _pick(_clear_impulse(state), "emotion_only", "drop")
+        if state.activity == "thinking" and state.has_rumination():
+            return _pick(_clear_impulse(state), "emotion_only", "mark_fired")
+        return _pick(state.clone(), "speak", "keep")
+
+    # goal / mood_followup
+    if not allow:
+        return _pick(_clear_impulse(state), "emotion_only", "drop")
+    return _pick(state.clone(), "speak", "keep")
+
+
+def _with_impulse(base: LifeDecision, now: datetime) -> LifeDecision:
+    resolved = _resolve_pending(base.state, now)
+    return resolved if resolved is not None else base
+
+
 def decide(
     state: InnerState,
     event: WorldEvent,
@@ -166,8 +277,8 @@ def decide(
     settings: LifeSettings,
     climate: str | None = None,
 ) -> LifeDecision:
-    """Apply one world event. climate is read-only and unused for actions."""
-    del climate  # reserved for later layers / logging at the engine
+    """Apply one world event. climate is read-only (logged at the engine)."""
+    del climate
     now = event.at
     kind = event.kind
 
@@ -203,20 +314,25 @@ def decide(
         return _decision(nxt, "shift_activity")
 
     if kind == "impulse_due":
+        resolved = _resolve_pending(state, now)
+        if resolved is not None:
+            return resolved
         return _decision(state.clone(), "continue_activity")
 
-    # clock_tick and any unknown kind: wall-clock decay only
+    # clock_tick and any unknown kind: wall-clock decay, then pending impulse
     look_hold = max(0.0, float(settings.look_hold_sec))
     think_hold = max(0.0, float(settings.think_hold_sec))
     hold_active = _teacher_hold_active(state, now, look_hold)
     in_rest = _in_rest_slot(now)
 
     if hold_active:
-        return _decision(state.clone(), "continue_activity")
+        base = _decision(state.clone(), "continue_activity")
+        return _with_impulse(base, now)
 
     if in_rest:
         if state.activity == "resting":
-            return _decision(state.clone(), "continue_activity")
+            base = _decision(state.clone(), "continue_activity")
+            return _with_impulse(base, now)
         nxt = _shift(
             state,
             now,
@@ -224,15 +340,15 @@ def decide(
             attention="diffuse",
             mood="sleepy",
         )
-        return _decision(nxt, "shift_activity")
+        return _with_impulse(_decision(nxt, "shift_activity"), now)
 
     if state.activity == "resting":
         nxt = _release_look(state, now)
-        return _decision(nxt, "shift_activity")
+        return _with_impulse(_decision(nxt, "shift_activity"), now)
 
     if state.activity == "looking_at_teacher":
         nxt = _release_look(state, now)
-        return _decision(nxt, "shift_activity")
+        return _with_impulse(_decision(nxt, "shift_activity"), now)
 
     if state.activity == "thinking":
         if _elapsed_sec(state.activity_since, now) >= think_hold:
@@ -243,7 +359,7 @@ def decide(
                 attention=DEFAULT_ATTENTION,
                 mood=DEFAULT_MOOD,
             )
-            return _decision(nxt, "shift_activity")
-        return _decision(state.clone(), "continue_activity")
+            return _with_impulse(_decision(nxt, "shift_activity"), now)
+        return _with_impulse(_decision(state.clone(), "continue_activity"), now)
 
-    return _decision(state.clone(), "continue_activity")
+    return _with_impulse(_decision(state.clone(), "continue_activity"), now)

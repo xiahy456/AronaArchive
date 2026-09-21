@@ -54,7 +54,6 @@ from .hub import ConnectionHub
 from .idle import HISTORY_IDLE_MARKER, build_idle_instruction, should_fire_idle
 from .loop import (
     TICK_SEC,
-    deliver_festival,
     load_birthday_content,
     run_proactive_loop,
     tick_once,
@@ -119,7 +118,6 @@ __all__ = [
     "in_window",
     "resolve_slot",
     "resolve_welcome_context",
-    "deliver_festival",
     "load_birthday_content",
     "run_proactive_loop",
     "select_goal",

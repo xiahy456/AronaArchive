@@ -19,6 +19,7 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BACKEND_DIR))
 
 from app.life import (  # noqa: E402
+    Impulse,
     InnerState,
     LifeEngine,
     LifeSettings,
@@ -28,12 +29,14 @@ from app.life import (  # noqa: E402
     decide,
     format_interrupt_block,
     note_teacher_turn,
+    offer_impulse,
     presence_emotion,
     publish_presence,
     world_event,
 )
+from app.life.impulse import merge_impulse  # noqa: E402
 from app.life.loop import tick_once  # noqa: E402
-from app.life.policy import LifeDecision  # noqa: E402
+from app.life.policy import SIMMER_SEC, LifeDecision  # noqa: E402
 from app.proactive.hub import ConnectionHub  # noqa: E402
 from app.protocol import TYPE_PRESENCE, msg_presence  # noqa: E402
 from app.relationship import RelationshipState, RelationshipStore  # noqa: E402
@@ -90,6 +93,21 @@ def test_json_roundtrip_isolated_from_relationship() -> None:
             _fail("roundtrip lost activity")
         if reloaded.attention != "teacher":
             _fail("roundtrip lost attention")
+
+        pending = Impulse(
+            kind="lunch",
+            created_at=now,
+            hint="老师午饭窗口到了",
+            allow_speak=True,
+        )
+        engine.state = engine.state.clone()
+        engine.state.pending_impulse = pending
+        engine.store.save(engine.state)
+        again = LifeStore(life_path).load()
+        if again.pending_impulse is None or again.pending_impulse.kind != "lunch":
+            _fail("pending impulse must roundtrip")
+        if "老师午饭窗口到了" not in (again.pending_impulse.hint or ""):
+            _fail("impulse hint must roundtrip")
 
         rel_again = rel_store.load()
         if abs(rel_again.trust - 0.42) > 1e-9:
@@ -201,8 +219,8 @@ def test_rumination_thinking_then_idle() -> None:
     print("  ok")
 
 
-def test_impulse_due_ignored() -> None:
-    print("== impulse_due does not change activity or speak ==")
+def test_impulse_due_without_pending_does_not_speak() -> None:
+    print("== impulse_due without pending impulse does not speak ==")
     now = _afternoon()
     state = InnerState(activity="idle_in_classroom")
     decision = decide(
@@ -213,6 +231,153 @@ def test_impulse_due_ignored() -> None:
         _fail(decision.action)
     if decision.state.activity != "idle_in_classroom":
         _fail(decision.state.activity)
+    print("  ok")
+
+
+def test_care_impulse_simmers_then_speaks() -> None:
+    print("== care impulse emotion_only then speak after simmer ==")
+    now = _afternoon()
+    pending = Impulse(
+        kind="lunch",
+        created_at=now,
+        hint="老师午饭窗口到了",
+        allow_speak=True,
+    )
+    state = InnerState(activity="idle_in_classroom", pending_impulse=pending)
+    young = decide(
+        state, world_event("impulse_due", at=now), settings=_settings()
+    )
+    if young.action != "emotion_only":
+        _fail(young.action)
+    if young.state.activity != "thinking":
+        _fail(young.state.activity)
+    if young.state.pending_impulse is None:
+        _fail("simmer must keep impulse")
+    with tempfile.TemporaryDirectory() as tmp:
+        engine = LifeEngine.from_path(Path(tmp) / "life.json", _settings())
+        offer_impulse(
+            engine,
+            Impulse(
+                kind="lunch",
+                created_at=now,
+                hint="老师午饭窗口到了",
+                allow_speak=True,
+            ),
+        )
+        if "老师午饭窗口到了" not in " ".join(
+            item.content for item in engine.state.rumination
+        ):
+            _fail("care enqueue must write rumination")
+    aged = decide(
+        young.state,
+        world_event("impulse_due", at=now + timedelta(seconds=SIMMER_SEC + 1)),
+        settings=_settings(),
+    )
+    if aged.action != "speak":
+        _fail(aged.action)
+    if aged.state.pending_impulse is None:
+        _fail("speak keeps impulse until effector marks")
+    empty = decide(
+        InnerState(),
+        world_event("clock_tick", at=now + timedelta(seconds=5)),
+        settings=_settings(),
+    )
+    _assert_not_speak(empty)
+    print("  ok")
+
+
+def test_same_kind_keeps_impulse_timer() -> None:
+    print("== same-kind enqueue keeps the original timer ==")
+    now = _afternoon()
+    first = Impulse(kind="lunch", created_at=now, hint="老师午饭窗口到了")
+    state = InnerState(pending_impulse=first)
+    later = Impulse(
+        kind="lunch",
+        created_at=now + timedelta(seconds=20),
+        hint="老师午饭窗口到了",
+    )
+    nxt, accepted = merge_impulse(state, later)
+    if not accepted:
+        _fail("same kind should be accepted")
+    if nxt.pending_impulse is None or nxt.pending_impulse.created_at != now:
+        _fail("same kind must not reset created_at")
+    festival = Impulse(kind="festival", created_at=now + timedelta(seconds=1))
+    replaced, ok = merge_impulse(nxt, festival)
+    if not ok or replaced.pending_impulse is None:
+        _fail("higher priority festival should replace lunch")
+    if replaced.pending_impulse.kind != "festival":
+        _fail(replaced.pending_impulse.kind)
+    print("  ok")
+
+
+def test_listen_on_does_not_block_impulse() -> None:
+    print("== can_hear does not block impulse_due ==")
+    now = _afternoon()
+    state = InnerState(
+        activity="idle_in_classroom",
+        can_hear=True,
+        pending_impulse=Impulse(
+            kind="lunch",
+            created_at=now,
+            hint="老师午饭窗口到了",
+            allow_speak=True,
+        ),
+    )
+    young = decide(
+        state, world_event("impulse_due", at=now), settings=_settings()
+    )
+    if young.action != "emotion_only":
+        _fail(young.action)
+    if not young.state.can_hear:
+        _fail("can_hear should survive impulse_due")
+    if young.state.pending_impulse is None:
+        _fail("simmer must keep impulse while listening")
+    print("  ok")
+
+
+def test_idle_impulse_over_thinking_is_emotion_only() -> None:
+    print("== idle impulse does not speak over rumination ==")
+    now = _afternoon()
+    state = InnerState(
+        activity="thinking",
+        attention="rumination",
+        pending_impulse=Impulse(kind="idle", created_at=now, allow_speak=True),
+    ).with_rumination(
+        [Rumination(id="r1", content="老师中午好像没吃饭", created_at=now)]
+    )
+    decision = decide(
+        state, world_event("impulse_due", at=now), settings=_settings()
+    )
+    if decision.action != "emotion_only":
+        _fail(decision.action)
+    if decision.impulse_followup != "mark_fired":
+        _fail(decision.impulse_followup)
+    if decision.state.pending_impulse is not None:
+        _fail("idle withhold should clear impulse")
+    print("  ok")
+
+
+def test_goal_withhold_drops_without_mark_fired() -> None:
+    print("== withheld goal/mood drop impulse without mark_fired ==")
+    now = _afternoon()
+    decision = decide(
+        InnerState(
+            pending_impulse=Impulse(
+                kind="goal",
+                created_at=now,
+                source_id="exam",
+                allow_speak=False,
+            )
+        ),
+        world_event("impulse_due", at=now),
+        settings=_settings(),
+    )
+    if decision.action != "emotion_only":
+        _fail(decision.action)
+    if decision.impulse_followup != "drop":
+        _fail(decision.impulse_followup)
+    if decision.state.pending_impulse is not None:
+        _fail("withheld goal should drop")
     print("  ok")
 
 
@@ -447,7 +612,12 @@ def main() -> None:
     test_look_hold_decays_to_idle()
     test_rest_slots_and_leave()
     test_rumination_thinking_then_idle()
-    test_impulse_due_ignored()
+    test_impulse_due_without_pending_does_not_speak()
+    test_care_impulse_simmers_then_speaks()
+    test_same_kind_keeps_impulse_timer()
+    test_listen_on_does_not_block_impulse()
+    test_idle_impulse_over_thinking_is_emotion_only()
+    test_goal_withhold_drops_without_mark_fired()
     test_listen_on_does_not_freeze_ticks()
     test_engine_ticks_never_speak_or_chat()
     test_loop_tick_once_with_fake_state()

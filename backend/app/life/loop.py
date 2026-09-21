@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Process-level ticker: advance inner state, never speak."""
+"""Process-level ticker: advance inner state; deliver a pending impulse if any."""
 
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from .presence import schedule_presence
+from .impulse import schedule_impulse_delivery
 
 if TYPE_CHECKING:
     from ..ws_handler import AppState
@@ -67,5 +68,6 @@ def tick_once(state: "AppState", now: datetime | None = None) -> None:
     engine = getattr(state, "life", None)
     if engine is None:
         return
-    engine.tick(now, climate=_climate(state))
+    decision = engine.tick(now, climate=_climate(state))
     schedule_presence(state)
+    schedule_impulse_delivery(state, decision, now=now)

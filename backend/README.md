@@ -12,7 +12,7 @@
 | **服务入口**      | `app/main.py`                            | FastAPI 应用、健康检查、WebSocket 路由；启动时加载关系引擎                    |
 | **对话编排**      | `app/orchestrator.py`                    | 老师输入先快照内状态再进循环；关系决策 → Planner（含【阿洛娜此刻】）或本地 → 循环认 `life_action` → 生成 / 空 ack |
 | **关系气候**      | `app/relationship/`                      | 信任/依赖/张力状态、事件 Δ 表、规则分类、气候分区与行动策略、JSON 落盘                  |
-| **生命循环**      | `app/life/`                              | 阿洛娜内状态与世界事件（老师 chat/听写/触摸/打断）；墙钟 tick 只换脸，永不调 Planner |
+| **生命循环**      | `app/life/`                              | 阿洛娜内状态与世界事件；墙钟 tick 无冲动只换脸；主动事件降为冲动后循环才开口或只换脸 |
 | **主动事件**      | `app/proactive/`                         | 上线欢迎、空闲轻搭话、吃饭与睡觉照料、goal 回访、节日问候、同轮补充；连接表 + 调度落盘           |
 | **Planner**   | `app/planner/`                           | DeepSeek 意图卡、情感白名单；只读气候档位与姿态，不见 A/B/C 数字                  |
 | **模型加载**      | `app/model_loader.py`                    | llama-cpp-python 加载 GGUF；启动时用 Renderer prompt 预热并复用前缀 KV  |
@@ -105,10 +105,10 @@ python scripts/test_taxonomy_unit.py       # P0 词汇表契约（不加载 GGUF
 python scripts/test_crisis_unit.py         # 危机检测 / 禁静音 / 禁抽取 / 跳过 Renderer
 python scripts/test_episode_memory_unit.py # 情景/情绪记忆分栏、同日合并、抽取触发
 python scripts/test_relationship_unit.py   # 关系公式 / 分区 / 分类 / 沉默（不加载 GGUF）
-python scripts/test_life_unit.py           # 生命循环内状态 / 墙钟缓回 / 快照与 interrupt / presence 换脸（不加载 GGUF）
+python scripts/test_life_unit.py           # 生命循环内状态 / 冲动效应器 / 墙钟缓回 / 快照与 interrupt（不加载 GGUF）
 python scripts/test_skip_ack.py            # 沉默/拒绝仍发空 chat_response，并提交循环动作（不加载 GGUF）
 python scripts/test_welcome_unit.py        # 欢迎时段与指令（不加载 GGUF）
-python scripts/test_proactive_unit.py      # 空闲 / 照料 / goal / 心情回访 / 节日 / continue / 调度落盘（不加载 GGUF）
+python scripts/test_proactive_unit.py      # 冲动入队 / 听写不冻结 / 空闲照料回访闸门（不加载 GGUF）
 python scripts/test_image_input_unit.py   # 截图解析 / 日志脱敏 / logs 目录保留最近 8 张
 python scripts/test_interact_unit.py       # 非对话 interact 白名单 / 摸头指令 / touch Δ / reply_ok
 python scripts/test_affect_unit.py         # 情感质量评测夹具 / 规则 / judge 解析（不调 API）
@@ -150,9 +150,9 @@ python scripts/eval_affect.py --json-out logs/affect_eval.json
 
 `interrupt` 取消正在生成的台词，并投递 `teacher_interrupt`（继续当前活动，不改成看着老师）。危机通路必须开口，不经「想不想理」的动作选择。
 
-墙钟 tick 只 `engine.tick` + `presence`，永不调 Planner、永不 `speak`。
+墙钟 tick 无待处理冲动时只 `engine.tick` + `presence`，不调 Planner、不 `speak`。有冲动时循环可开口、只换脸、或继续做事。
 
-老师回合（含空 ack）期间 `hub.set_busy`，主动事件不打进该会话。空 ack 之后会话重新空闲，欢迎 / 搭话 / 照料 / 回访仍可能开口——这是已知双嘴，第 4 层再把动机降为冲动。本层不改 `pick_motive` / listening 冻结。
+老师回合 `hub.set_busy` 时冲动只积压、不开口。听写打开不再把会话从空闲表摘掉：在场仍可变，冲动可入队；老师 `transcript` 仍优先。主动 30s tick 只 `pick_motive` 入队，不再自己 `handle_initiate`。
 
 Planner 只看见【关系气候】档位与【建议姿态】，禁止下发 A/B/C 浮点或「提升信任度」。禁止把【阿洛娜此刻】或【未出口的心事】写进 draft。
 
@@ -169,7 +169,7 @@ Planner 只看见【关系气候】档位与【建议姿态】，禁止下发 A/
 | Renderer prompt | `build_renderer_messages()` | `[app/prompt.py](app/prompt.py)`                 |
 
 
-调用方是 `[app/orchestrator.py](app/orchestrator.py)`：客户端用户输入走 `handle_chat()`；后端系统消息走 `handle_initiate()` / `handle_welcome()` / `_maybe_continue()`。Planner 关闭或失败时走 `build_messages()`（本地单模型），不拼 Renderer prompt。
+调用方是 `[app/orchestrator.py](app/orchestrator.py)`：客户端用户输入走 `handle_chat()`；主动开口效应器走 `handle_initiate()`（欢迎 / 节日 / 照料 / 回访经冲动入队后同一条嘴）；同轮补充走 `_maybe_continue()`。Planner 关闭或失败时走 `build_messages()`（本地单模型），不拼 Renderer prompt。
 
 ```text
 用户 chat / 系统 instruction
@@ -398,7 +398,7 @@ python scripts/ingest_knowledge.py --rebuild
 | `memory`       | SQLite + Chroma 记忆、混合检索、注入冷却、去重/调和、DeepSeek 抽取器 |
 | `planner`      | 双模型 Planner（DeepSeek 意图卡）与轮次路由器                 |
 | `listen`       | 连续听写的静音提交与接话窗口                                  |
-| `life`         | 生命循环：内状态落盘、老师输入作世界事件、墙钟 tick 只换脸 |
+| `life`         | 生命循环：内状态落盘、老师输入作世界事件、冲动队列、墙钟 tick 无冲动只换脸 |
 | `proactive`    | 上线欢迎、关系气候、空闲搭话、照料、goal 回访、节日、同轮补充               |
 | `token_budget` | 注入 prompt 的 memory / knowledge / history 预算     |
 | `logging`      | 日志目录、文件名、级别与滚动                                  |
@@ -554,7 +554,7 @@ python scripts/ingest_knowledge.py --rebuild
 
 ### `life`
 
-墙钟驱动的阿洛娜内状态（教室发呆 / 看着老师 / 想事 / 休息）。老师的 `chat` / `transcript` / `interact` 是世界事件：投递前先快照，快照进 Planner 的【阿洛娜此刻】。墙钟 tick 只推进内状态并推 `presence`（Track 1），永不调 Planner、永不 `speak`。`interrupt` 投递 `teacher_interrupt`，不把活动改成看着老师。老师原文不写入 `life.json`。与关系气候分文件落盘。
+墙钟驱动的阿洛娜内状态（教室发呆 / 看着老师 / 想事 / 休息）。老师的 `chat` / `transcript` / `interact` 是世界事件：投递前先快照，快照进 Planner 的【阿洛娜此刻】。墙钟 tick 无待处理冲动时只推进内状态并推 `presence`（Track 1），不调 Planner、不 `speak`。主动事件写入至多一条冲动，由循环决定开口或只换脸。听写打开不冻结生活。`interrupt` 投递 `teacher_interrupt`，不把活动改成看着老师。老师原文不写入 `life.json`。与关系气候分文件落盘。
 
 | 配置项 | 默认 | 说明 |
 | --- | --- | --- |

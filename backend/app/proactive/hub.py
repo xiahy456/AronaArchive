@@ -78,8 +78,9 @@ class ConnectionHub:
         return list(self._sessions.items())
 
     def idle_sessions(self) -> list[tuple[str, SendFn]]:
+        """Sessions that can receive a line. Listening no longer freezes life."""
         return [
             (session_id, send)
             for session_id, send in self._sessions.items()
-            if session_id not in self._busy and session_id not in self._listening
+            if session_id not in self._busy
         ]
