@@ -8,8 +8,9 @@
 | 0 | 基础动态层 |
 | 1 | 表情层 |
 | 2 | 语言口形层 |
-| 3 | 摸头A层 |
-| 4 | 摸头M层 |
+| 3 | 行为A层 |
+| 4 | 行为M层 |
+| 5 | 眨眼层 |
 
 # Arona_spr_full 表情与对应的动画值 / Arona_spr_full Emotion and Corresponding Animation Value
 | 表情 | 英文值 | 动画值 | 对应音频 |

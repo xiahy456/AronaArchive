@@ -28,6 +28,7 @@ from .config import get_config
 from .conversation import ConversationManager
 from .embeddings import LocalBgeEncoder, bge_missing_reason
 from .knowledge import KnowledgeRetriever
+from .life import LifeEngine, run_life_loop
 from .logging_utils import configure_logging
 from .memory.extractor import MemoryExtractor
 from .memory.store import MemoryStore
@@ -106,6 +107,9 @@ def create_app() -> FastAPI:
         festival_cfg=config.proactive.festival,
         mood_cfg=config.proactive.mood_followup,
     )
+    life = None
+    if config.life.enabled:
+        life = LifeEngine.from_config(config.life_abs_path, config.life)
     state = AppState(
         config,
         orchestrator,
@@ -113,6 +117,7 @@ def create_app() -> FastAPI:
         welcome=WelcomeState(config.welcome_abs_path),
         hub=hub,
         scheduler=scheduler,
+        life=life,
     )
 
     @asynccontextmanager
@@ -135,6 +140,7 @@ def create_app() -> FastAPI:
                 logger.exception("Knowledge warmup failed; RAG will retry on first use")
         await extractor.start()
         loop_task = None
+        life_task = None
         if (
             config.proactive.idle.enabled
             or config.proactive.care.enabled
@@ -143,8 +149,17 @@ def create_app() -> FastAPI:
         ):
             loop_task = asyncio.create_task(run_proactive_loop(state))
             logger.info("proactive loop started")
+        if life is not None:
+            life_task = asyncio.create_task(run_life_loop(state))
+            logger.info("life loop started")
         app.state.arona = state  # type: ignore[attr-defined]
         yield
+        if life_task is not None:
+            life_task.cancel()
+            try:
+                await life_task
+            except asyncio.CancelledError:
+                pass
         if loop_task is not None:
             loop_task.cancel()
             try:

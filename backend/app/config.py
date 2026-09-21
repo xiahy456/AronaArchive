@@ -212,6 +212,16 @@ class ContinueConfig(BaseModel):
     delay_sec: float = 2
 
 
+class LifeConfig(BaseModel):
+    """Wall-clock inner state. Does not speak; presence and teacher-as-event come later."""
+
+    enabled: bool = True
+    persist_path: str = "data/memory/life.json"
+    tick_sec: float = 5
+    look_hold_sec: float = 180
+    think_hold_sec: float = 120
+
+
 class InteractConfig(BaseModel):
     enabled: bool = True
 
@@ -270,6 +280,7 @@ class AppConfig(BaseModel):
     planner: PlannerConfig = Field(default_factory=PlannerConfig)
     listen: ListenConfig = Field(default_factory=ListenConfig)
     proactive: ProactiveConfig = Field(default_factory=ProactiveConfig)
+    life: LifeConfig = Field(default_factory=LifeConfig)
     interact: InteractConfig = Field(default_factory=InteractConfig)
     computer_use: ComputerUseConfig = Field(default_factory=ComputerUseConfig)
     token_budget: TokenBudgetConfig = Field(default_factory=TokenBudgetConfig)
@@ -316,6 +327,10 @@ class AppConfig(BaseModel):
     @property
     def proactive_abs_path(self) -> Path:
         return self.resolve_path(self.proactive.care.persist_path)
+
+    @property
+    def life_abs_path(self) -> Path:
+        return self.resolve_path(self.life.persist_path)
 
     @property
     def logging_dir_abs_path(self) -> Path:

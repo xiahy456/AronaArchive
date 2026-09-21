@@ -60,6 +60,7 @@ from .input_filter import (
     is_unusable_user_text,
 )
 from .interact import parse_duration_ms, resolve_interact_action
+from .life import LifeEngine, WorldKind, world_event
 from .logging_utils import begin_trace, format_interactive_log, preview, reset_trace
 from .orchestrator import Orchestrator
 from .proactive import ConnectionHub, ProactiveScheduler, WelcomeState, resolve_welcome_context
@@ -108,6 +109,7 @@ class AppState:
         welcome: WelcomeState | None = None,
         hub: ConnectionHub | None = None,
         scheduler: ProactiveScheduler | None = None,
+        life: LifeEngine | None = None,
     ) -> None:
         self.config = config
         self.orchestrator = orchestrator
@@ -115,6 +117,7 @@ class AppState:
         self.welcome = welcome or WelcomeState()
         self.hub = hub or ConnectionHub()
         self.scheduler = scheduler
+        self.life = life
 
 
 async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
@@ -144,6 +147,8 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
         if msg_type == TYPE_CHAT_RESPONSE:
             if str(payload.get("content") or "").strip():
                 turn_buffer.note_arona_spoke()
+                if state.life is not None:
+                    state.life.note_arona_spoke()
             logger.info("%s", format_interactive_log(payload))
             reset_trace()
             logger.info(
@@ -167,6 +172,13 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
     state.hub.register(session_id, send)
     if state.scheduler is not None:
         state.scheduler.note_user_activity()
+
+    def _note_life(kind: WorldKind) -> None:
+        if state.life is None:
+            return
+        state.life.apply(world_event(kind, session_id=session_id))
+
+    _note_life("teacher_arrived")
 
     chat_task: asyncio.Task[None] | None = None
     inflight_kind: str | None = None
@@ -595,6 +607,7 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
             inflight_user = None
             chat_task = asyncio.create_task(_run_computer_use_probe())
             return
+        _note_life("teacher_transcript")
         my_id = generation_id
         inflight_user = drained
         started = time.perf_counter()
@@ -734,6 +747,7 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
         state.hub.set_busy(session_id, True)
         if state.scheduler is not None:
             state.scheduler.note_user_activity()
+        _note_life("teacher_touched")
         try:
             await state.orchestrator.handle_interact(
                 session_id=session_id,
@@ -866,6 +880,7 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
                         logger.info("WS computer_use probe session=%s", session_id)
                         chat_task = asyncio.create_task(_run_computer_use_probe())
                         continue
+                    _note_life("teacher_spoke")
                     chat_task = asyncio.create_task(
                         _run_routed_user_turn(
                             str(content),
@@ -950,6 +965,7 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
                     if listening:
                         turn_buffer.set_listening(True)
                         state.hub.set_listening(session_id, True)
+                        _note_life("listen_on")
                     else:
                         logger.info(
                             "WS listen stop flush session=%s pending=%r",
@@ -959,6 +975,7 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
                         await _commit_turn(force=True)
                         turn_buffer.set_listening(False)
                         state.hub.set_listening(session_id, False)
+                        _note_life("listen_off")
                 elif msg_type == TYPE_TRANSCRIPT:
                     text = str(data.get("content") or data.get("text") or "")
                     speaker = normalize_speaker(data.get("speaker"))
@@ -1050,3 +1067,4 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
                 logger.exception("Error while cancelling chat task session=%s", session_id)
         state.hub.unregister(session_id)
         state.conversations.drop(session_id)
+        _note_life("teacher_left")
