@@ -9,7 +9,11 @@
 </p>
 
 <p align="center">
-  云端负责规划、抽取与读屏，本地负责人设、立绘与键鼠执行。关系向量与主动事件构建规则控制面，computer use 提供动手能力，让你与阿洛娜相处而非对话。
+  通过阿洛娜自己的独立循环，构建「独立存在」而非「轮次响应」的体系。用户作为事件，进入阿洛娜的逻辑世界中。
+</p>
+
+<p align="center">
+  <sub>这个逻辑世界与现实世界的区别在于，现实世界不会因为某个人而停转，但这里会。</sub>
 </p>
 
 <p align="center">
@@ -26,7 +30,7 @@
 
 **阿洛娜AI** 是一个以游戏《蔚蓝档案》（Blue Archive）中角色「阿洛娜」为原型打造的非对话式桌面AI。在设定上，她是「什亭之匣」的操作系统管理员，性格开朗、热情，乐于帮助老师（用户）解决问题。
 
-本项目把 **Planner → AronaLM Renderer**、关系气候、主动事件、长期记忆、世界观 RAG、连续听写轮次路由、屏幕截图输入、computer use、语音合成（TTS）、语音识别（ASR）与 Spine 2D 角色动画接到同一条桌面链路里，让阿洛娜待在屏幕上，而不是停在聊天框里。
+本项目把生命循环、关系气候、**Planner → AronaLM Renderer**、主动冲动、记忆与世界观、语音交互、屏幕操作与 Spine 2D 角色动画接到同一条桌面链路里，让阿洛娜待在屏幕上，而不是停在聊天框里。
 
 <p align="center">
   <img src="assets/running_example_2.png" alt="Running Example" width="600"/>
@@ -63,25 +67,23 @@ arona-ai/
 
 ### 🤖 AI 引擎
 
-- **双模型链路**：**Planner → 意图规划 → Renderer（AronaLM-Renderer-V2.x）**。Planner 关闭或失败时回落本地路径
-- **关系气候**：信任 / 依赖 / 张力三标量构建向量；规则分类用户行动后查表更新，气候分区决定开口、姿态或沉默
-- **主动行为**：WebSocket 连接后按时段主动问候、提醒，安静若干时间后轻在场；稀疏回访记忆里的未完成计划；Planner 允许时同轮补充
-- **屏幕视觉**：开启图片输入后，文字或语音提交会附带光标所在屏幕的 JPEG，Planner 在本轮需要时读屏获取信息
-- **电脑操作**：阿洛娜可通过电脑操作完成任务，需要时会截屏观察
-- **连续听写**：ASR 片段先入缓冲，静音后再提交；规则 + 短超时 LLM 路由器判断 ignore / wait / reply
-- **AronaLM**：AronaLM-Renderer 负责文字渲染；双模型链路不可用时回落本地单模型 AronaLM-Generator 完成推理全流程
-- **记忆与知识分离**：用户长期事实进 SQLite + FTS5 + Chroma；世界观设定进 Markdown 语料 → 本地 BGE + Chroma RAG；互不混写、按需注入 Prompt
-- **中间结果缓存**：世界观近义检索可复用 lore 命中；Renderer 复用固定 system 前缀 KV
-- **异步记忆抽取**：对话主路径不阻塞；DeepSeek JSON 抽取（含日配额与缓冲批量），失败或无 Key 时自动正则降级
-- **上下文可控**：多轮历史截断 + memory / knowledge / history token budget，阻止上下文膨胀
+- **生命循环**：阿洛娜拥有自循环的实时状态，老师的行为进入她当前的思维与行为
+- **关系气候**：信任 / 依赖 / 张力三标量构建向量；规则分类用户行动
+后查表更新，气候分区决定开口、姿态或沉默
+- **双模型链路**：Planner 意图规划 → Renderer 渲染器
+（AronaLM-Renderer-V2.x）
+- **主动冲动**：循环中产生与进入思考的念头先成为冲动，再由她自己决定是否付诸言行
+- **屏幕视觉与电脑操作**：阿洛娜在需要时会读屏获取信息，并通过电脑操
+作完成任务
+- **连续听写**：ASR 片段先入缓冲，静音后再提交，系统判定回复时机
+- **记忆与知识分离**：用户长期事实进 SQLite + FTS5 + Chroma；阿洛娜短期记忆进 Json 滑动窗口存储；世界观设定进 Markdown 语料 → 本地 BGE + Chroma RAG；互不混写、按需注入 Prompt
+- **异步记忆抽取**：对话主路径不阻塞；LLM JSON 抽取
 
-### 🖥️ 桌面客户端与语音
+### 🖥️ 桌面客户端与语音交互
 
-- **Spine 2D 动画**：阿洛娜立绘与触摸互动
-- **Qt 界面**：Windows 桌面应用，经 WebSocket 对接后端；系统托盘可显示/隐藏、切换穿透与截图输入
-- **文字输入**：全局快捷键唤出输入框，支持多行，回车发送
-- **鼠标穿透**：桌宠可点穿，不挡底层窗口
-- **语音交互**：GPT-SoVITS 合成；腾讯云实时 ASR；说话时可打断正在播放的语音
+- **Spine 2D 动画**：阿洛娜立绘、表情与触摸互动
+- **Qt 界面**：Windows 桌面应用，经 WebSocket 对接后端；系统托盘可显示/隐藏、切换鼠标穿透与截图输入
+- **文字与语音交互**：全局快捷键唤出输入框，支持多行，回车发送；腾讯云实时 ASR 提供语音转文本；GPT-SoVITS 提供语音合成
 - **全局快捷键**（均可在 `config.json` 修改）：
 
 | 默认快捷键 | 功能 |
@@ -107,7 +109,8 @@ arona-ai/
    - `planner.api_key` / `memory.extractor.api_key`：把 `YOUR_DEEPSEEK_API_KEY` 换成你的 DeepSeek API Key。**Planner 必填**；不填 Key 或关闭 `planner.enabled` 则回落本地单模型。记忆抽取无 Key 时走正则降级。有截图或电脑操作时 Planner 使用 `planner.vision_model`（默认 `deepseek-flash`）
    - `model.enabled`：是否启用 Arona-Renderer 渲染修正；`true` 启用，`false` 只用 Planner 草稿。仅启用时才需要放置 GGUF。**默认不启用**
    - `knowledge.enabled`：是否启用世界观 RAG。官方压缩包已灌库，**默认启用**；从源码启动时示例配置为 `false`，需先灌库
-   - `computer_use.enabled`：是否允许阿洛娜操作老师的电脑。**默认关闭**。打开后仍需客户端同步打开 `computer_use.enabled`，否则后端会收到 `disabled` 观察并停止
+   - `computer_use.enabled`：是否允许阿洛娜操作老师的电脑。**默
+   认开启**；客户端与后端需同步打开
 
 3. 按需把模型放到解压目录内的 `models/`（路径已写在包内 `config.yaml`，详见包内 `models/README.txt` 或 [`models/README.md`](models/README.md)）：
 
