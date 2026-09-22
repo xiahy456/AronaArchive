@@ -38,8 +38,7 @@
 #include <QQueue>
 #include <QElapsedTimer>
 #include <QSharedPointer>
-
-class StreamingPcmDevice;
+#include <QIODevice>
 
 class TTSManager : public QObject
 {
@@ -223,14 +222,18 @@ private:
 
     QAudioSink* audioSink;
     QBuffer* audioBuffer;
-    StreamingPcmDevice* m_streamDevice;
+    QIODevice* m_streamPush;       // start() 推流设备，stop 后失效
+    qint64 m_streamWritten;        // 已成功写入声卡的 PCM 字节
 
     bool isProcessingRequest;
     bool m_awaitingPlayback;
     bool m_playingAudio;
     bool m_ignoreAudioIdle;
     bool m_currentIsWarmup;
-    bool m_resumingStream;
+    bool m_restartingStream;
+    bool m_streamFeedScheduled;
+    bool m_streamEndScheduled;
+    bool m_inStreamFeed;
     int m_playbackGeneration;
     QString currentTtsText;
     QString currentTtsEmotion;
@@ -265,7 +268,9 @@ private:
     void enqueueStreamError(const QSharedPointer<StreamSession>& session, const QString& errorString);
     void finishStreamingReceive(QNetworkReply* reply, bool httpError, const QString& errorString);
     void appendSessionPcm(const QSharedPointer<StreamSession>& session, const QByteArray& pcm);
-    void resumeStreamIfNeeded();
+    void feedStreamAudio();
+    void restartStreamSink();
+    void scheduleStreamFeed(int delayMs);
     void scheduleStreamPlaybackEnd();
     void finishAudioPlayback();
     void stopAudioSink();

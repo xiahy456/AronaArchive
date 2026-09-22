@@ -25,83 +25,6 @@
 #include <QIODevice>
 #include <cstring>
 
-class StreamingPcmDevice : public QIODevice
-{
-public:
-    explicit StreamingPcmDevice(QObject* parent = nullptr)
-        : QIODevice(parent)
-    {
-        open(QIODevice::ReadOnly);
-    }
-
-    bool isSequential() const override
-    {
-        return true;
-    }
-
-    qint64 bytesAvailable() const override
-    {
-        return (m_buffer.size() - m_readPos) + QIODevice::bytesAvailable();
-    }
-
-    bool atEnd() const override
-    {
-        return m_complete && m_readPos >= m_buffer.size();
-    }
-
-    void append(const QByteArray& pcm)
-    {
-        if (pcm.isEmpty()) {
-            return;
-        }
-        m_buffer.append(pcm);
-        emit readyRead();
-    }
-
-    void markComplete()
-    {
-        m_complete = true;
-        emit readyRead();
-    }
-
-    bool isComplete() const
-    {
-        return m_complete;
-    }
-
-    qint64 unreadBytes() const
-    {
-        return m_buffer.size() - m_readPos;
-    }
-
-protected:
-    qint64 readData(char* data, qint64 maxSize) override
-    {
-        const qint64 available = m_buffer.size() - m_readPos;
-        const qint64 n = qMin(maxSize, available);
-        if (n <= 0) {
-            return 0;
-        }
-        memcpy(data, m_buffer.constData() + m_readPos, static_cast<size_t>(n));
-        m_readPos += n;
-        if (m_readPos > 64 * 1024 && m_readPos * 2 > m_buffer.size()) {
-            m_buffer.remove(0, static_cast<int>(m_readPos));
-            m_readPos = 0;
-        }
-        return n;
-    }
-
-    qint64 writeData(const char*, qint64) override
-    {
-        return -1;
-    }
-
-private:
-    QByteArray m_buffer;
-    qint64 m_readPos = 0;
-    bool m_complete = false;
-};
-
 TTSManager::TTSManager(QObject* parent)
     : QObject(parent)
     , networkManager(new QNetworkAccessManager(this))
@@ -114,13 +37,17 @@ TTSManager::TTSManager(QObject* parent)
     , currentMediaType()
     , audioSink(nullptr)
     , audioBuffer(nullptr)
-    , m_streamDevice(nullptr)
+    , m_streamPush(nullptr)
+    , m_streamWritten(0)
     , isProcessingRequest(false)
     , m_awaitingPlayback(false)
     , m_playingAudio(false)
     , m_ignoreAudioIdle(false)
     , m_currentIsWarmup(false)
-    , m_resumingStream(false)
+    , m_restartingStream(false)
+    , m_streamFeedScheduled(false)
+    , m_streamEndScheduled(false)
+    , m_inStreamFeed(false)
     , m_playbackGeneration(0)
     , requestTimeoutMs(45000)
 {
@@ -204,6 +131,12 @@ void TTSManager::cleanupCurrentReply()
 void TTSManager::stopAudioSink()
 {
     m_ignoreAudioIdle = true;
+    m_streamFeedScheduled = false;
+    m_streamEndScheduled = false;
+    m_streamPush = nullptr;
+    m_streamWritten = 0;
+    m_restartingStream = false;
+    m_inStreamFeed = false;
     if (audioSink) {
         audioSink->stop();
         delete audioSink;
@@ -212,10 +145,6 @@ void TTSManager::stopAudioSink()
     if (audioBuffer) {
         delete audioBuffer;
         audioBuffer = nullptr;
-    }
-    if (m_streamDevice) {
-        delete m_streamDevice;
-        m_streamDevice = nullptr;
     }
     m_ignoreAudioIdle = false;
 }
@@ -563,9 +492,8 @@ void TTSManager::appendSessionPcm(const QSharedPointer<StreamSession>& session, 
             .arg(pcm.size()));
     }
     session->pcm.append(pcm);
-    if (m_streamDevice && m_deliveredStream == session) {
-        m_streamDevice->append(pcm);
-        resumeStreamIfNeeded();
+    if (m_playingAudio && m_deliveredStream == session) {
+        feedStreamAudio();
     }
     if (!session->enqueued) {
         session->enqueued = true;
@@ -641,10 +569,8 @@ void TTSManager::finishStreamingReceive(QNetworkReply* reply, bool httpError, co
         ERROR_DEBUG_OUTPUT("[TTS Operation]Stream HTTP error after first packet: " + errorString);
     }
     session->complete = true;
-    if (m_streamDevice && m_deliveredStream == session) {
-        m_streamDevice->markComplete();
-        resumeStreamIfNeeded();
-        scheduleStreamPlaybackEnd();
+    if (m_playingAudio && m_deliveredStream == session) {
+        feedStreamAudio();
     }
 }
 
@@ -751,42 +677,168 @@ void TTSManager::interruptPlayback()
     stopAudioSink();
     m_playingAudio = false;
     m_awaitingPlayback = false;
-    m_resumingStream = false;
+    m_restartingStream = false;
     FINE_DEBUG_OUTPUT("[TTS Operation]Playback interrupted");
 }
 
-void TTSManager::resumeStreamIfNeeded()
+void TTSManager::scheduleStreamFeed(int delayMs)
 {
-    if (!audioSink || !m_streamDevice || !m_playingAudio || m_resumingStream) {
+    if (m_streamFeedScheduled || !m_playingAudio) {
         return;
     }
-    if (m_streamDevice->unreadBytes() <= 0) {
+    m_streamFeedScheduled = true;
+    const int gen = m_playbackGeneration;
+    QTimer::singleShot(qMax(0, delayMs), this, [this, gen]() {
+        if (gen != m_playbackGeneration) {
+            return;
+        }
+        m_streamFeedScheduled = false;
+        if (!m_playingAudio) {
+            return;
+        }
+        feedStreamAudio();
+    });
+}
+
+void TTSManager::restartStreamSink()
+{
+    if (!audioSink || !m_playingAudio || m_restartingStream) {
         return;
     }
-    const QAudio::State state = audioSink->state();
-    if (state == QAudio::IdleState || state == QAudio::StoppedState) {
-        m_resumingStream = true;
-        m_ignoreAudioIdle = true;
-        audioSink->start(m_streamDevice);
-        m_ignoreAudioIdle = false;
-        m_resumingStream = false;
-        if (audioSink && m_streamDevice
-            && (audioSink->state() == QAudio::IdleState || audioSink->state() == QAudio::StoppedState)
-            && m_streamDevice->isComplete() && m_streamDevice->atEnd()) {
+    // Qt 6.5.3：Idle 时 IAudioClient 已 Stop。直接 start() 会先 close 丢掉缓冲。
+    // 先 stop 回到 Stopped，再 start 推流，未写入的 PCM 仍留在写指针之后。
+    m_restartingStream = true;
+    m_ignoreAudioIdle = true;
+    m_streamPush = nullptr;
+    audioSink->stop();
+    m_streamPush = audioSink->start();
+    m_ignoreAudioIdle = false;
+    m_restartingStream = false;
+    if (!m_streamPush) {
+        ERROR_DEBUG_OUTPUT("[TTS Operation]Stream push restart failed");
+    }
+}
+
+void TTSManager::feedStreamAudio()
+{
+    if (m_inStreamFeed || !m_playingAudio || !m_deliveredStream || !audioSink) {
+        return;
+    }
+    m_inStreamFeed = true;
+
+    const QByteArray& pcm = m_deliveredStream->pcm;
+    if (m_streamWritten > pcm.size()) {
+        m_streamWritten = pcm.size();
+    }
+    const qint64 unwritten = pcm.size() - m_streamWritten;
+    const QAudio::State state = m_streamPush ? audioSink->state() : QAudio::StoppedState;
+    const bool idle = !m_streamPush
+        || state == QAudio::IdleState
+        || state == QAudio::StoppedState;
+    // 刚 start() 是 Idle 且 error 为 NoError，可以直接 write。
+    // 欠载后 error 为 UnderrunError，IAudioClient 已 Stop，必须先停再开。
+    // 欠载回调推迟到 stateChanged 返回之后，那时 error 已经写上。
+    const bool needRestart = !m_streamPush
+        || state == QAudio::StoppedState
+        || audioSink->error() == QAudio::UnderrunError;
+
+    if (unwritten <= 0) {
+        m_inStreamFeed = false;
+        if (m_deliveredStream->complete && idle) {
             scheduleStreamPlaybackEnd();
         }
+        return;
     }
+
+    if (idle && needRestart) {
+        restartStreamSink();
+        if (!m_streamPush) {
+            m_inStreamFeed = false;
+            scheduleStreamFeed(30);
+            return;
+        }
+    }
+
+    const int frameSize = qMax(1, m_deliveredStream->channelCount
+        * qMax(1, m_deliveredStream->bitsPerSample / 8));
+    qint64 room = audioSink->bytesFree();
+    qint64 n = qMin(unwritten, room);
+    if (frameSize > 1) {
+        n -= n % frameSize;
+    }
+    if (n <= 0) {
+        if (unwritten < frameSize) {
+            m_streamWritten = pcm.size();
+            m_inStreamFeed = false;
+            if (m_deliveredStream->complete && idle) {
+                scheduleStreamPlaybackEnd();
+            }
+            return;
+        }
+        m_inStreamFeed = false;
+        scheduleStreamFeed(15);
+        return;
+    }
+
+    qint64 wroteThisCall = 0;
+    bool writeFailed = false;
+    while (m_streamWritten < pcm.size()) {
+        room = audioSink->bytesFree();
+        n = qMin(static_cast<qint64>(pcm.size()) - m_streamWritten, room);
+        if (frameSize > 1) {
+            n -= n % frameSize;
+        }
+        if (n <= 0) {
+            if (pcm.size() - m_streamWritten < frameSize) {
+                m_streamWritten = pcm.size();
+            }
+            break;
+        }
+        const qint64 written = m_streamPush->write(
+            pcm.constData() + static_cast<qsizetype>(m_streamWritten), n);
+        if (written <= 0) {
+            writeFailed = true;
+            break;
+        }
+        m_streamWritten += written;
+        wroteThisCall += written;
+        if (written < n) {
+            break;
+        }
+    }
+    if (writeFailed && wroteThisCall == 0) {
+        m_streamPush = nullptr;
+        m_inStreamFeed = false;
+        scheduleStreamFeed(30);
+        return;
+    }
+    const bool more = m_streamWritten < pcm.size();
+    const QAudio::State after = audioSink ? audioSink->state() : QAudio::StoppedState;
+    m_inStreamFeed = false;
+    if (!more) {
+        if (m_deliveredStream && m_deliveredStream->complete
+            && (after == QAudio::IdleState || after == QAudio::StoppedState)) {
+            scheduleStreamPlaybackEnd();
+        }
+        return;
+    }
+    const bool stalled = after == QAudio::IdleState || after == QAudio::StoppedState;
+    scheduleStreamFeed(stalled ? 0 : 10);
 }
 
 void TTSManager::scheduleStreamPlaybackEnd()
 {
-    if (!m_streamDevice || !m_deliveredStream || !m_playingAudio) {
+    if (m_streamEndScheduled || !m_deliveredStream || !m_playingAudio || !audioSink) {
         return;
     }
     if (!m_deliveredStream->complete) {
         return;
     }
-    if (m_streamDevice->unreadBytes() > 0) {
+    if (m_streamWritten < m_deliveredStream->pcm.size()) {
+        return;
+    }
+    const QAudio::State state = audioSink->state();
+    if (state != QAudio::IdleState && state != QAudio::StoppedState) {
         return;
     }
 
@@ -800,10 +852,10 @@ void TTSManager::scheduleStreamPlaybackEnd()
         remainMs = static_cast<int>(totalSec * 1000.0)
             - static_cast<int>(m_streamPlayTimer.elapsed()) + 80;
     }
-    if (remainMs <= 0) {
-        finishAudioPlayback();
-        return;
+    if (remainMs < 0) {
+        remainMs = 0;
     }
+    m_streamEndScheduled = true;
     const int gen = m_playbackGeneration;
     QTimer::singleShot(remainMs, this, [this, gen]() {
         if (gen != m_playbackGeneration) {
@@ -845,41 +897,49 @@ double TTSManager::startStreamPlayback()
         format = audioDevice.preferredFormat();
     }
 
-    m_streamDevice = new StreamingPcmDevice(this);
-    m_streamDevice->append(session->pcm);
-    if (session->complete) {
-        m_streamDevice->markComplete();
-    }
-
     audioSink = new QAudioSink(audioDevice, format, this);
     audioSink->setBufferSize(qMax(8192, session->sampleRate * session->channelCount * 2));
     connect(audioSink, &QAudioSink::stateChanged, this, [this](QAudio::State state) {
-        if (m_ignoreAudioIdle || !m_playingAudio || m_resumingStream) {
+        if (m_ignoreAudioIdle || !m_playingAudio || m_restartingStream || m_inStreamFeed) {
             return;
         }
-        if (state == QAudio::IdleState || state == QAudio::StoppedState) {
-            if (m_streamDevice && m_streamDevice->isComplete() && m_streamDevice->atEnd()) {
-                scheduleStreamPlaybackEnd();
-            }
-            else if (m_streamDevice && m_streamDevice->isComplete() && m_streamDevice->unreadBytes() > 0) {
-                resumeStreamIfNeeded();
-            }
+        if (state != QAudio::IdleState && state != QAudio::StoppedState) {
+            return;
+        }
+        if (!m_deliveredStream) {
+            return;
+        }
+        if (m_streamWritten < m_deliveredStream->pcm.size()) {
+            // 离开 stateChanged 再 stop/start，避免在 Qt 回调里拆掉声卡。
+            scheduleStreamFeed(0);
+            return;
+        }
+        if (m_deliveredStream->complete) {
+            scheduleStreamPlaybackEnd();
         }
     });
 
     m_playingAudio = true;
     ++m_playbackGeneration;
+    m_streamWritten = 0;
+    m_streamFeedScheduled = false;
+    m_streamEndScheduled = false;
     m_streamPlayTimer.start();
-    audioSink->start(m_streamDevice);
+    m_ignoreAudioIdle = true;
+    m_streamPush = audioSink->start();
     m_ignoreAudioIdle = false;
+    if (!m_streamPush) {
+        ERROR_DEBUG_OUTPUT("[TTS Operation]Stream push start failed");
+        QTimer::singleShot(0, this, [this]() {
+            finishAudioPlayback();
+        });
+        return -1;
+    }
+    feedStreamAudio();
 
     const double duration = pcmDurationSec(
         session->pcm.size(), session->sampleRate, session->channelCount, session->bitsPerSample);
-    if (session->complete) {
-        scheduleStreamPlaybackEnd();
-        return duration;
-    }
-    return -1;
+    return session->complete ? duration : -1;
 }
 
 double TTSManager::playAudio(const QByteArray& audioData)
