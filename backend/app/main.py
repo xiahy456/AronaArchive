@@ -29,6 +29,8 @@ from .conversation import ConversationManager
 from .embeddings import LocalBgeEncoder, bge_missing_reason
 from .knowledge import KnowledgeRetriever
 from .life import LifeEngine, run_life_loop
+from .life.arona_memory import AronaMemory
+from .life.journal import LifeJournal
 from .logging_utils import configure_logging
 from .memory.extractor import MemoryExtractor
 from .memory.store import MemoryStore
@@ -108,8 +110,17 @@ def create_app() -> FastAPI:
         mood_cfg=config.proactive.mood_followup,
     )
     life = None
+    journal = None
+    arona_memory = None
     if config.life.enabled:
         life = LifeEngine.from_config(config.life_abs_path, config.life)
+        journal = LifeJournal(config.journal_abs_path)
+        arona_memory = AronaMemory(config.arona_memory_abs_path)
+        journal.seed(life.state)
+        life.journal = journal
+        life.arona_memory = arona_memory
+        orchestrator.life_journal = journal
+        orchestrator.arona_memory = arona_memory
     state = AppState(
         config,
         orchestrator,
@@ -119,6 +130,9 @@ def create_app() -> FastAPI:
         scheduler=scheduler,
         life=life,
     )
+    state.journal = journal
+    state.arona_memory = arona_memory
+    state.glance_request_id = ""
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

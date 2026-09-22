@@ -30,6 +30,7 @@ ACTIVITY_LABELS = {
     "looking_at_teacher": "正在看老师",
     "thinking": "正在想事情",
     "resting": "正在休息",
+    "using_computer": "正在通过什亭之匣操作电脑",
 }
 
 _RUMINATION_MAX = 40
@@ -63,6 +64,10 @@ def note_teacher_turn(
     snapshot = engine.state.clone()
     engine.apply(world_event(kind, session_id=session_id))
     schedule_presence(app_state)
+    if kind == "teacher_interrupt":
+        journal = getattr(app_state, "journal", None)
+        if journal is not None:
+            journal.note_teacher_opened()
     return snapshot
 
 

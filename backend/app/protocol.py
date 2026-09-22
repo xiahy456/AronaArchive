@@ -29,6 +29,7 @@ TYPE_LISTEN_STATE = "listen_state"
 TYPE_TRANSCRIPT = "transcript"
 TYPE_INTERRUPT = "interrupt"
 TYPE_COMPUTER_USE_OBSERVATION = "computer_use_observation"
+TYPE_GLANCE_FRAME = "glance_frame"
 
 # Server -> client
 TYPE_CONNECTED = "connected"
@@ -40,6 +41,7 @@ TYPE_PONG = "pong"
 TYPE_COMPUTER_USE_ACTION = "computer_use_action"
 TYPE_COMPUTER_USE_DONE = "computer_use_done"
 TYPE_PRESENCE = "presence"
+TYPE_GLANCE_REQUEST = "glance_request"
 
 CODE_INVALID_JSON = "INVALID_JSON"
 CODE_INTERNAL = "INTERNAL_ERROR"
@@ -84,6 +86,10 @@ def msg_stats(payload: dict[str, Any]) -> dict[str, Any]:
 
 def msg_computer_use_action(payload: dict[str, Any]) -> dict[str, Any]:
     return {"type": TYPE_COMPUTER_USE_ACTION, **payload}
+
+
+def msg_glance_request(request_id: str) -> dict[str, Any]:
+    return {"type": TYPE_GLANCE_REQUEST, "request_id": request_id}
 
 
 def msg_presence(emotion: str, *, activity: str = "") -> dict[str, Any]:

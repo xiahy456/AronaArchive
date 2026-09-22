@@ -27,6 +27,22 @@ from typing import Any, Literal
 AbortCheck = Callable[[], bool]
 InitiateResult = Literal["sent", "declined", "failed"]
 
+# Proactive mouth markers stay in the initiate instruction, not in teacher history.
+PROACTIVE_HISTORY_MARKERS = frozenset(
+    {
+        "【上线】",
+        "【搭话】",
+        "【提醒】",
+        "【回访】",
+        "【心情回访】",
+        "【节日】",
+    }
+)
+
+
+def should_record_history_marker(marker: str) -> bool:
+    return (marker or "").strip() not in PROACTIVE_HISTORY_MARKERS
+
 from .config import AppConfig
 from .conversation import ConversationManager
 from .image_input import ImagePayload
@@ -109,6 +125,9 @@ class Orchestrator:
             config.planner, renderer_enabled=config.model.enabled
         )
         self.relationship = relationship
+        self.life_journal: Any = None
+        self.arona_memory: Any = None
+        self.last_initiate_text = ""
         self.stats: dict[str, Any] = {
             "chat_count": 0,
             "welcome_count": 0,
@@ -137,6 +156,7 @@ class Orchestrator:
         injected = format_memory_inject(
             entries,
             extra_contents=extra_contents,
+            arona_lines=self._arona_lines(),
             max_chars=memory_inject_char_budget(self.config),
         )
         if mark and injected.keys:
@@ -145,6 +165,44 @@ class Orchestrator:
 
     def _life_block(self, interrupt_ctx: InnerState | None) -> str:
         return format_interrupt_block(interrupt_ctx)
+
+    def _day_block(self) -> str:
+        journal = self.life_journal
+        if journal is None:
+            return ""
+        try:
+            return str(journal.day_block() or "")
+        except Exception:
+            logger.exception("life day block failed")
+            return ""
+
+    def _arona_lines(self) -> list[str]:
+        memory = self.arona_memory
+        if memory is None:
+            return []
+        try:
+            return list(memory.lines())
+        except Exception:
+            logger.exception("arona memory lines failed")
+            return []
+
+    def _record_initiate_user(self, session_id: str, marker: str) -> None:
+        if should_record_history_marker(marker):
+            text = (marker or "").strip()
+            if text:
+                self.conversations.append(session_id, "user", text)
+
+    def _note_teacher_journal(self, user_text: str) -> None:
+        journal = self.life_journal
+        if journal is None:
+            return
+        journal.note_teacher_opened(user_text)
+
+    def _drop_teacher_journal(self) -> None:
+        journal = self.life_journal
+        if journal is None:
+            return
+        journal.drop_last("teacher_interrupt", "老师开口")
 
     def _emit_life_action(
         self,
@@ -208,6 +266,7 @@ class Orchestrator:
                 on_life_action=on_life_action,
             )
 
+        self._note_teacher_journal(user_text)
         use_rag = bool(options.get("use_rag", self.config.knowledge.enabled))
         use_memory = bool(options.get("use_memory", True))
 
@@ -381,6 +440,7 @@ class Orchestrator:
                 image=image,
                 memory_block=memory_block,
                 life_block=self._life_block(interrupt_ctx),
+                day_block=self._day_block(),
             )
             logger.info(
                 "planner session=%s ok=%s latency=%.3fs",
@@ -398,6 +458,7 @@ class Orchestrator:
                         "planner marked crisis; discard daily draft session=%s",
                         session_id,
                     )
+                    self._drop_teacher_journal()
                     return await self._deliver_crisis(
                         session_id=session_id,
                         user_text=user_text,
@@ -532,6 +593,7 @@ class Orchestrator:
                 crisis=True,
                 memory_block=memory_block,
                 life_block=self._life_block(interrupt_ctx),
+                day_block=self._day_block(),
             )
             logger.info(
                 "crisis planner session=%s ok=%s latency=%.3fs",
@@ -692,6 +754,7 @@ class Orchestrator:
         declined: care Planner refused (no fallback).
         failed: generate miss; caller may retry.
         """
+        self.last_initiate_text = ""
         user_text = instruction
         start = time.perf_counter()
         begin_trace(started_at=start)
@@ -775,6 +838,7 @@ class Orchestrator:
                 climate_block=block,
                 memory_block=memory_block,
                 life_block=self._life_block(interrupt_ctx),
+                day_block=self._day_block(),
             )
             logger.info(
                 "initiate planner session=%s kind=%s ok=%s latency=%.3fs",
@@ -813,7 +877,7 @@ class Orchestrator:
                         emotion=emotion,
                     )
                 )
-                self.conversations.append(session_id, "user", history_marker)
+                self._record_initiate_user(session_id, history_marker)
                 self.stats["silence_count"] = int(self.stats.get("silence_count", 0)) + 1
                 self.stats["interact_count"] = int(self.stats.get("interact_count", 0)) + 1
                 logger.info(
@@ -894,8 +958,9 @@ class Orchestrator:
         if kind == "interact":
             self._emit_life_action(on_life_action, "speak", emotion)
 
-        self.conversations.append(session_id, "user", history_marker)
+        self._record_initiate_user(session_id, history_marker)
         self.conversations.append(session_id, "assistant", full)
+        self.last_initiate_text = full
 
         if self.relationship is not None and self.config.proactive.relationship.enabled:
             used_climate = (

@@ -12,7 +12,7 @@
 | **服务入口**      | `app/main.py`                            | FastAPI 应用、健康检查、WebSocket 路由；启动时加载关系引擎                    |
 | **对话编排**      | `app/orchestrator.py`                    | 老师输入先快照内状态再进循环；关系决策 → Planner（含【阿洛娜此刻】）或本地 → 循环认 `life_action` → 生成 / 空 ack |
 | **关系气候**      | `app/relationship/`                      | 信任/依赖/张力状态、事件 Δ 表、规则分类、气候分区与行动策略、JSON 落盘                  |
-| **生命循环**      | `app/life/`                              | 阿洛娜内状态与世界事件；墙钟 tick 无冲动只换脸；主动事件降为冲动后循环才开口或只换脸 |
+| **生命循环**      | `app/life/`                              | 阿洛娜内状态、自己的一天、匣外瞥屏与可打断的电脑操作；墙钟 tick 无冲动只换脸 |
 | **主动事件**      | `app/proactive/`                         | 上线欢迎、空闲轻搭话、吃饭与睡觉照料、goal 回访、节日问候、同轮补充；连接表 + 调度落盘           |
 | **Planner**   | `app/planner/`                           | DeepSeek 意图卡、情感白名单；只读气候档位与姿态，不见 A/B/C 数字                  |
 | **模型加载**      | `app/model_loader.py`                    | llama-cpp-python 加载 GGUF；启动时用 Renderer prompt 预热并复用前缀 KV  |
@@ -150,7 +150,7 @@ python scripts/eval_affect.py --json-out logs/affect_eval.json
 
 `interrupt` 取消正在生成的台词，并投递 `teacher_interrupt`（继续当前活动，不改成看着老师）。危机通路必须开口，不经「想不想理」的动作选择。
 
-墙钟 tick 无待处理冲动时只 `engine.tick` + `presence`，不调 Planner、不 `speak`。有冲动时循环可开口、只换脸、或继续做事。
+墙钟 tick 无待处理冲动时只 `engine.tick` + `presence`，不调 Planner、不 `speak`。有冲动时循环可开口、只换脸、或继续做事。主动开口（上线 / 搭话 / 提醒 / 回访 / 节日）不再把那些标记写成近期对话里的老师句；她说的话仍留下。事件日志 `life_journal.json` 只记活动、心事摘要、开口和「老师开口」，不记老师原文，危机回合不入档。`arona.json` 是阿洛娜自己的短记忆，注入【阿洛娜的记忆】，不进老师抽取。
 
 老师回合 `hub.set_busy` 时冲动只积压、不开口。听写打开不再把会话从空闲表摘掉：在场仍可变，冲动可入队；老师 `transcript` 仍优先。主动 30s tick 只 `pick_motive` 入队，不再自己 `handle_initiate`。
 
@@ -398,7 +398,7 @@ python scripts/ingest_knowledge.py --rebuild
 | `memory`       | SQLite + Chroma 记忆、混合检索、注入冷却、去重/调和、DeepSeek 抽取器 |
 | `planner`      | 双模型 Planner（DeepSeek 意图卡）与轮次路由器                 |
 | `listen`       | 连续听写的静音提交与接话窗口                                  |
-| `life`         | 生命循环：内状态落盘、老师输入作世界事件、冲动队列、墙钟 tick 无冲动只换脸 |
+| `life`         | 生命循环：内状态、自己的一天、阿洛娜侧记忆、低频瞥屏、电脑操作作为可打断活动 |
 | `proactive`    | 上线欢迎、关系气候、空闲搭话、照料、goal 回访、节日、同轮补充               |
 | `token_budget` | 注入 prompt 的 memory / knowledge / history 预算     |
 | `logging`      | 日志目录、文件名、级别与滚动                                  |
@@ -554,15 +554,24 @@ python scripts/ingest_knowledge.py --rebuild
 
 ### `life`
 
-墙钟驱动的阿洛娜内状态（教室发呆 / 看着老师 / 想事 / 休息）。老师的 `chat` / `transcript` / `interact` 是世界事件：投递前先快照，快照进 Planner 的【阿洛娜此刻】。墙钟 tick 无待处理冲动时只推进内状态并推 `presence`（Track 1），不调 Planner、不 `speak`。主动事件写入至多一条冲动，由循环决定开口或只换脸。听写打开不冻结生活。`interrupt` 投递 `teacher_interrupt`，不把活动改成看着老师。老师原文不写入 `life.json`。与关系气候分文件落盘。
+墙钟驱动的阿洛娜内状态（教室发呆 / 看着老师 / 想事 / 休息 / 操作电脑）。老师的 `chat` / `transcript` / `interact` 是世界事件：投递前先快照，快照进 Planner 的【阿洛娜此刻】。墙钟 tick 无待处理冲动时只推进内状态并推 `presence`（Track 1），不调 Planner、不 `speak`。主动事件写入至多一条冲动，由循环决定开口或只换脸。听写打开不冻结生活。`interrupt` 投递 `teacher_interrupt`，不把活动改成看着老师。老师原文不写入 `life.json`。与关系气候分文件落盘。
+
+她自己的一天写在 `life_journal.json`（约 48 条或 24 小时）：活动变化、心事出现或放下、开口短句、老师打断时只记「老师开口」。危机内容不入档。Planner 在【近期对话】旁看到【阿洛娜的记忆】。`arona.json` 最多三条短陈述（教室里做过什么、还没放下的担心、已经放下的担心），注入【阿洛娜的记忆】，和【长期记忆】分开，不进抽取 schema。
+
+偶尔向客户端发 `glance_request`。客户端用现有截屏回一帧 `glance_frame`，不走电脑操作动作环。默认大约 20 分钟一次；看着老师、老师回合忙碌、正在操作电脑、气候为 fragile / rupture / cling_risk 时不瞥。听写打开不缩短间隔。看不清或不确定就丢掉，不编造窗口。结果只进日志。
+
+电脑操作开始时活动变为 `using_computer`（在场脸用现有的 curious）。墙钟休息时段不会把这次操作立刻打回休息。老师 `chat` / `transcript` / `interrupt`（含 `Ctrl+Alt+S`）先把 `abort_check` 打真，停掉当前操作，再走老师回合。不等 `computer_use_done` 才恢复对话。
 
 | 配置项 | 默认 | 说明 |
 | --- | --- | --- |
 | `enabled` | `true` | 是否启动生命循环任务并向循环旁路投递世界事件 |
 | `persist_path` | `data/memory/life.json` | 内状态落盘路径，与 `relationship.json` 分开 |
+| `journal_path` | `data/memory/life_journal.json` | 她自己的一天，环形日志 |
+| `arona_memory_path` | `data/memory/arona.json` | 阿洛娜侧短记忆，不进老师抽取 |
 | `tick_sec` | `5` | 墙钟节拍（秒） |
 | `look_hold_sec` | `60` | 老师相关事件后保持「看着老师」的秒数 |
 | `think_hold_sec` | `120` | 「想某件事」活动最多持续秒数；心事条目本身保留 |
+| `glance_interval_sec` | `1200` | 两次瞥屏的最短间隔（秒）；听写不缩短 |
 
 
 
@@ -707,6 +716,8 @@ python scripts/ingest_knowledge.py --rebuild
 - 记忆向量索引：`data/memory/chroma/`
 - 关系气候：`data/memory/relationship.json`
 - 阿洛娜内状态：`data/memory/life.json`
+- 阿洛娜的一天：`data/memory/life_journal.json`
+- 阿洛娜侧记忆：`data/memory/arona.json`
 - 主动调度：`data/memory/proactive.json`
 - 知识向量库：`data/knowledge/chroma/`（由 ingest 生成）
 - 运行日志：`logs/arona-backend.log`
@@ -716,6 +727,8 @@ python scripts/ingest_knowledge.py --rebuild
 ## 协议摘要
 
 连接后服务端发送 `{"type":"connected","session_id":"..."}`，随即再推一条当前在场：`{"type":"presence","emotion":"...","activity":"..."}`（无台词、无 TTS；`emotion` 为 `arona_emotion` 白名单英文值；`activity` 仅调试，客户端不要用它切 Track 0）。生命循环在内状态映射的表情变化时继续推 `presence`。听写中也会收到；正在生成台词时推迟，生成结束后补发。`emotion_only`（沉默只换脸）会覆盖推一条 `presence`，不经过空 `chat_response.emotion`。
+
+低频瞥屏：服务端 `{"type":"glance_request","request_id":"..."}`，客户端回 `{"type":"glance_frame","request_id":"...","image":{"mime":"image/jpeg","data":"..."}}`。看不清可以不带 `image`。这不是电脑操作动作环。
 
 客户端 `chat`：
 

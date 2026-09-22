@@ -304,6 +304,22 @@ def decide(
         nxt = replace(state.clone(), can_hear=False)
         return _decision(nxt, "continue_activity")
 
+    if kind == "hands_on":
+        nxt = _shift(
+            state,
+            now,
+            activity="using_computer",
+            attention="self",
+            mood=state.private_mood,
+        )
+        return _decision(nxt, "shift_activity")
+
+    if kind == "hands_off":
+        if state.activity != "using_computer":
+            return _decision(state.clone(), "continue_activity")
+        nxt = _release_look(state, now)
+        return _decision(nxt, "shift_activity")
+
     if kind == "teacher_interrupt":
         nxt = state.clone()
         nxt.last_event_at = now
@@ -326,6 +342,10 @@ def decide(
     in_rest = _in_rest_slot(now)
 
     if hold_active:
+        base = _decision(state.clone(), "continue_activity")
+        return _with_impulse(base, now)
+
+    if state.activity == "using_computer":
         base = _decision(state.clone(), "continue_activity")
         return _with_impulse(base, now)
 

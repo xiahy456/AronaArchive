@@ -21,6 +21,7 @@ import logging
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from .glance import maybe_request_glance
 from .presence import schedule_presence
 from .impulse import schedule_impulse_delivery
 
@@ -68,6 +69,15 @@ def tick_once(state: "AppState", now: datetime | None = None) -> None:
     engine = getattr(state, "life", None)
     if engine is None:
         return
-    decision = engine.tick(now, climate=_climate(state))
+    at = now or datetime.now()
+    decision = engine.tick(at, climate=_climate(state))
+    journal = getattr(state, "journal", None)
+    if journal is not None:
+        journal.note_inner(
+            engine.state,
+            now=at,
+            arona=getattr(state, "arona_memory", None),
+        )
     schedule_presence(state)
-    schedule_impulse_delivery(state, decision, now=now)
+    schedule_impulse_delivery(state, decision, now=at)
+    maybe_request_glance(state, at)

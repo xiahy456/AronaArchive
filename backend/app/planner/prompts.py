@@ -178,6 +178,38 @@ def _history_time_prefix(msg: dict[str, str]) -> str:
     return f"[{format_full_datetime(dt)}] "
 
 
+_ARONA_MEMORY_HEADER = "【阿洛娜的记忆】"
+_DAY_HEADER_ALIASES = frozenset({_ARONA_MEMORY_HEADER, "【阿洛娜的一天】"})
+
+
+def _split_arona_memory(mem_section: str) -> tuple[str, list[str]]:
+    """Lift an existing 【阿洛娜的记忆】 section out of the memory column."""
+    if _ARONA_MEMORY_HEADER not in mem_section:
+        return mem_section, []
+    before, _, after = mem_section.partition(_ARONA_MEMORY_HEADER)
+    bullets = [
+        line.strip()
+        for line in after.splitlines()
+        if line.strip().startswith("- ")
+    ]
+    cleaned = before.strip()
+    return cleaned, bullets
+
+
+def _journal_bullets(day_block: str) -> list[str]:
+    bullets: list[str] = []
+    for raw in (day_block or "").splitlines():
+        text = raw.strip()
+        if not text or text in _DAY_HEADER_ALIASES:
+            continue
+        if text.startswith("【") and text.endswith("】"):
+            continue
+        if not text.startswith("- "):
+            text = f"- {text}"
+        bullets.append(text)
+    return bullets
+
+
 def build_planner_user_message(
     *,
     user_text: str,
@@ -189,6 +221,7 @@ def build_planner_user_message(
     has_screenshot: bool = False,
     memory_block: str = "",
     life_block: str = "",
+    day_block: str = "",
 ) -> str:
     labeled = (memory_block or "").strip()
     if labeled:
@@ -235,6 +268,17 @@ def build_planner_user_message(
             "否则，非必要时，不要描述自己被打断前的活动与状态。"
             "禁止把【阿洛娜此刻】或【未出口的心事】写进 draft。\n"
         )
+    mem_section, arona_bullets = _split_arona_memory(mem_section)
+    arona_bullets.extend(_journal_bullets(day_block))
+    if not mem_section.strip():
+        mem_section = "【长期记忆】\n（无）"
+    day_section = ""
+    if arona_bullets:
+        day_section = _ARONA_MEMORY_HEADER + "\n" + "\n".join(arona_bullets) + "\n\n"
+        closing += (
+            "【阿洛娜的记忆】是她自己的近期摘要，可以提起，也可以不提。"
+            "没有写在里面的窗口内容不要编出来。\n"
+        )
     if has_screenshot:
         closing += (
             "本轮附带老师电脑屏幕截图。仅在回答需要截图上的信息时，才取用截图内容；"
@@ -247,6 +291,7 @@ def build_planner_user_message(
         f"{mem_section}\n\n"
         f"【相关知识】\n{know_block}\n\n"
         f"【近期对话】\n{hist_block}\n\n"
+        f"{day_section}"
         f"{life_section}"
         f"【老师本轮消息】\n{user_text.strip()}\n\n"
         f"{closing}"

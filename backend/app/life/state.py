@@ -25,6 +25,7 @@ Activity = Literal[
     "looking_at_teacher",
     "thinking",
     "resting",
+    "using_computer",
 ]
 
 Attention = Literal["teacher", "self", "rumination", "diffuse"]
@@ -67,6 +68,7 @@ ACTIVITIES: frozenset[str] = frozenset(
         "looking_at_teacher",
         "thinking",
         "resting",
+        "using_computer",
     }
 )
 ATTENTIONS: frozenset[str] = frozenset(

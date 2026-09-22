@@ -74,6 +74,7 @@ from .life import (
     schedule_presence,
     world_event,
 )
+from .life.hands import begin_hands, end_hands, teacher_turn_aborts_hands
 from .logging_utils import begin_trace, format_interactive_log, preview, reset_trace
 from .orchestrator import Orchestrator
 from .proactive import (
@@ -99,6 +100,7 @@ from .protocol import (
     TYPE_COMPUTER_USE_OBSERVATION,
     TYPE_CONNECTED,
     TYPE_GET_STATS,
+    TYPE_GLANCE_FRAME,
     TYPE_INTERRUPT,
     TYPE_INTERACT,
     TYPE_LISTEN_STATE,
@@ -243,6 +245,22 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
             )
         except Exception:
             logger.warning("screenshot persist failed session=%s", session_id, exc_info=True)
+
+    async def _accept_glance(data: dict[str, Any]) -> None:
+        request_id = str(data.get("request_id") or "")
+        pending = str(getattr(state, "glance_request_id", "") or "")
+        if not request_id or request_id != pending:
+            return
+        state.glance_request_id = ""
+        image = parse_optional_image(data)
+        if image is None:
+            return
+        seen = await state.orchestrator.planner.describe_glance(image)
+        if not seen:
+            return
+        journal = getattr(state, "journal", None)
+        if journal is not None:
+            journal.append("glance", seen)
 
     async def _run_chat(
         content: str,
@@ -430,6 +448,7 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
         nonlocal inflight_kind, cu_run_id
         inflight_kind = "computer_use"
         state.hub.set_busy(session_id, True)
+        begin_hands(state)
         if state.scheduler is not None:
             state.scheduler.note_user_activity()
         cfg = state.config.computer_use
@@ -526,6 +545,7 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
                 except Exception:
                     pass
         finally:
+            end_hands(state, stopped=generation_id != cu_generation)
             inflight_kind = None
             cu_run_id = None
             _drain_cu_observations()
@@ -869,9 +889,12 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
                         or state.hub.is_busy(session_id)
                     )
                     if busy:
-                        if inflight_kind == "interact":
+                        if inflight_kind == "interact" or teacher_turn_aborts_hands(
+                            inflight_kind
+                        ):
                             logger.info(
-                                "WS chat preempts interact session=%s",
+                                "WS chat preempts %s session=%s",
+                                inflight_kind,
                                 session_id,
                             )
                             await _interrupt_generation(restore_inflight=False)
@@ -1081,10 +1104,16 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
                     if image is not None:
                         asyncio.create_task(_persist_screenshot(image))
                     _schedule_commit()
+                elif msg_type == TYPE_GLANCE_FRAME:
+                    asyncio.create_task(_accept_glance(data))
                 elif msg_type == TYPE_INTERRUPT:
                     logger.info("WS interrupt session=%s", session_id)
-                    _note_teacher_turn("teacher_interrupt")
-                    await _interrupt_generation(restore_inflight=True)
+                    if teacher_turn_aborts_hands(inflight_kind):
+                        await _interrupt_generation(restore_inflight=True)
+                        _note_teacher_turn("teacher_interrupt")
+                    else:
+                        _note_teacher_turn("teacher_interrupt")
+                        await _interrupt_generation(restore_inflight=True)
                     if state.scheduler is not None:
                         state.scheduler.note_user_activity()
                 else:

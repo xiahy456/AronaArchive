@@ -1,0 +1,119 @@
+# Copyright 2026 xia_hy456. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Rare glance outside the classroom. Listening does not shorten the interval."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import uuid
+from datetime import datetime
+from typing import Any
+
+from ..protocol import msg_glance_request
+
+logger = logging.getLogger(__name__)
+
+BLOCK_CLIMATES = frozenset({"fragile", "rupture", "cling_risk"})
+DEFAULT_INTERVAL_SEC = 1200.0
+
+
+def glance_allowed(
+    *,
+    now: datetime,
+    last_at: datetime | None,
+    interval_sec: float,
+    activity: str,
+    attention: str,
+    climate: str,
+    busy: bool,
+    listening: bool = False,
+    pending: bool = False,
+) -> bool:
+    """Deterministic gate. `listening` is accepted and does not tighten the interval."""
+    del listening
+    if pending or busy:
+        return False
+    if activity in {"using_computer", "looking_at_teacher"}:
+        return False
+    if attention == "teacher":
+        return False
+    if climate in BLOCK_CLIMATES:
+        return False
+    wait = max(1.0, float(interval_sec))
+    if last_at is not None and (now - last_at).total_seconds() < wait:
+        return False
+    return True
+
+
+def maybe_request_glance(state: Any, now: datetime | None = None) -> None:
+    """Ask the client for one frame when the gate opens. Does not speak."""
+    journal = getattr(state, "journal", None)
+    engine = getattr(state, "life", None)
+    hub = getattr(state, "hub", None)
+    life_cfg = getattr(getattr(state, "config", None), "life", None)
+    if journal is None or engine is None or hub is None or life_cfg is None:
+        return
+    try:
+        sessions = list(hub.all_sessions())
+    except Exception:
+        return
+    if not sessions:
+        return
+    at = now or datetime.now()
+    inner = engine.state
+    interval = float(getattr(life_cfg, "glance_interval_sec", DEFAULT_INTERVAL_SEC))
+    climate = ""
+    relationship = getattr(getattr(state, "orchestrator", None), "relationship", None)
+    rel_cfg = getattr(getattr(getattr(state, "config", None), "proactive", None), "relationship", None)
+    rel_on = rel_cfg is None or bool(getattr(rel_cfg, "enabled", True))
+    if relationship is not None and rel_on:
+        try:
+            climate = str(relationship.peek_climate() or "")
+        except Exception:
+            climate = ""
+    if not glance_allowed(
+        now=at,
+        last_at=journal.last_glance_at,
+        interval_sec=interval,
+        activity=inner.activity,
+        attention=inner.attention,
+        climate=climate,
+        busy=bool(hub.any_busy()),
+        listening=bool(inner.can_hear),
+        pending=bool(getattr(state, "glance_request_id", "")),
+    ):
+        return
+    request_id = uuid.uuid4().hex
+    state.glance_request_id = request_id
+    journal.note_requested_glance(at)
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        state.glance_request_id = ""
+        return
+    loop.create_task(_send_glance(state, request_id), name="life-glance")
+
+
+async def _send_glance(state: Any, request_id: str) -> None:
+    hub = getattr(state, "hub", None)
+    if hub is None:
+        return
+    payload = msg_glance_request(request_id)
+    for session_id, send in hub.all_sessions():
+        try:
+            await send(payload)
+        except Exception:
+            logger.exception("glance request failed session=%s", session_id)

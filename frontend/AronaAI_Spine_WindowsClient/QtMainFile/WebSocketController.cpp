@@ -242,6 +242,20 @@ void WebSocketController::sendComputerUseObservation(const QJsonObject& observat
     sendMessage(message);
 }
 
+void WebSocketController::sendGlanceFrame(const QString& requestId, const QString& imageBase64)
+{
+    QJsonObject message;
+    message["type"] = QStringLiteral("glance_frame");
+    message["request_id"] = requestId;
+    if (!imageBase64.isEmpty()) {
+        QJsonObject image;
+        image["mime"] = QStringLiteral("image/jpeg");
+        image["data"] = imageBase64;
+        message["image"] = image;
+    }
+    sendMessage(message);
+}
+
 void WebSocketController::clearSession()
 {
     QJsonObject message;
@@ -580,6 +594,9 @@ void WebSocketController::handleMessage(const QJsonObject& message)
     }
     else if (type == "computer_use_done") {
         handleComputerUseDone(message);
+    }
+    else if (type == "glance_request") {
+        emit glanceRequested(message["request_id"].toString());
     }
     else if (type == "error") {
         handleError(message);

@@ -142,6 +142,8 @@ MainController::MainController(MainWidget* mainWidget, TTSManager* ttsManager, A
         this, &MainController::onComputerUseAction);
     connect(m_webSocketController, &WebSocketController::computerUseDoneReceived,
         this, &MainController::onComputerUseDone);
+    connect(m_webSocketController, &WebSocketController::glanceRequested,
+        this, &MainController::onGlanceRequested);
 
     m_computerUseExecutor = new ComputerUseExecutor(this);
     connect(m_computerUseExecutor, &ComputerUseExecutor::observationReady,
@@ -454,6 +456,23 @@ void MainController::setImageInputEnabled(bool enabled)
     FINE_DEBUG_OUTPUT(QString("[Main Controller] Image input toggled to: %1")
         .arg(enabled ? "true" : "false"));
     emit imageInputChanged(enabled);
+}
+
+void MainController::onGlanceRequested(const QString& requestId)
+{
+    if (!m_webSocketController || requestId.isEmpty()) {
+        return;
+    }
+    QList<QWidget*> exclude;
+    if (m_mainWidget) {
+        exclude << m_mainWidget;
+    }
+    if (m_userInputWidget && m_userInputWidget->isVisible()) {
+        exclude << m_userInputWidget;
+    }
+    const bool compress = GET_BOOL_FROM_JSON(_global_config, "settings", "compress_screenshot");
+    const QString imageBase64 = ScreenCapture::grabJpegBase64(exclude, compress);
+    m_webSocketController->sendGlanceFrame(requestId, imageBase64);
 }
 
 QString MainController::maybeCaptureScreenBase64() const

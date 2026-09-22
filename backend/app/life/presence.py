@@ -41,7 +41,9 @@ def presence_emotion(state: InnerState) -> str:
     """Deterministic inner-state → arona_emotion whitelist value."""
     activity = state.activity
     mood = state.private_mood
-    if mood == "sleepy":
+    if activity == "using_computer":
+        raw = "curious"
+    elif mood == "sleepy":
         raw = "sleep"
     elif activity == "resting":
         raw = "sleep_very_content" if mood == "bright" else "sleep"

@@ -463,6 +463,8 @@ def test_presence_emotion_mapping() -> None:
         (InnerState(activity="idle_in_classroom", private_mood="weary"), "frustration"),
         (InnerState(activity="idle_in_classroom", private_mood="preoccupied"), "curious"),
         (InnerState(activity="idle_in_classroom", private_mood="sleepy"), "sleep"),
+        (InnerState(activity="using_computer", private_mood="sleepy"), "curious"),
+        (InnerState(activity="using_computer", private_mood="calm"), "curious"),
         (
             InnerState.from_dict(
                 {"activity": "idle_in_classroom", "private_mood": "not-a-mood"}
@@ -607,6 +609,133 @@ def test_snapshot_before_apply_and_interrupt_keeps_thinking() -> None:
     print("  ok")
 
 
+def test_journal_skips_crisis_and_teacher_text() -> None:
+    print("== journal ring skips crisis text and teacher utterances ==")
+    from app.life.arona_memory import AronaMemory
+    from app.life.journal import MAX_ENTRIES, LifeJournal
+
+    teacher_line = "老师刚才说的原句不要入档"
+    crisis_line = "我想死"
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        journal = LifeJournal(root / "life_journal.json")
+        memory = AronaMemory(root / "arona.json")
+        now = _afternoon()
+        inner = InnerState(activity="idle_in_classroom")
+        journal.seed(inner)
+        journal.note_inner(inner, now=now, arona=memory)
+        if journal.entries:
+            _fail("same activity must not log a shift")
+        inner = InnerState(activity="thinking", private_mood="preoccupied")
+        journal.note_inner(inner, now=now, arona=memory)
+        if len(journal.entries) != 1 or journal.entries[0].kind != "shift":
+            _fail(f"activity change should be one shift, got {journal.entries}")
+        journal.note_teacher_opened(teacher_line)
+        if journal.contains_text(teacher_line):
+            _fail("teacher utterance landed in the journal")
+        if not journal.append("rumination", crisis_line, now):
+            pass
+        elif journal.contains_text(crisis_line):
+            _fail("crisis summary landed in the journal")
+        if journal.contains_text(crisis_line):
+            _fail("crisis summary landed in the journal")
+        remembered = InnerState(
+            activity="thinking",
+            rumination=[
+                Rumination(
+                    id="imp-sleep",
+                    content="老师睡觉窗口到了",
+                    created_at=now,
+                )
+            ],
+        )
+        journal.note_inner(remembered, now=now, arona=memory)
+        ended = InnerState(activity="thinking")
+        journal.note_inner(ended, now=now + timedelta(seconds=1), arona=memory)
+        if not any(item.summary.startswith("放下：") for item in journal.entries):
+            _fail("ended rumination should be summarized")
+        if "担心过：老师睡觉窗口到了" not in memory.lines():
+            _fail(f"ended rumination should become arona memory, got {memory.lines()}")
+        if "老师睡觉窗口到了" in json.dumps(memory.slots, ensure_ascii=False) and any(
+            line.startswith("担心过") for line in memory.lines()
+        ):
+            pass
+        stamp = now - timedelta(hours=25)
+        journal.entries.insert(
+            0,
+            journal.entries[0].__class__(at=stamp, kind="shift", summary="很早以前发过呆"),
+        )
+        for i in range(MAX_ENTRIES + 5):
+            journal.append("glance", f"看见窗口{i}", now + timedelta(seconds=i + 2))
+        if len(journal.entries) != MAX_ENTRIES:
+            _fail(f"ring should keep {MAX_ENTRIES}, got {len(journal.entries)}")
+        if journal.contains_text("很早以前发过呆"):
+            _fail("entries older than 24h should drop")
+        if journal.contains_text(teacher_line) or journal.contains_text(crisis_line):
+            _fail("ring still holds forbidden text")
+    print("  ok")
+
+
+def test_glance_gate_and_hands() -> None:
+    print("== glance gate and using_computer stay through rest ==")
+    from app.life.glance import glance_allowed
+    from app.life.hands import teacher_turn_aborts_hands
+    from app.planner.client import _glance_seen
+
+    now = _afternoon()
+    recent = now - timedelta(minutes=10)
+    common = dict(
+        now=now,
+        interval_sec=1200,
+        activity="idle_in_classroom",
+        attention="diffuse",
+        climate="steady",
+        busy=False,
+    )
+    if glance_allowed(last_at=recent, listening=False, **common):
+        _fail("interval not elapsed should block glance")
+    if glance_allowed(last_at=recent, listening=True, **common):
+        _fail("listening must not shorten the glance interval")
+    if not glance_allowed(last_at=None, listening=True, **common):
+        _fail("listening alone should not block a due glance")
+    if glance_allowed(
+        last_at=None,
+        activity="looking_at_teacher",
+        attention="teacher",
+        **{k: v for k, v in common.items() if k not in {"activity", "attention"}},
+    ):
+        _fail("looking at teacher should block glance")
+    if glance_allowed(last_at=None, climate="fragile", **{k: v for k, v in common.items() if k != "climate"}):
+        _fail("fragile climate should block glance")
+    if glance_allowed(
+        last_at=None,
+        activity="using_computer",
+        **{k: v for k, v in common.items() if k != "activity"},
+    ):
+        _fail("hands should block glance")
+    if _glance_seen('{"seen":"看不清窗口"}'):
+        _fail("uncertain glance must be dropped")
+    if _glance_seen('{"seen":"我想死"}'):
+        _fail("crisis glance must be dropped")
+    if _glance_seen('{"seen":"记事本开着"}') != "记事本开着":
+        _fail("checkable glance line should be kept")
+    if not teacher_turn_aborts_hands("computer_use"):
+        _fail("teacher turn should abort computer use")
+    if teacher_turn_aborts_hands("chat"):
+        _fail("ordinary chat is not a hands abort")
+    hands = InnerState(activity="using_computer", attention="self", private_mood="calm")
+    stayed = decide(hands, world_event("clock_tick", at=_night()), settings=_settings())
+    _assert_not_speak(stayed)
+    if stayed.state.activity != "using_computer":
+        _fail(f"night tick must not yank hands, got {stayed.state.activity}")
+    if stayed.action != "continue_activity":
+        _fail(f"hands tick action {stayed.action}")
+    block = format_interrupt_block(hands)
+    if "操作电脑" not in block:
+        _fail(block)
+    print("  ok")
+
+
 def main() -> None:
     test_json_roundtrip_isolated_from_relationship()
     test_look_hold_decays_to_idle()
@@ -625,6 +754,8 @@ def main() -> None:
     test_msg_presence_has_no_content()
     test_presence_publish_change_busy_and_listen()
     test_snapshot_before_apply_and_interrupt_keeps_thinking()
+    test_journal_skips_crisis_and_teacher_text()
+    test_glance_gate_and_hands()
     print("all life unit tests passed")
 
 

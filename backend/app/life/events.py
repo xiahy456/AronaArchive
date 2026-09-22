@@ -31,6 +31,8 @@ WorldKind = Literal[
     "listen_off",
     "clock_tick",
     "impulse_due",
+    "hands_on",
+    "hands_off",
 ]
 
 # 老师出现在场：说话、听写、触摸、上线。听写开关不算。
@@ -55,6 +57,8 @@ WORLD_KINDS: frozenset[str] = frozenset(
         "listen_off",
         "clock_tick",
         "impulse_due",
+        "hands_on",
+        "hands_off",
     }
 )
 

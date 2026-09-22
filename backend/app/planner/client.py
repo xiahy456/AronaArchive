@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -23,6 +24,7 @@ import httpx
 
 from ..config import PlannerConfig
 from ..image_input import ImagePayload, redact_image_fields
+from ..safety import is_crisis_text
 from ..logging_utils import update_trace
 from .prompts import (
     PLANNER_SYSTEM_CRISIS,
@@ -62,6 +64,7 @@ class PlannerClient:
         crisis: bool = False,
         memory_block: str = "",
         life_block: str = "",
+        day_block: str = "",
     ) -> IntentCard | None:
         if not self.enabled:
             logger.info("planner skipped reason=disabled_or_no_key")
@@ -78,6 +81,7 @@ class PlannerClient:
             has_screenshot=has_image,
             memory_block=memory_block,
             life_block=life_block,
+            day_block=day_block,
         )
         if image is not None:
             model = (self.config.vision_model or "").strip() or self.config.model
@@ -140,3 +144,73 @@ class PlannerClient:
         except Exception as exc:
             logger.warning("planner call failed: %s", exc)
             return None
+
+    async def describe_glance(self, image: ImagePayload) -> str:
+        """One checkable line from a glance frame. Empty means drop it."""
+        if not self.enabled:
+            return ""
+        url = self.config.base_url.rstrip("/") + "/chat/completions"
+        model = (self.config.vision_model or "").strip() or self.config.model
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "你只根据截图写一句中文，描述屏幕上确实看得见的内容。"
+                        "看不清、不确定、或没有有用信息时，seen 必须是空字符串。"
+                        "禁止编造没看见的窗口、文件名或文字。"
+                        "只输出 JSON：{\"seen\":\"...\"}。"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "这帧屏幕上看得见什么？"},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": image.data_url()},
+                        },
+                    ],
+                },
+            ],
+            "temperature": 0,
+            "max_tokens": 80,
+            "response_format": {"type": "json_object"},
+            "thinking": {"type": "disabled"},
+        }
+        headers = {
+            "Authorization": f"Bearer {self.config.api_key}",
+            "Content-Type": "application/json",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=self.config.timeout_sec) as client:
+                resp = await client.post(url, headers=headers, json=payload)
+                resp.raise_for_status()
+                data = resp.json()
+            content = data["choices"][0]["message"]["content"] or ""
+        except Exception as exc:
+            logger.info("glance describe dropped reason=%s", exc)
+            return ""
+        return _glance_seen(content)
+
+
+_UNSURE_MARKS = ("不确定", "看不清", "无法确定", "不知道", "不清楚", "unclear", "unknown")
+
+
+def _glance_seen(raw: str) -> str:
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return ""
+    if not isinstance(parsed, dict):
+        return ""
+    seen = str(parsed.get("seen") or "").strip()
+    if not seen or is_crisis_text(seen):
+        return ""
+    lowered = seen.lower()
+    if any(mark in seen or mark in lowered for mark in _UNSURE_MARKS):
+        return ""
+    if len(seen) > 60:
+        seen = seen[:60]
+    return seen

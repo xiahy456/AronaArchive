@@ -128,6 +128,12 @@ def offer_impulse(engine: Any, impulse: Impulse) -> bool:
             engine.store.save(engine.state)
         except Exception:
             logger.exception("life impulse persist failed kind=%s", impulse.kind)
+        journal = getattr(engine, "journal", None)
+        if journal is not None:
+            journal.note_inner(
+                engine.state,
+                arona=getattr(engine, "arona_memory", None),
+            )
     return accepted
 
 
@@ -202,12 +208,34 @@ def _emotion_for(kind: str) -> str:
     return _DEFAULT_FACE
 
 
+def _journal_of(state: Any, engine: Any) -> Any:
+    return getattr(state, "journal", None) or getattr(engine, "journal", None)
+
+
+def _drop_spoken_rumination(engine: Any, kind: str) -> None:
+    rum_id = f"imp-{kind}"
+    items = [item for item in engine.state.rumination if item.id != rum_id]
+    if len(items) == len(list(engine.state.rumination)):
+        return
+    engine.state = engine.state.with_rumination(items)
+    try:
+        engine.store.save(engine.state)
+    except Exception:
+        logger.exception("life save after rumination end failed")
+
+
 def _apply_followup(state: Any, decision: LifeDecision, *, now: datetime) -> None:
     followup = decision.impulse_followup
     engine = getattr(state, "life", None)
     scheduler = getattr(state, "scheduler", None)
+    impulse = engine.state.pending_impulse if engine is not None else None
+    hint = (impulse.hint if impulse is not None else "") or ""
     if engine is not None and followup != "keep" and engine.state.pending_impulse is not None:
         clear_impulse(engine)
+    if followup in {"drop", "mark_fired", "mark_care"} and hint:
+        journal = _journal_of(state, engine)
+        if journal is not None:
+            journal.append("rumination", f"没说出口：{hint}", now)
     if scheduler is None or followup in {"keep", "drop"}:
         return
     kind = decision.impulse_kind
@@ -300,6 +328,20 @@ async def _speak_impulse(
         ):
             welcome.mark_period_greeted(snapshot.date_key, snapshot.slot_id)
         logger.info("impulse spoke kind=%s session=%s", snapshot.kind, session_id)
+        _drop_spoken_rumination(engine, snapshot.kind)
+        journal = _journal_of(state, engine)
+        if journal is not None:
+            journal.note_inner(
+                engine.state,
+                now=now,
+                arona=getattr(state, "arona_memory", None)
+                or getattr(engine, "arona_memory", None),
+            )
+            line = str(getattr(orchestrator, "last_initiate_text", "") or "").strip()
+            summary = f"开口（{snapshot.kind}）"
+            if line:
+                summary = f"{summary}：{line}"
+            journal.append("spoke", summary, now)
         if snapshot.kind == "festival" and needs_rest_followup(now):
             _enqueue_sleep_followup(state, now)
         return True

@@ -113,6 +113,7 @@ public:
         const QString& imageBase64 = QString());
     void sendInterrupt();
     void sendComputerUseObservation(const QJsonObject& observation);
+    void sendGlanceFrame(const QString& requestId, const QString& imageBase64);
 
     // 清空会话
     void clearSession();
@@ -157,6 +158,7 @@ signals:
     void presenceReceived(const QString& emotion);
     void computerUseActionReceived(const QJsonObject& action);
     void computerUseDoneReceived(const QJsonObject& message);
+    void glanceRequested(const QString& requestId);
 
     // 收到错误信号
     void errorOccurred(ErrorCode code, const QString& message);

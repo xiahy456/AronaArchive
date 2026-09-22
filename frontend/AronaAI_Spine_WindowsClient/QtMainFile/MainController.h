@@ -96,6 +96,7 @@ private slots:
 	void onComputerUseAction(const QJsonObject& action);
 	void onComputerUseObservation(const QJsonObject& observation);
 	void onComputerUseDone(const QJsonObject& message);
+	void onGlanceRequested(const QString& requestId);
 
 private:
 	MainWidget* m_mainWidget;	// 主界面对象引用

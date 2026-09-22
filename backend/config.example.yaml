@@ -147,9 +147,12 @@ proactive:
 life:
   enabled: true
   persist_path: "data/memory/life.json"
+  journal_path: "data/memory/life_journal.json"
+  arona_memory_path: "data/memory/arona.json"
   tick_sec: 5
   look_hold_sec: 60
   think_hold_sec: 120
+  glance_interval_sec: 1200
 
 interact:
   enabled: true

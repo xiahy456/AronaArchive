@@ -217,9 +217,12 @@ class LifeConfig(BaseModel):
 
     enabled: bool = True
     persist_path: str = "data/memory/life.json"
+    journal_path: str = "data/memory/life_journal.json"
+    arona_memory_path: str = "data/memory/arona.json"
     tick_sec: float = 5
     look_hold_sec: float = 180
     think_hold_sec: float = 120
+    glance_interval_sec: float = 1200
 
 
 class InteractConfig(BaseModel):
@@ -331,6 +334,14 @@ class AppConfig(BaseModel):
     @property
     def life_abs_path(self) -> Path:
         return self.resolve_path(self.life.persist_path)
+
+    @property
+    def journal_abs_path(self) -> Path:
+        return self.resolve_path(self.life.journal_path)
+
+    @property
+    def arona_memory_abs_path(self) -> Path:
+        return self.resolve_path(self.life.arona_memory_path)
 
     @property
     def logging_dir_abs_path(self) -> Path:

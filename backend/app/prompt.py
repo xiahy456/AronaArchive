@@ -82,6 +82,7 @@ def format_memory_inject(
     entries: Sequence[dict[str, Any]] | None = None,
     *,
     extra_contents: Sequence[str] | None = None,
+    arona_lines: Sequence[str] | None = None,
     max_chars: int,
 ) -> MemoryInject:
     """Labeled memory sections: facts first, then at most one episode and one mood."""
@@ -152,6 +153,19 @@ def format_memory_inject(
             contents.append(row["content"])
             if row["key"]:
                 keys.append(row["key"])
+
+    arona_rows: list[str] = []
+    for raw_line in arona_lines or ():
+        line = str(raw_line or "").strip()
+        if not line or is_crisis_text(line):
+            continue
+        arona_rows.append(f"- {line}")
+        if len(arona_rows) >= 3:
+            break
+    if arona_rows:
+        section = "【阿洛娜的记忆】\n" + "\n".join(arona_rows)
+        if _fits(section):
+            parts.append(section)
 
     return MemoryInject(block="\n\n".join(parts), contents=contents, keys=keys)
 

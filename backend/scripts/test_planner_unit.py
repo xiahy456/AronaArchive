@@ -316,6 +316,42 @@ def main() -> None:
     assert "设定甲" in clipped_msg
     assert "设定乙" not in clipped_msg
 
+    from typing import get_args
+
+    from app.orchestrator import should_record_history_marker
+    from app.prompt import format_memory_inject
+    from app.taxonomy import MemoryCategory
+
+    assert "arona" not in get_args(MemoryCategory)
+    injected = format_memory_inject(
+        [{"key": "k1", "content": "老师喜欢蓝色", "category": "preference"}],
+        arona_lines=["在教室休息过"],
+        max_chars=400,
+    )
+    assert "【长期记忆】" in injected.block
+    assert "【阿洛娜的记忆】" in injected.block
+    assert injected.block.index("【长期记忆】") < injected.block.index("【阿洛娜的记忆】")
+    assert "在教室休息过" not in injected.contents
+    assert not should_record_history_marker("【提醒】")
+    assert should_record_history_marker("【摸头】")
+    day_msg = build_planner_user_message(
+        user_text="你刚才在做什么",
+        history=[{"role": "assistant", "content": "该休息了"}],
+        memories=[],
+        knowledge=[],
+        memory_block=injected.block,
+        day_block="【阿洛娜的记忆】\n- 从在教室发呆换成在休息",
+        now=frozen,
+    )
+    assert "【提醒】" not in day_msg
+    assert "【阿洛娜的一天】" not in day_msg
+    head, _, note = day_msg.partition("【阿洛娜的记忆】是她自己的近期摘要")
+    assert head.count("【阿洛娜的记忆】") == 1
+    assert note.startswith("，可以提起")
+    assert "在教室休息过" in day_msg
+    assert "从在教室发呆换成在休息" in day_msg
+    assert day_msg.index("【近期对话】") < day_msg.index("【阿洛娜的记忆】")
+
     from app.model_loader import ModelLoader
 
     warmup_messages = build_renderer_messages(cfg, draft="老师好。")

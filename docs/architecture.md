@@ -13,7 +13,7 @@ arona-ai/
 │   │   ├── interact/           # 非对话手势（摸头等）；系统事件指令 + 白名单
 │   │   ├── proactive/          # 主动事件（动机降为冲动源：欢迎、搭话、照料、回访、节日）
 │   │   ├── relationship/       # 关系气候（信任/依赖/张力、决策）
-│   │   ├── life/               # 生命循环（内状态、世界事件、冲动效应器；无冲动的 tick 只换脸）
+│   │   ├── life/               # 生命循环（内状态、自己的一天、瞥屏、可打断的电脑操作；无冲动的 tick 只换脸）
 │   │   ├── knowledge.py        # 世界观知识 RAG
 │   │   ├── conversation.py     # 多轮对话历史
 │   │   ├── prompt.py           # Prompt / Renderer 消息组装
@@ -109,3 +109,5 @@ arona-ai/
 后端模块职责见 [`backend/README.md`](../backend/README.md)；模型放置见 [`models/README.md`](../models/README.md)。
 
 老师的 `chat` / `transcript` / `interact` 先快照内状态再作为世界事件进入生命循环，打断上下文写入 Planner 的【阿洛娜此刻】。墙钟 tick 无冲动时不调 Planner。`interrupt` 只取消生成并继续当前活动。主动事件经 `pick_motive` 写入冲动，由循环开口或只换脸；听写打开不冻结入队与在场。老师回合 busy 时冲动只积压。
+
+`life_journal.json` 记她自己的一天，主动开口不再把【上线】【提醒】等写成老师句。`arona.json` 以【阿洛娜的记忆】单独注入，不进老师抽取。`glance_request` / `glance_frame` 是低频瞥屏，结果只进日志。电脑操作是 `using_computer` 活动：老师插话或 `Ctrl+Alt+S` 先停手，再进入老师回合。
