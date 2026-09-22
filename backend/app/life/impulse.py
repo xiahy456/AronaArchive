@@ -21,7 +21,13 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from ..proactive.care import CARE_KINDS, CARE_MEMORY_QUERY, HISTORY_CARE_MARKER
+from ..proactive.care import (
+    CARE_KINDS,
+    CARE_MEMORY_QUERY,
+    HISTORY_CARE_MARKER,
+    care_window_specs,
+    in_window,
+)
 from ..proactive.festival import needs_rest_followup
 from ..proactive.scheduler import Motive
 from .events import world_event
@@ -212,6 +218,86 @@ def _journal_of(state: Any, engine: Any) -> Any:
     return getattr(state, "journal", None) or getattr(engine, "journal", None)
 
 
+def _care_kind_of(item_id: str) -> str:
+    if not item_id.startswith("imp-"):
+        return ""
+    kind = item_id[4:]
+    return kind if kind in CARE_KINDS else ""
+
+
+def care_kind_live(
+    kind: str,
+    created_at: datetime | None,
+    now: datetime,
+    windows: dict[str, tuple[str, str]],
+) -> bool:
+    """Care worries live only inside today's window. Other kinds are not care."""
+    if kind not in CARE_KINDS:
+        return True
+    span = windows.get(kind)
+    if span is None or created_at is None:
+        return False
+    if created_at.date() != now.date():
+        return False
+    return in_window(now, span[0], span[1])
+
+
+def without_stale_care(
+    state: InnerState,
+    now: datetime,
+    windows: dict[str, tuple[str, str]],
+) -> InnerState:
+    """Drop meal/sleep rumination, and a matching pending impulse, after the window or the day."""
+    kept = [
+        item
+        for item in state.rumination
+        if care_kind_live(_care_kind_of(item.id), item.created_at, now, windows)
+    ]
+    impulse = state.pending_impulse
+    drop_pending = impulse is not None and not care_kind_live(
+        impulse.kind, impulse.created_at, now, windows
+    )
+    if len(kept) == len(state.rumination) and not drop_pending:
+        return state
+    nxt = state.with_rumination(kept)
+    if drop_pending:
+        nxt.pending_impulse = None
+    return nxt
+
+
+def expire_stale_care(app_state: Any, now: datetime | None = None) -> None:
+    """Persist the drop so a closed care window cannot stay in life.json."""
+    engine = getattr(app_state, "life", None)
+    if engine is None:
+        return
+    care_cfg = getattr(
+        getattr(getattr(app_state, "config", None), "proactive", None),
+        "care",
+        None,
+    )
+    if care_cfg is None:
+        return
+    at = now or datetime.now()
+    windows = {kind: (start, end) for kind, start, end in care_window_specs(care_cfg)}
+    nxt = without_stale_care(engine.state, at, windows)
+    if nxt.to_dict() == engine.state.to_dict():
+        return
+    engine.state = nxt
+    try:
+        engine.store.save(engine.state)
+    except Exception:
+        logger.exception("life save after care rumination expiry failed")
+    journal = _journal_of(app_state, engine)
+    if journal is not None:
+        journal.note_inner(
+            engine.state,
+            now=at,
+            arona=getattr(app_state, "arona_memory", None)
+            or getattr(engine, "arona_memory", None),
+        )
+    logger.info("care rumination expired")
+
+
 def _drop_spoken_rumination(engine: Any, kind: str) -> None:
     rum_id = f"imp-{kind}"
     items = [item for item in engine.state.rumination if item.id != rum_id]
@@ -268,6 +354,7 @@ async def _speak_impulse(
     orchestrator = getattr(state, "orchestrator", None)
     if engine is None or hub is None or orchestrator is None:
         return False
+    expire_stale_care(state, now)
     impulse = engine.state.pending_impulse
     if impulse is None:
         return False

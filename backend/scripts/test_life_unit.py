@@ -676,6 +676,52 @@ def test_journal_skips_crisis_and_teacher_text() -> None:
     print("  ok")
 
 
+def test_stale_care_rumination_expires() -> None:
+    print("== care rumination ends with the window and the day ==")
+    from app.life.impulse import without_stale_care
+
+    windows = {
+        "breakfast": ("06:30", "08:00"),
+        "lunch": ("11:30", "13:00"),
+        "dinner": ("17:30", "19:00"),
+        "sleep": ("23:00", "23:20"),
+    }
+    yesterday = datetime(2026, 9, 21, 23, 18, 22)
+    afternoon = datetime(2026, 9, 22, 15, 2, 0)
+    stale = InnerState(
+        rumination=[
+            Rumination(id="imp-sleep", content="老师睡觉窗口到了", created_at=yesterday),
+            Rumination(id="imp-goal", content="老师还有未完成的计划", created_at=yesterday),
+        ]
+    )
+    fresh = without_stale_care(stale, afternoon, windows)
+    ids = [item.id for item in fresh.rumination]
+    if "imp-sleep" in ids:
+        _fail("yesterday's sleep worry should expire")
+    if "imp-goal" not in ids:
+        _fail("goal rumination is not a care window")
+    block = format_interrupt_block(fresh)
+    if "老师睡觉窗口到了" in block:
+        _fail("expired care worry must not reach the planner")
+    during = datetime(2026, 9, 21, 23, 10, 0)
+    live = without_stale_care(
+        InnerState(
+            rumination=[
+                Rumination(id="imp-sleep", content="老师睡觉窗口到了", created_at=during)
+            ]
+        ),
+        during,
+        windows,
+    )
+    if not any(item.id == "imp-sleep" for item in live.rumination):
+        _fail("sleep worry should stay inside today's window")
+    after = datetime(2026, 9, 21, 23, 25, 0)
+    closed = without_stale_care(live, after, windows)
+    if closed.rumination:
+        _fail("sleep worry should end when the window closes")
+    print("  ok")
+
+
 def test_glance_gate_and_hands() -> None:
     print("== glance gate and using_computer stay through rest ==")
     from app.life.glance import glance_allowed
@@ -755,6 +801,7 @@ def main() -> None:
     test_presence_publish_change_busy_and_listen()
     test_snapshot_before_apply_and_interrupt_keeps_thinking()
     test_journal_skips_crisis_and_teacher_text()
+    test_stale_care_rumination_expires()
     test_glance_gate_and_hands()
     print("all life unit tests passed")
 

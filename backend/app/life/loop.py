@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING
 
 from .glance import maybe_request_glance
 from .presence import schedule_presence
-from .impulse import schedule_impulse_delivery
+from .impulse import expire_stale_care, schedule_impulse_delivery
 
 if TYPE_CHECKING:
     from ..ws_handler import AppState
@@ -70,6 +70,7 @@ def tick_once(state: "AppState", now: datetime | None = None) -> None:
     if engine is None:
         return
     at = now or datetime.now()
+    expire_stale_care(state, at)
     decision = engine.tick(at, climate=_climate(state))
     journal = getattr(state, "journal", None)
     if journal is not None:

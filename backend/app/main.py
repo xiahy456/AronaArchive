@@ -30,6 +30,7 @@ from .embeddings import LocalBgeEncoder, bge_missing_reason
 from .knowledge import KnowledgeRetriever
 from .life import LifeEngine, run_life_loop
 from .life.arona_memory import AronaMemory
+from .life.impulse import expire_stale_care
 from .life.journal import LifeJournal
 from .logging_utils import configure_logging
 from .memory.extractor import MemoryExtractor
@@ -133,6 +134,7 @@ def create_app() -> FastAPI:
     state.journal = journal
     state.arona_memory = arona_memory
     state.glance_request_id = ""
+    expire_stale_care(state)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

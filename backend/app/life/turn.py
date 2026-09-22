@@ -61,6 +61,9 @@ def note_teacher_turn(
     engine = getattr(app_state, "life", None)
     if engine is None:
         return None
+    from .impulse import expire_stale_care
+
+    expire_stale_care(app_state)
     snapshot = engine.state.clone()
     engine.apply(world_event(kind, session_id=session_id))
     schedule_presence(app_state)
