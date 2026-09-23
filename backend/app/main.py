@@ -33,6 +33,7 @@ from .life.arona_memory import AronaMemory
 from .life.impulse import expire_stale_care
 from .life.journal import LifeJournal
 from .life.thought import ThoughtLedger, ThoughtStore
+from .life.thought.loop import run_thought_loop
 from .logging_utils import configure_logging
 from .memory.extractor import MemoryExtractor
 from .memory.store import MemoryStore
@@ -173,6 +174,7 @@ def create_app() -> FastAPI:
         await extractor.start()
         loop_task = None
         life_task = None
+        thought_task = None
         if (
             config.proactive.idle.enabled
             or config.proactive.care.enabled
@@ -184,12 +186,21 @@ def create_app() -> FastAPI:
         if life is not None:
             life_task = asyncio.create_task(run_life_loop(state))
             logger.info("life loop started")
+            if config.life.thought.enabled:
+                thought_task = asyncio.create_task(run_thought_loop(state))
+                logger.info("thought loop started")
         app.state.arona = state  # type: ignore[attr-defined]
         yield
         if life_task is not None:
             life_task.cancel()
             try:
                 await life_task
+            except asyncio.CancelledError:
+                pass
+        if thought_task is not None:
+            thought_task.cancel()
+            try:
+                await thought_task
             except asyncio.CancelledError:
                 pass
         if loop_task is not None:

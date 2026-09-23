@@ -7,10 +7,14 @@ Run from backend/:
 from __future__ import annotations
 
 import json
+import logging
 import sys
 import tempfile
+import inspect
+import asyncio
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BACKEND_DIR))
@@ -25,6 +29,12 @@ from app.life.thought import (  # noqa: E402
     ThoughtLedger,
     ThoughtStore,
 )
+from app.life.thought.gate import (  # noqa: E402
+    ThoughtClocks,
+    ThoughtGateFacts,
+    decide_thought,
+)
+from app.life.thought.loop import thought_tick_once  # noqa: E402
 
 
 def _fail(message: str) -> None:
@@ -238,12 +248,245 @@ def test_thought_rumination_does_not_drop_impulses() -> None:
     print("  ok")
 
 
+def _facts(**overrides: object) -> ThoughtGateFacts:
+    base = dict(
+        teacher_online=True,
+        spontaneous_gap_sec=240.0,
+    )
+    base.update(overrides)
+    return ThoughtGateFacts(**base)  # type: ignore[arg-type]
+
+
+def _decide(
+    inner: InnerState | None = None,
+    ledger: ThoughtLedger | None = None,
+    *,
+    now: datetime | None = None,
+    clocks: ThoughtClocks | None = None,
+    **fact_overrides: object,
+):
+    return decide_thought(
+        now or _now(),
+        inner or InnerState(),
+        ledger or ThoughtLedger(),
+        _facts(**fact_overrides),
+        clocks or ThoughtClocks(),
+    )
+
+
+def test_gate_priority_and_skips() -> None:
+    print("== thought gate priority, skips, revisit ==")
+    now = _now()
+    params = set(inspect.signature(decide_thought).parameters)
+    if "about" in params or "climate" in params:
+        _fail(f"gate must not take wording or climate, got {sorted(params)}")
+
+    due = ThoughtLedger(
+        pending_triggers=[
+            PendingTrigger(kind="spontaneous"),
+            PendingTrigger(kind="aftertaste"),
+        ]
+    )
+    aftertaste = _decide(ledger=due, now=now)
+    if aftertaste.kind != "aftertaste" or aftertaste.skip_reason:
+        _fail(f"aftertaste should beat spontaneous, got {aftertaste}")
+    if due.pending_triggers[0].kind != "spontaneous":
+        _fail("gate must not dequeue")
+
+    if _decide(session_busy=True, now=now).skip_reason != "busy":
+        _fail("busy should skip the beat")
+    if _decide(in_flight=True, session_busy=True, now=now).skip_reason != "in_flight":
+        _fail("in flight should win over busy")
+    if _decide(listen_uncommitted=True, now=now).skip_reason != "listen_uncommitted":
+        _fail("uncommitted listen should skip")
+    computer = _decide(InnerState(activity="using_computer"), now=now)
+    if computer.skip_reason != "using_computer":
+        _fail(f"computer use should skip, got {computer}")
+
+    simmering = InnerState(
+        pending_impulse=Impulse(kind="dinner", created_at=now - timedelta(seconds=10))
+    )
+    if _decide(simmering, now=now).skip_reason != "simmer":
+        _fail("a young impulse should simmer")
+    unknown_age = InnerState(pending_impulse=Impulse(kind="dinner"))
+    if _decide(unknown_age, now=now).skip_reason != "simmer":
+        _fail("an impulse without a time should simmer")
+    cooled = InnerState(
+        pending_impulse=Impulse(kind="dinner", created_at=now - timedelta(seconds=31)),
+        rumination=[],
+    )
+    cooled_ledger = ThoughtLedger(
+        pending_triggers=[PendingTrigger(kind="aftertaste")]
+    )
+    cooled_decision = _decide(cooled, cooled_ledger, now=now)
+    if cooled_decision.kind != "aftertaste":
+        _fail(f"a cooled impulse should still allow aftertaste, got {cooled_decision}")
+    if _decide(cooled, now=now).skip_reason != "not_due":
+        _fail("a cooled impulse should block a new spontaneous thought")
+
+    recent = ThoughtLedger(last_thought_at=now - timedelta(seconds=60))
+    refractory = _decide(ledger=recent, now=now, spontaneous_gap_sec=10)
+    if refractory.skip_reason != "refractory" or refractory.kind:
+        _fail(f"refractory should block spontaneous, got {refractory}")
+    recent_aftertaste = ThoughtLedger(
+        last_thought_at=now - timedelta(seconds=60),
+        pending_triggers=[PendingTrigger(kind="aftertaste")],
+    )
+    kept = _decide(ledger=recent_aftertaste, now=now, spontaneous_gap_sec=10)
+    if kept.kind != "aftertaste":
+        _fail(f"refractory must keep a queued aftertaste, got {kept}")
+
+    resting = _decide(resting=True, teacher_online=True, now=now)
+    if resting.kind != "spontaneous":
+        _fail(f"rest should still allow spontaneous, got {resting}")
+    away = _decide(teacher_online=False, now=now, spontaneous_gap_sec=900)
+    if away.kind != "spontaneous":
+        _fail(f"offline should still think, got {away}")
+
+    motive = _decide(motive_pending=True, now=now, spontaneous_gap_sec=10)
+    if motive.skip_reason != "motive" or motive.kind:
+        _fail(f"a pending motive should block only spontaneous, got {motive}")
+    motive_aftertaste = ThoughtLedger(pending_triggers=[PendingTrigger(kind="aftertaste")])
+    if _decide(ledger=motive_aftertaste, motive_pending=True, now=now).kind != "aftertaste":
+        _fail("a pending motive must not drop aftertaste")
+
+    both = ThoughtLedger(
+        pending_triggers=[
+            PendingTrigger(kind="consolidate"),
+            PendingTrigger(kind="arrived"),
+        ]
+    )
+    if _decide(ledger=both, resting=True, now=now).kind != "arrived":
+        _fail("arrived should beat consolidate")
+    only_rest = ThoughtLedger(pending_triggers=[PendingTrigger(kind="consolidate")])
+    if _decide(ledger=only_rest, resting=True, now=now).kind != "consolidate":
+        _fail("rest should allow consolidate")
+    if _decide(ledger=only_rest, resting=False, now=now).kind != "spontaneous":
+        _fail("consolidate outside rest should be ignored")
+    done = _decide(
+        ledger=only_rest,
+        resting=True,
+        consolidated_today=True,
+        now=now,
+    )
+    if done.kind != "spontaneous":
+        _fail(f"today's consolidate should not run again, got {done}")
+
+    waiting = ThoughtLedger(
+        pending_triggers=[PendingTrigger(kind="aftertaste", not_before=now + timedelta(seconds=5))]
+    )
+    if _decide(ledger=waiting, now=now).kind != "spontaneous":
+        _fail("a future trigger should wait")
+
+    worry = InnerState(
+        activity="idle_in_classroom",
+        rumination=[
+            Rumination(
+                id="thought-1",
+                content="老师还在吗",
+                created_at=now - timedelta(seconds=1201),
+            )
+        ],
+    )
+    spoken_open = ThoughtLedger(focus=ThoughtFocus(id="thought-1", text="老师还在吗", spoken=False))
+    revisit = _decide(worry, spoken_open, teacher_online=True, now=now)
+    if revisit.kind != "revisit" or revisit.focus_id != "thought-1":
+        _fail(f"an old unspoken concern should become revisit, got {revisit}")
+    if _decide(worry, spoken_open, teacher_online=False, now=now).kind != "spontaneous":
+        _fail("offline revisit should stay spontaneous")
+    looking = InnerState(
+        activity="looking_at_teacher",
+        rumination=worry.rumination,
+    )
+    if _decide(looking, spoken_open, teacher_online=True, now=now).kind != "spontaneous":
+        _fail("revisit waits until she is not looking at the teacher")
+    young = InnerState(
+        rumination=[
+            Rumination(id="thought-1", content="老师还在吗", created_at=now - timedelta(minutes=10))
+        ]
+    )
+    if _decide(young, spoken_open, teacher_online=True, now=now).kind != "spontaneous":
+        _fail("a young concern should stay spontaneous")
+    already = ThoughtLedger(focus=ThoughtFocus(id="thought-1", text="老师还在吗", spoken=True))
+    if _decide(worry, already, teacher_online=True, now=now).kind != "spontaneous":
+        _fail("a spoken concern should not be revisited")
+    queued_away = ThoughtLedger(
+        pending_triggers=[PendingTrigger(kind="revisit", focus_id="thought-1")]
+    )
+    away_revisit = _decide(worry, queued_away, teacher_online=False, now=now)
+    if away_revisit.kind != "spontaneous":
+        _fail(f"queued revisit should wait while offline, got {away_revisit}")
+    queued_here = _decide(worry, queued_away, teacher_online=True, now=now)
+    if queued_here.kind != "revisit" or queued_here.focus_id != "thought-1":
+        _fail(f"queued revisit should run while online and idle, got {queued_here}")
+    print("  ok")
+
+
+def test_thought_tick_logs_without_writing() -> None:
+    print("== thought tick logs one line and writes nothing ==")
+    now = _now()
+    ledger = ThoughtLedger(pending_triggers=[PendingTrigger(kind="aftertaste", not_before=now + timedelta(hours=1))])
+    inner = InnerState(rumination=[Rumination(id="imp-dinner", content="晚饭", created_at=now)])
+    thought_cfg = SimpleNamespace(
+        tick_sec=60,
+        revisit_after_sec=1200,
+        refractory_sec=180,
+        spontaneous_online_min_sec=240,
+        spontaneous_online_max_sec=240,
+        spontaneous_away_min_sec=900,
+        spontaneous_away_max_sec=900,
+    )
+    state = SimpleNamespace(
+        config=SimpleNamespace(life=SimpleNamespace(thought=thought_cfg)),
+        life=SimpleNamespace(state=inner),
+        thought=ledger,
+        hub=SimpleNamespace(all_sessions=lambda: [], any_busy=lambda: False),
+        scheduler=None,
+        listen_uncommitted=False,
+    )
+
+    async def _twice() -> tuple[str, str, float, float]:
+        first = await thought_tick_once(state, now)
+        gap = state.thought_spontaneous_gap.gap_sec
+        second = await thought_tick_once(state, now)
+        return first.kind, second.kind, gap, state.thought_spontaneous_gap.gap_sec
+
+    records: list[str] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record.getMessage())
+
+    log = logging.getLogger("app.life.thought.loop")
+    handler = _Capture()
+    log.addHandler(handler)
+    log.setLevel(logging.INFO)
+    try:
+        first_kind, second_kind, gap, again = asyncio.run(_twice())
+    finally:
+        log.removeHandler(handler)
+    lines = [line for line in records if line.startswith("thought gate ")]
+    if lines != ["thought gate kind=spontaneous", "thought gate kind=spontaneous"]:
+        _fail(f"tick should log one gate line each beat, got {lines}")
+    if first_kind != "spontaneous" or second_kind != "spontaneous":
+        _fail(f"empty offline ledger should be spontaneous, got {first_kind}, {second_kind}")
+    if gap != again or gap != 900:
+        _fail(f"away gap should roll once, got {gap} then {again}")
+    if len(ledger.pending_triggers) != 1 or ledger.pending_triggers[0].kind != "aftertaste":
+        _fail("tick must not dequeue")
+    if [item.id for item in inner.rumination] != ["imp-dinner"]:
+        _fail("tick must not change rumination")
+    print("  ok")
+
+
 def main() -> None:
     test_missing_empty_and_corrupt_ledger()
     test_ledger_roundtrip()
     test_queue_keeps_higher_priority()
     test_notes_limit_age_crisis_and_slots()
     test_thought_rumination_does_not_drop_impulses()
+    test_gate_priority_and_skips()
+    test_thought_tick_logs_without_writing()
     print("all thought unit tests passed")
 
 

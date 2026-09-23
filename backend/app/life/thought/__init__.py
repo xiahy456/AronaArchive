@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Arona's thought ledger. Storage only; the loop arrives in later steps."""
+"""Arona's thought ledger and the gate that chooses whether this beat thinks."""
 
 from .store import (
     MAX_TRIGGERS,

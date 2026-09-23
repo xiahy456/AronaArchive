@@ -213,11 +213,19 @@ class ContinueConfig(BaseModel):
 
 
 class ThoughtConfig(BaseModel):
-    """Thought ledger path and note limits. The loop is not started from here."""
+    """Thought ledger and the step-2 gate clock. Later steps add their own fields."""
 
+    enabled: bool = True
     persist_path: str = "data/memory/thought.json"
     notes_max: int = 8
     notes_max_age_hours: float = 24
+    tick_sec: float = 60
+    revisit_after_sec: float = 1200
+    spontaneous_online_min_sec: float = 240
+    spontaneous_online_max_sec: float = 600
+    spontaneous_away_min_sec: float = 900
+    spontaneous_away_max_sec: float = 1800
+    refractory_sec: float = 180
 
 
 class LifeConfig(BaseModel):

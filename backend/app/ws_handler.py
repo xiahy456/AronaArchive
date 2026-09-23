@@ -144,7 +144,19 @@ class AppState:
         self.scheduler = scheduler
         self.life = life
         self.presence = PresenceGate()
+        self._listen_pending: set[str] = set()
         self.hub.set_on_all_idle(lambda: schedule_presence(self))
+
+    def note_listen_pending(self, session_id: str, pending: bool) -> None:
+        """Track a listen buffer that still holds an uncommitted utterance."""
+        if pending:
+            self._listen_pending.add(session_id)
+        else:
+            self._listen_pending.discard(session_id)
+
+    @property
+    def listen_uncommitted(self) -> bool:
+        return bool(self._listen_pending)
 
 
 async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
@@ -163,6 +175,11 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
     chat_recv_at: float | None = None
 
     turn_buffer = TurnBuffer()
+
+    def _sync_listen_pending() -> None:
+        pending = turn_buffer.listening and len(turn_buffer) > 0
+        state.note_listen_pending(session_id, pending)
+
     listen_cfg = state.config.listen
     generation_id = 0
     inflight_user: str | None = None
@@ -303,6 +320,7 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
             )
             if inflight_user:
                 turn_buffer.prepend(inflight_user)
+                _sync_listen_pending()
                 _clear_inflight()
         except asyncio.CancelledError:
             logger.info("chat cancelled session=%s", session_id)
@@ -627,6 +645,7 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
         generation_id += 1
         if restore_inflight and inflight_user:
             turn_buffer.prepend(inflight_user)
+            _sync_listen_pending()
             inflight_user = None
         if chat_task is not None and not chat_task.done():
             chat_task.cancel()
@@ -642,54 +661,57 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
     async def _commit_turn(*, force: bool = False) -> None:
         nonlocal commit_task, chat_task, inflight_user, wait_extended, generation_id
         commit_task = None
-        if not force and not turn_buffer.listening:
-            return
-        image = turn_buffer.pop_image()
-        drained = turn_buffer.drain()
-        if not drained or is_unusable_user_text(drained):
+        try:
+            if not force and not turn_buffer.listening:
+                return
+            image = turn_buffer.pop_image()
+            drained = turn_buffer.drain()
+            if not drained or is_unusable_user_text(drained):
+                logger.info(
+                    "listen commit skipped session=%s reason=unusable text=%r",
+                    session_id,
+                    drained,
+                )
+                return
+            wait_extended = False
             logger.info(
-                "listen commit skipped session=%s reason=unusable text=%r",
+                "listen commit session=%s has_image=%s text=%r",
                 session_id,
+                image is not None,
                 drained,
             )
-            return
-        wait_extended = False
-        logger.info(
-            "listen commit session=%s has_image=%s text=%r",
-            session_id,
-            image is not None,
-            drained,
-        )
-        if chat_task is not None and not chat_task.done():
-            await _interrupt_generation(restore_inflight=True)
-        if is_probe_text(drained, state.config.computer_use.probe_token):
-            logger.info("listen commit computer_use probe session=%s", session_id)
-            inflight_user = None
-            chat_task = asyncio.create_task(_run_computer_use_probe())
-            return
-        transcript_ctx = _note_teacher_turn("teacher_transcript")
-        my_id = generation_id
-        inflight_user = drained
-        started = time.perf_counter()
-        request_json = json.dumps(
-            {
-                "type": "transcript",
-                "content": drained,
-                "has_image": image is not None,
-            },
-            ensure_ascii=False,
-        )
-        chat_task = asyncio.create_task(
-            _run_routed_user_turn(
-                drained,
-                {},
-                request_json,
-                started,
-                lambda: generation_id != my_id,
-                image,
-                interrupt_ctx=transcript_ctx,
+            if chat_task is not None and not chat_task.done():
+                await _interrupt_generation(restore_inflight=True)
+            if is_probe_text(drained, state.config.computer_use.probe_token):
+                logger.info("listen commit computer_use probe session=%s", session_id)
+                inflight_user = None
+                chat_task = asyncio.create_task(_run_computer_use_probe())
+                return
+            transcript_ctx = _note_teacher_turn("teacher_transcript")
+            my_id = generation_id
+            inflight_user = drained
+            started = time.perf_counter()
+            request_json = json.dumps(
+                {
+                    "type": "transcript",
+                    "content": drained,
+                    "has_image": image is not None,
+                },
+                ensure_ascii=False,
             )
-        )
+            chat_task = asyncio.create_task(
+                _run_routed_user_turn(
+                    drained,
+                    {},
+                    request_json,
+                    started,
+                    lambda: generation_id != my_id,
+                    image,
+                    interrupt_ctx=transcript_ctx,
+                )
+            )
+        finally:
+            _sync_listen_pending()
 
     async def _commit_after(delay_sec: float) -> None:
         try:
@@ -1039,6 +1061,7 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
                     wait_extended = False
                     if listening:
                         turn_buffer.set_listening(True)
+                        _sync_listen_pending()
                         state.hub.set_listening(session_id, True)
                         _note_life("listen_on")
                     else:
@@ -1049,6 +1072,7 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
                         )
                         await _commit_turn(force=True)
                         turn_buffer.set_listening(False)
+                        _sync_listen_pending()
                         state.hub.set_listening(session_id, False)
                         _note_life("listen_off")
                 elif msg_type == TYPE_TRANSCRIPT:
@@ -1101,6 +1125,7 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
                         silence_ms=silence_ms,
                         image=image,
                     )
+                    _sync_listen_pending()
                     if image is not None:
                         asyncio.create_task(_persist_screenshot(image))
                     _schedule_commit()
@@ -1148,5 +1173,6 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
             except Exception:
                 logger.exception("Error while cancelling chat task session=%s", session_id)
         state.hub.unregister(session_id)
+        state.note_listen_pending(session_id, False)
         state.conversations.drop(session_id)
         _note_life("teacher_left")

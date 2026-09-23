@@ -154,9 +154,17 @@ life:
   think_hold_sec: 120
   glance_interval_sec: 1200
   thought:
+    enabled: true
     persist_path: "data/memory/thought.json"
     notes_max: 8
     notes_max_age_hours: 24
+    tick_sec: 60
+    revisit_after_sec: 1200
+    spontaneous_online_min_sec: 240
+    spontaneous_online_max_sec: 600
+    spontaneous_away_min_sec: 900
+    spontaneous_away_max_sec: 1800
+    refractory_sec: 180
 
 interact:
   enabled: true
