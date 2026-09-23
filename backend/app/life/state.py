@@ -36,6 +36,8 @@ DEFAULT_ACTIVITY: Activity = "idle_in_classroom"
 DEFAULT_ATTENTION: Attention = "diffuse"
 DEFAULT_MOOD: PrivateMood = "calm"
 MAX_RUMINATION = 2
+MAX_THOUGHT_RUMINATION = 1
+THOUGHT_RUMINATION_PREFIX = "thought-"
 
 ImpulseKind = Literal[
     "welcome",
@@ -98,6 +100,23 @@ def parse_life_dt(raw: object) -> datetime | None:
             return datetime.fromisoformat(text)
         except ValueError:
             return None
+
+
+def retain_rumination(items: list[Rumination]) -> list[Rumination]:
+    """Keep newest impulse concerns and one thought concern. They do not displace each other.
+
+    Non-thought ids share the existing impulse budget. A list with only those
+    ids still keeps the newest ``MAX_RUMINATION`` items.
+    """
+    thoughts = [item for item in items if item.id.startswith(THOUGHT_RUMINATION_PREFIX)]
+    others = [item for item in items if not item.id.startswith(THOUGHT_RUMINATION_PREFIX)]
+    keep_thought = {id(item) for item in thoughts[-MAX_THOUGHT_RUMINATION:]}
+    keep_other = {id(item) for item in others[-MAX_RUMINATION:]}
+    return [
+        item
+        for item in items
+        if id(item) in keep_thought or id(item) in keep_other
+    ]
 
 
 def _one_of(value: object, allowed: frozenset[str], default: str) -> str:
@@ -252,10 +271,9 @@ class InnerState:
         return bool(self.rumination)
 
     def with_rumination(self, items: list[Rumination]) -> InnerState:
-        """Test helper: keep at most MAX_RUMINATION, oldest dropped first."""
-        kept = list(items)[-MAX_RUMINATION:]
+        """Keep impulse concerns and at most one thought concern."""
         copied = self.clone()
-        copied.rumination = kept
+        copied.rumination = retain_rumination(list(items))
         return copied
 
     def to_dict(self) -> dict[str, Any]:
@@ -284,8 +302,7 @@ class InnerState:
                 item = Rumination.from_dict(raw if isinstance(raw, dict) else None)
                 if item is not None:
                     rumination.append(item)
-                if len(rumination) >= MAX_RUMINATION:
-                    break
+        rumination = retain_rumination(rumination)
         raw_impulse = data.get("pending_impulse")
         pending = Impulse.from_dict(raw_impulse if isinstance(raw_impulse, dict) else None)
         return cls(

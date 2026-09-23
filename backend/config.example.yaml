@@ -153,6 +153,10 @@ life:
   look_hold_sec: 60
   think_hold_sec: 120
   glance_interval_sec: 1200
+  thought:
+    persist_path: "data/memory/thought.json"
+    notes_max: 8
+    notes_max_age_hours: 24
 
 interact:
   enabled: true

@@ -33,7 +33,7 @@ from ..proactive.scheduler import Motive
 from .events import world_event
 from .policy import LifeDecision
 from .presence import schedule_presence
-from .state import Impulse, InnerState, Rumination, MAX_RUMINATION
+from .state import Impulse, InnerState, Rumination, retain_rumination
 from .turn import apply_turn_action
 
 logger = logging.getLogger(__name__)
@@ -104,7 +104,7 @@ def _with_rumination(state: InnerState, impulse: Impulse) -> InnerState:
     items = [item for item in state.rumination if item.id != rum_id]
     items.append(Rumination(id=rum_id, content=content, created_at=impulse.created_at))
     nxt = state.clone()
-    nxt.rumination = items[-MAX_RUMINATION:]
+    nxt.rumination = retain_rumination(items)
     return nxt
 
 

@@ -157,7 +157,7 @@ class PlannerClient:
                 {
                     "role": "system",
                     "content": (
-                        "你只根据截图写一句中文，描述屏幕上确实看得见的内容。"
+                        "你需要根据截图写若干句中文，描述屏幕上确实看得见的内容。字数不多于100字。"
                         "看不清、不确定、或没有有用信息时，seen 必须是空字符串。"
                         "禁止编造没看见的窗口、文件名或文字。"
                         "只输出 JSON：{\"seen\":\"...\"}。"
@@ -175,7 +175,7 @@ class PlannerClient:
                 },
             ],
             "temperature": 0,
-            "max_tokens": 80,
+            "max_tokens": 300,
             "response_format": {"type": "json_object"},
             "thinking": {"type": "disabled"},
         }
@@ -211,6 +211,4 @@ def _glance_seen(raw: str) -> str:
     lowered = seen.lower()
     if any(mark in seen or mark in lowered for mark in _UNSURE_MARKS):
         return ""
-    if len(seen) > 60:
-        seen = seen[:60]
     return seen

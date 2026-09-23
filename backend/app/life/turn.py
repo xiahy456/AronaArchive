@@ -33,9 +33,6 @@ ACTIVITY_LABELS = {
     "using_computer": "正在通过什亭之匣操作电脑",
 }
 
-_RUMINATION_MAX = 40
-
-
 def format_interrupt_block(state: InnerState | None) -> str:
     """Planner-facing interrupt context. Empty when there is no inner state."""
     if state is None:
@@ -45,8 +42,6 @@ def format_interrupt_block(state: InnerState | None) -> str:
     if state.rumination:
         content = (state.rumination[-1].content or "").strip()
         if content:
-            if len(content) > _RUMINATION_MAX:
-                content = content[:_RUMINATION_MAX] + "…"
             lines.append(f"【未出口的心事】{content}")
     return "\n".join(lines)
 

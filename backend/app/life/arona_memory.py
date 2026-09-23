@@ -18,15 +18,19 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from ..safety import is_crisis_text
+from .state import format_life_dt, parse_life_dt
 
 logger = logging.getLogger(__name__)
 
 MAX_LINES = 3
-LINE_MAX = 60
+DEFAULT_NOTES_MAX = 8
+DEFAULT_NOTES_MAX_AGE_HOURS = 24.0
 SLOT_ORDER = ("classroom", "open_worry", "worry")
 
 _ACTIVITY_LINE = {
@@ -42,15 +46,40 @@ def _clean_line(text: str) -> str:
     line = " ".join((text or "").split())
     if not line or is_crisis_text(line):
         return ""
-    if len(line) > LINE_MAX:
-        line = line[:LINE_MAX] + "…"
     return line
 
 
+def _clean_note(text: str) -> str:
+    """Reject crisis wording whole, before the note is stored."""
+    line = " ".join((text or "").split())
+    if not line or is_crisis_text(line):
+        return ""
+    return line
+
+
+@dataclass
+class AronaNote:
+    at: datetime
+    text: str
+
+    def to_dict(self) -> dict[str, str]:
+        return {"at": format_life_dt(self.at), "text": self.text}
+
+
 class AronaMemory:
-    def __init__(self, path: Path) -> None:
+    def __init__(
+        self,
+        path: Path,
+        *,
+        notes_max: int = DEFAULT_NOTES_MAX,
+        notes_max_age_hours: float = DEFAULT_NOTES_MAX_AGE_HOURS,
+    ) -> None:
         self.path = path
+        self.notes_max = max(0, int(notes_max))
+        self.notes_max_age = timedelta(hours=max(0.0, float(notes_max_age_hours)))
         self.slots: dict[str, str] = {key: "" for key in SLOT_ORDER}
+        self.notes: list[AronaNote] = []
+        self.worry_stopped_at: datetime | None = None
         self.load()
 
     def load(self) -> None:
@@ -68,10 +97,24 @@ class AronaMemory:
             return
         for key in SLOT_ORDER:
             self.slots[key] = _clean_line(str(slots.get(key) or ""))
+        notes: list[AronaNote] = []
+        raw_notes = raw.get("notes")
+        if isinstance(raw_notes, list):
+            for item in raw_notes:
+                note = self._note_from_raw(item)
+                if note is not None:
+                    notes.append(note)
+        self.notes = notes
+        self._trim_notes(datetime.now())
+        self.worry_stopped_at = parse_life_dt(raw.get("worry_stopped_at"))
 
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"slots": {key: self.slots.get(key, "") for key in SLOT_ORDER}}
+        payload = {
+            "slots": {key: self.slots.get(key, "") for key in SLOT_ORDER},
+            "notes": [note.to_dict() for note in self.notes],
+            "worry_stopped_at": format_life_dt(self.worry_stopped_at),
+        }
         tmp = self.path.with_suffix(self.path.suffix + ".tmp")
         tmp.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2),
@@ -86,6 +129,8 @@ class AronaMemory:
         if not line or self.slots.get(slot) == line:
             return
         self.slots[slot] = line
+        if slot == "worry":
+            self.worry_stopped_at = None
         try:
             self.save()
         except OSError:
@@ -95,6 +140,40 @@ class AronaMemory:
         if slot not in SLOT_ORDER or not self.slots.get(slot):
             return
         self.slots[slot] = ""
+        if slot == "worry":
+            self.worry_stopped_at = None
+        try:
+            self.save()
+        except OSError:
+            logger.exception("arona memory save failed path=%s", self.path)
+
+    def append_note(self, text: str, now: datetime | None = None) -> bool:
+        """Store one observation. Crisis text is refused whole."""
+        line = _clean_note(text)
+        if not line:
+            return False
+        at = (now or datetime.now()).replace(microsecond=0)
+        self.notes.append(AronaNote(at=at, text=line))
+        self._trim_notes(at)
+        try:
+            self.save()
+        except OSError:
+            logger.exception("arona memory save failed path=%s", self.path)
+            return False
+        return True
+
+    def set_worry(self, content: str, stopped_at: datetime) -> None:
+        """Record a worry that has ended, including when it stopped."""
+        body = " ".join(f"担心过：{content}".split())
+        if not body or is_crisis_text(body):
+            return
+        when = stopped_at.replace(microsecond=0)
+        suffix = f"（{when.strftime('%Y-%m-%d %H:%M')}放下）"
+        line = body + suffix
+        if self.slots.get("worry") == line and self.worry_stopped_at == when:
+            return
+        self.slots["worry"] = line
+        self.worry_stopped_at = when
         try:
             self.save()
         except OSError:
@@ -114,7 +193,24 @@ class AronaMemory:
         return out[:MAX_LINES]
 
     def block(self) -> str:
+        """Teacher-turn block. Notes stay out so the planner context is unchanged."""
         rows = self.lines()
         if not rows:
             return ""
         return "【阿洛娜的记忆】\n" + "\n".join(f"- {line}" for line in rows)
+
+    def _note_from_raw(self, raw: object) -> AronaNote | None:
+        if not isinstance(raw, dict):
+            return None
+        text = _clean_note(str(raw.get("text") or ""))
+        at = parse_life_dt(raw.get("at"))
+        if not text or at is None:
+            return None
+        return AronaNote(at=at, text=text)
+
+    def _trim_notes(self, now: datetime) -> None:
+        cutoff = now - self.notes_max_age
+        self.notes = [note for note in self.notes if note.at >= cutoff]
+        self.notes.sort(key=lambda note: note.at)
+        if len(self.notes) > self.notes_max:
+            self.notes = self.notes[-self.notes_max :]

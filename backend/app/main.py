@@ -32,6 +32,7 @@ from .life import LifeEngine, run_life_loop
 from .life.arona_memory import AronaMemory
 from .life.impulse import expire_stale_care
 from .life.journal import LifeJournal
+from .life.thought import ThoughtLedger, ThoughtStore
 from .logging_utils import configure_logging
 from .memory.extractor import MemoryExtractor
 from .memory.store import MemoryStore
@@ -113,15 +114,28 @@ def create_app() -> FastAPI:
     life = None
     journal = None
     arona_memory = None
+    thought = None
+    thought_store = None
     if config.life.enabled:
         life = LifeEngine.from_config(config.life_abs_path, config.life)
         journal = LifeJournal(config.journal_abs_path)
-        arona_memory = AronaMemory(config.arona_memory_abs_path)
+        arona_memory = AronaMemory(
+            config.arona_memory_abs_path,
+            notes_max=config.life.thought.notes_max,
+            notes_max_age_hours=config.life.thought.notes_max_age_hours,
+        )
         journal.seed(life.state)
         life.journal = journal
         life.arona_memory = arona_memory
         orchestrator.life_journal = journal
         orchestrator.arona_memory = arona_memory
+        try:
+            thought_store = ThoughtStore(config.thought_abs_path)
+            thought = thought_store.load()
+        except Exception:
+            logging.getLogger(__name__).exception("thought ledger load failed")
+            thought = ThoughtLedger()
+            thought_store = None
     state = AppState(
         config,
         orchestrator,
@@ -133,6 +147,8 @@ def create_app() -> FastAPI:
     )
     state.journal = journal
     state.arona_memory = arona_memory
+    state.thought = thought
+    state.thought_store = thought_store
     state.glance_request_id = ""
     expire_stale_care(state)
 

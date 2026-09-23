@@ -40,7 +40,6 @@ JOURNAL_KINDS = frozenset(
 )
 MAX_ENTRIES = 48
 MAX_AGE = timedelta(hours=24)
-SUMMARY_MAX = 80
 DAY_BLOCK_LIMIT = 6
 _DT_FMT = "%Y-%m-%dT%H:%M:%S"
 
@@ -82,8 +81,6 @@ def _clean_summary(summary: str) -> str:
     text = " ".join((summary or "").split())
     if not text or is_crisis_text(text):
         return ""
-    if len(text) > SUMMARY_MAX:
-        text = text[:SUMMARY_MAX] + "…"
     return text
 
 
@@ -219,7 +216,7 @@ class LifeJournal:
                 self.append("rumination", f"放下：{content}", at)
                 if arona is not None:
                     arona.clear_slot("open_worry")
-                    arona.set_slot("worry", f"担心过：{content}")
+                    arona.set_worry(content, at)
         self._last_activity = activity
         self._last_rum = rum
 

@@ -212,6 +212,14 @@ class ContinueConfig(BaseModel):
     delay_sec: float = 2
 
 
+class ThoughtConfig(BaseModel):
+    """Thought ledger path and note limits. The loop is not started from here."""
+
+    persist_path: str = "data/memory/thought.json"
+    notes_max: int = 8
+    notes_max_age_hours: float = 24
+
+
 class LifeConfig(BaseModel):
     """Wall-clock inner state. Does not speak; presence and teacher-as-event come later."""
 
@@ -223,6 +231,7 @@ class LifeConfig(BaseModel):
     look_hold_sec: float = 180
     think_hold_sec: float = 120
     glance_interval_sec: float = 1200
+    thought: ThoughtConfig = Field(default_factory=ThoughtConfig)
 
 
 class InteractConfig(BaseModel):
@@ -342,6 +351,10 @@ class AppConfig(BaseModel):
     @property
     def arona_memory_abs_path(self) -> Path:
         return self.resolve_path(self.life.arona_memory_path)
+
+    @property
+    def thought_abs_path(self) -> Path:
+        return self.resolve_path(self.life.thought.persist_path)
 
     @property
     def logging_dir_abs_path(self) -> Path:

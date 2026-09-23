@@ -651,11 +651,20 @@ def test_journal_skips_crisis_and_teacher_text() -> None:
         )
         journal.note_inner(remembered, now=now, arona=memory)
         ended = InnerState(activity="thinking")
-        journal.note_inner(ended, now=now + timedelta(seconds=1), arona=memory)
+        ended_at = now + timedelta(seconds=1)
+        journal.note_inner(ended, now=ended_at, arona=memory)
         if not any(item.summary.startswith("放下：") for item in journal.entries):
             _fail("ended rumination should be summarized")
-        if "担心过：老师睡觉窗口到了" not in memory.lines():
+        worry_line = "担心过：老师睡觉窗口到了（2026-08-13 15:00放下）"
+        if worry_line not in memory.lines():
             _fail(f"ended rumination should become arona memory, got {memory.lines()}")
+        if memory.worry_stopped_at != ended_at.replace(microsecond=0):
+            _fail(f"worry stop time mismatch: {memory.worry_stopped_at}")
+        reloaded = AronaMemory(root / "arona.json")
+        if reloaded.worry_stopped_at != ended_at.replace(microsecond=0):
+            _fail(f"worry stop time lost on reload: {reloaded.worry_stopped_at}")
+        if worry_line not in reloaded.lines():
+            _fail(f"worry line lost on reload: {reloaded.lines()}")
         if "老师睡觉窗口到了" in json.dumps(memory.slots, ensure_ascii=False) and any(
             line.startswith("担心过") for line in memory.lines()
         ):
