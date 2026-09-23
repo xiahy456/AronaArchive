@@ -35,6 +35,11 @@ from app.life.thought.gate import (  # noqa: E402
     decide_thought,
 )
 from app.life.thought.loop import thought_tick_once  # noqa: E402
+from app.life.thought.sources import (  # noqa: E402
+    SourceContext,
+    fill_need,
+    select_sources,
+)
 
 
 def _fail(message: str) -> None:
@@ -479,6 +484,192 @@ def test_thought_tick_logs_without_writing() -> None:
     print("  ok")
 
 
+def test_sources_for_each_trigger() -> None:
+    print("== thought sources by trigger ==")
+    source = Path(__file__).resolve().parents[1] / "app" / "life" / "thought" / "sources.py"
+    module = source.read_text(encoding="utf-8").lower()
+    if "planner" in module:
+        _fail("sources must not call the planner")
+    now = datetime(2026, 9, 10, 16, 0, 0)
+    journal = [f"日记{i}" for i in range(7)]
+    notes = ("自己发呆", "老师在改文档")
+    turns = tuple((f"更早一轮{i}", f"答{i}") for i in range(9))
+    calls: list[str] = []
+
+    def _knowledge(query: str) -> list[str]:
+        calls.append(query)
+        return ["常识一", "常识二", "常识三"]
+
+    goal = "2026年9月10日16点交报告"
+    ctx = SourceContext(
+        teacher_online=True,
+        climate="fragile",
+        seconds_since_teacher=120,
+        seconds_since_arona=300,
+        journal=tuple(journal),
+        notes=notes,
+        turns=turns,
+        ended_turns=(("刚结束的话", "刚结束的答"),),
+        reused_memories=("这一轮记得的档案",),
+        reused_knowledge=("这一轮用过的常识",),
+        goals=(("goal_a", goal),),
+        goal_acked={"goal_a": "2026-09-10T15:00:00"},
+        away_sec=7200,
+        last_user_act="short_ack",
+        glance_text="记事本开着",
+        memory_key="goal_a",
+        memory_content=goal,
+        care_windows=(("dinner", "15:00", "19:00"),),
+        knowledge=_knowledge,
+    )
+    inner = InnerState(
+        rumination=[Rumination(id="thought-1", content="那份文档", created_at=now)]
+    )
+    ledger = ThoughtLedger(
+        speak_day="2026-09-10",
+        speak_count=2,
+        focus=ThoughtFocus(id="thought-1", text="那份文档", spoken=False),
+    )
+
+    def _one(kind: str, **trigger_kw: str):
+        return select_sources(
+            PendingTrigger(kind=kind, **trigger_kw),
+            now,
+            inner,
+            ledger,
+            ctx,
+        )
+
+    spontaneous = _one("spontaneous")
+    if spontaneous.cancelled or "【触发】" not in spontaneous.text:
+        _fail(f"spontaneous should render, got {spontaneous}")
+    if "自发间隔到了" not in spontaneous.text or "日记6" not in spontaneous.text:
+        _fail(f"spontaneous should keep the journal tail, got {spontaneous.text}")
+    if "日记0" in spontaneous.text:
+        _fail("spontaneous must not reach past the newest 6 journal lines")
+    if "自己发呆" not in spontaneous.text or "老师在改文档" not in spontaneous.text:
+        _fail("spontaneous should include every note")
+    if "更早一轮0" in spontaneous.text or "更早一轮1" not in spontaneous.text:
+        _fail(f"spontaneous should keep only the newest 8 turns, got {spontaneous.text}")
+    if "更早一轮8" not in spontaneous.text:
+        _fail("the newest turn should remain")
+    if "必须问候" in spontaneous.text or "系统事件" in spontaneous.text:
+        _fail("status text must not read like an instruction")
+    if calls:
+        _fail(f"a non-kivotos worry must not query knowledge, got {calls}")
+
+    short = select_sources(
+        PendingTrigger(kind="spontaneous"),
+        now,
+        InnerState(),
+        ThoughtLedger(),
+        SourceContext(turns=(("只有一轮", "嗯"), ("第二轮", "好"))),
+    )
+    if "只有一轮" not in short.text or "第二轮" not in short.text:
+        _fail(f"fewer than 8 turns should all remain, got {short.text}")
+
+    kivotos = select_sources(
+        PendingTrigger(kind="spontaneous"),
+        now,
+        InnerState(),
+        ThoughtLedger(focus=ThoughtFocus(id="f", text="基沃托斯的学生", spoken=False)),
+        SourceContext(knowledge=_knowledge),
+    )
+    if calls != ["基沃托斯的学生"] or "常识一" not in kivotos.text or "常识二" not in kivotos.text:
+        _fail(f"knowledge should be the focus query, at most 2, got {calls} {kivotos.text}")
+    if "常识三" in kivotos.text:
+        _fail("the third knowledge hit should be left out")
+
+    revisit = _one("revisit", focus_id="thought-1", memory_key="goal_a")
+    if "这一次回访 thought-1" not in revisit.text or "老师当时是short_ack" not in revisit.text:
+        _fail(f"revisit should name the concern and the user act, got {revisit.text}")
+    if "交报告" not in revisit.text or "已经说过" not in revisit.text:
+        _fail(f"revisit should quote the pointed memory, got {revisit.text}")
+
+    before_aftertaste = len(calls)
+    aftertaste = _one("aftertaste")
+    if "刚结束的话" not in aftertaste.text or "这一轮记得的档案" not in aftertaste.text:
+        _fail(f"aftertaste should reuse this round, got {aftertaste.text}")
+    if "这一轮用过的常识" not in aftertaste.text:
+        _fail("aftertaste should keep knowledge already used")
+    if len(calls) != before_aftertaste:
+        _fail("aftertaste must not start a new knowledge search")
+
+    arrived = _one("arrived")
+    if "【现状】" not in arrived.text or "离开了2小时" not in arrived.text:
+        _fail(f"arrived should state how long she was away, got {arrived.text}")
+    if "已经说过" not in arrived.text or "今天是教师节" not in arrived.text:
+        _fail(f"arrived should mark a spoken goal and the festival, got {arrived.text}")
+    if "晚饭窗口还没提过" not in arrived.text:
+        _fail(f"an open meal window should be a fact, got {arrived.text}")
+    if "日记0" in arrived.text or "日记6" not in arrived.text:
+        _fail("arrived should use the journal tail")
+
+    left = _one("left")
+    if "【瞥见】" in left.text or "记事本开着" in left.text:
+        _fail(f"left must not include the screen, got {left.text}")
+    if "更早一轮8" not in left.text or "更早一轮7" in left.text:
+        _fail(f"left should keep only the last round, got {left.text}")
+
+    glance = _one("glance")
+    if "【瞥见】" not in glance.text or "记事本开着" not in glance.text:
+        _fail(f"glance should carry the new summary, got {glance.text}")
+    if "老师在改文档" not in glance.text or "自己发呆" in glance.text:
+        _fail("glance notes should be the recent impression of the teacher")
+    empty = select_sources(
+        PendingTrigger(kind="glance"),
+        now,
+        InnerState(),
+        ThoughtLedger(),
+        SourceContext(glance_text="  "),
+    )
+    if not empty.cancelled or empty.text or "屏幕上看不见什么" in empty.text:
+        _fail(f"an empty glance should cancel the beat, got {empty}")
+
+    remembered = _one("memory")
+    if "【老师的档案】" not in remembered.text or "已经说过" not in remembered.text:
+        _fail(f"memory should quote the item and whether she said it, got {remembered.text}")
+
+    climate = _one("climate")
+    if "气氛是fragile" not in climate.text or "气氛刚变了" not in climate.text:
+        _fail(f"climate should name the band only, got {climate.text}")
+    if "0." in climate.text:
+        _fail("climate numbers must stay out")
+
+    packed = _one("consolidate")
+    if "【瞥见】" in packed.text or "禁止开口" in packed.text:
+        _fail(f"consolidate must not hide the screen or forbid speech, got {packed.text}")
+    if any(f"日记{i}" not in packed.text for i in range(7)):
+        _fail("consolidate should keep the whole day journal")
+    if "自己发呆" not in packed.text:
+        _fail("consolidate should keep every note")
+
+    crisis = select_sources(
+        PendingTrigger(kind="spontaneous"),
+        now,
+        InnerState(),
+        ThoughtLedger(),
+        SourceContext(
+            journal=("我想死", "普通的一句"),
+            turns=(("割腕", "嗯"),),
+        ),
+    )
+    if crisis.text.count("老师刚才很难过") != 1:
+        _fail(f"crisis should collapse to one sentence, got {crisis.text}")
+    if "我想死" in crisis.text or "割腕" in crisis.text:
+        _fail(f"crisis wording must not enter the prompt, got {crisis.text}")
+
+    added = fill_need(
+        "【当前时间】\n现在",
+        ["memory", "nope"],
+        SourceContext(reused_memories=("补上的档案",)),
+        now=now,
+    )
+    if "【老师的档案】" not in added or "补上的档案" not in added or "nope" in added:
+        _fail(f"fill_need should add only known sections, got {added}")
+    print("  ok")
+
+
 def main() -> None:
     test_missing_empty_and_corrupt_ledger()
     test_ledger_roundtrip()
@@ -487,6 +678,7 @@ def main() -> None:
     test_thought_rumination_does_not_drop_impulses()
     test_gate_priority_and_skips()
     test_thought_tick_logs_without_writing()
+    test_sources_for_each_trigger()
     print("all thought unit tests passed")
 
 
