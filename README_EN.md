@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <em>Version: 3.2.1</em>
+  <em>Version: 1.13.1</em>
 </p>
 
 <p align="center">
