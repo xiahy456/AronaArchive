@@ -49,6 +49,7 @@ class ThoughtDecision:
     kind: str = ""
     skip_reason: str = ""
     focus_id: str = ""
+    queued: PendingTrigger | None = None
 
 
 def decide_thought(
@@ -66,7 +67,7 @@ def decide_thought(
     chosen = _pick_queued(now, inner, ledger, facts, limits)
     if chosen is not None:
         kind, focus_id = _maybe_revisit(now, inner, ledger, facts, limits, chosen)
-        return ThoughtDecision(kind=kind, focus_id=focus_id)
+        return ThoughtDecision(kind=kind, focus_id=focus_id, queued=chosen)
     return _synthesize_spontaneous(now, inner, ledger, facts, limits)
 
 

@@ -126,6 +126,9 @@ class ThoughtLedger:
     last_thought_spoke_at: datetime | None = None
     speak_day: str = ""
     speak_count: int = 0
+    thought_hour: str = ""
+    thought_count: int = 0
+    last_feeling: str = ""
     last_crisis_at: datetime | None = None
     last_glance_seen: str = ""
     seen_memory_keys: list[str] = field(default_factory=list)
@@ -159,6 +162,9 @@ class ThoughtLedger:
             "last_thought_spoke_at": format_life_dt(self.last_thought_spoke_at),
             "speak_day": self.speak_day,
             "speak_count": self.speak_count,
+            "thought_hour": self.thought_hour,
+            "thought_count": self.thought_count,
+            "last_feeling": self.last_feeling,
             "last_crisis_at": format_life_dt(self.last_crisis_at),
             "last_glance_seen": self.last_glance_seen,
             "seen_memory_keys": list(self.seen_memory_keys),
@@ -198,12 +204,24 @@ class ThoughtLedger:
             speak_count = 0
         if speak_count < 0:
             speak_count = 0
+        try:
+            thought_count = int(data.get("thought_count") or 0)
+        except (TypeError, ValueError):
+            thought_count = 0
+        if thought_count < 0:
+            thought_count = 0
+        feeling = str(data.get("last_feeling") or "").strip()
+        if feeling not in {"calm", "bright", "weary", "preoccupied", "sleepy"}:
+            feeling = ""
         ledger = cls(
             last_thought_at=parse_life_dt(data.get("last_thought_at")),
             last_focus=last_focus,
             last_thought_spoke_at=parse_life_dt(data.get("last_thought_spoke_at")),
             speak_day=str(data.get("speak_day") or "").strip(),
             speak_count=speak_count,
+            thought_hour=str(data.get("thought_hour") or "").strip(),
+            thought_count=thought_count,
+            last_feeling=feeling,
             last_crisis_at=parse_life_dt(data.get("last_crisis_at")),
             last_glance_seen=glance,
             seen_memory_keys=keys,

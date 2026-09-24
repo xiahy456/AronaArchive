@@ -23,7 +23,7 @@ from datetime import datetime
 from ...proactive.care import in_window
 from ...proactive.festival import match_festival
 from ...proactive.goal import goal_is_due_soon
-from ...query_time import format_clock_stamp
+from ...query_time import format_clock_stamp, format_full_datetime
 from ...safety import is_crisis_text
 from ..journal import ACTIVITY_SUMMARY
 from ..state import THOUGHT_RUMINATION_PREFIX, InnerState
@@ -101,8 +101,8 @@ class SourceContext:
     seconds_since_arona: float | None = None
     journal: tuple[str, ...] = ()
     notes: tuple[str, ...] = ()
-    turns: tuple[tuple[str, str], ...] = ()
-    ended_turns: tuple[tuple[str, str], ...] = ()
+    turns: tuple[tuple, ...] = ()
+    ended_turns: tuple[tuple, ...] = ()
     reused_memories: tuple[str, ...] = ()
     reused_knowledge: tuple[str, ...] = ()
     goals: tuple[tuple[str, str], ...] = ()
@@ -253,7 +253,7 @@ def _today(
     if ctx.seconds_since_arona is not None:
         rows.append(_keep(f"距她上次开口{_ago(ctx.seconds_since_arona)}", seen))
     count = ledger.speak_count if ledger.speak_day == now.date().isoformat() else 0
-    rows.append(_keep(f"今天因思考开过{max(0, int(count))}次口", seen))
+    rows.append(_keep(f"阿洛娜今天因思考开过{max(0, int(count))}次口", seen))
     if kind == "consolidate":
         journal = list(ctx.journal)
     elif kind in {"spontaneous", "arrived"}:
@@ -388,18 +388,40 @@ def _need_rows(
 
 
 def _format_turns(
-    turns: Sequence[tuple[str, str]],
+    turns: Sequence[tuple],
     seen: dict[str, bool],
 ) -> list[str]:
     rows: list[str] = []
-    for teacher, arona in turns:
+    for turn in turns:
+        teacher = str(turn[0] or "") if turn else ""
+        arona = str(turn[1] or "") if len(turn) > 1 else ""
+        teacher_at = _talk_time(turn[2]) if len(turn) > 2 else None
+        arona_at = _talk_time(turn[3]) if len(turn) > 3 else None
         teacher_line = _keep(teacher, seen)
         arona_line = _keep(arona, seen)
         if teacher_line:
-            rows.append(f"老师: {teacher_line}")
+            rows.append(_speak_line("老师", teacher_line, teacher_at))
         if arona_line:
-            rows.append(f"阿洛娜: {arona_line}")
+            rows.append(_speak_line("阿洛娜", arona_line, arona_at))
     return rows
+
+
+def _speak_line(who: str, text: str, at: datetime | None) -> str:
+    if at is None:
+        return f"{who}: {text}"
+    return f"[{format_full_datetime(at)}] {who}: {text}"
+
+
+def _talk_time(raw: object) -> datetime | None:
+    if isinstance(raw, datetime):
+        return raw
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
 
 
 def _focus_text(

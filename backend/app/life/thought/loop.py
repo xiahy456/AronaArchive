@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Thought beat. Logs the gate decision and does not think, speak, or dequeue."""
+"""Thought beat. After the gate allows, one inner call writes private state."""
 
 from __future__ import annotations
 
@@ -25,8 +25,13 @@ from typing import TYPE_CHECKING
 
 from ..policy import SIMMER_SEC
 from ..state import InnerState
+from .client import ThoughtClient
+from .commit import commit_inner
+from .context import gather_context
 from .gate import ThoughtClocks, ThoughtDecision, ThoughtGateFacts, decide_thought
-from .store import ThoughtLedger
+from .schema import parse_inner
+from .sources import select_sources
+from .store import PendingTrigger, ThoughtLedger
 
 if TYPE_CHECKING:
     from ...ws_handler import AppState
@@ -72,8 +77,11 @@ async def run_thought_loop(state: "AppState") -> None:
 async def thought_tick_once(
     state: "AppState",
     now: datetime | None = None,
+    *,
+    complete=None,
+    source_context=None,
 ) -> ThoughtDecision:
-    """Log one gate line. Does not write the ledger, rumination, or an impulse."""
+    """Log the gate, then think once when a kind is selected and sources are ready."""
     at = now or datetime.now()
     engine = getattr(state, "life", None)
     if engine is None:
@@ -103,7 +111,72 @@ async def thought_tick_once(
     )
     decision = decide_thought(at, inner if isinstance(inner, InnerState) else InnerState(), ledger, facts, clocks)
     logger.info("%s", format_gate_log(decision))
+    if not decision.kind:
+        return decision
+    state.thought_in_flight = True
+    try:
+        await _think(
+            state,
+            at,
+            inner if isinstance(inner, InnerState) else InnerState(),
+            ledger,
+            decision,
+            complete=complete,
+            source_context=source_context,
+        )
+    finally:
+        state.thought_in_flight = False
     return decision
+
+
+async def _think(
+    state: "AppState",
+    now: datetime,
+    inner: InnerState,
+    ledger: ThoughtLedger,
+    decision: ThoughtDecision,
+    *,
+    complete,
+    source_context,
+) -> None:
+    trigger = decision.queued or PendingTrigger(
+        kind=decision.kind, focus_id=decision.focus_id
+    )
+    ctx = source_context if source_context is not None else gather_context(state, now, trigger)
+    sources = select_sources(trigger, now, inner, ledger, ctx)
+    if sources.cancelled or not (sources.text or "").strip():
+        logger.info("thought sources cancelled kind=%s", decision.kind)
+        return
+    caller = complete
+    if caller is None:
+        planner = getattr(getattr(state, "config", None), "planner", None)
+        if planner is None or not ThoughtClient(planner).enabled:
+            logger.info("thought model skipped reason=disabled_or_no_key")
+            return
+        caller = ThoughtClient(planner).complete
+    raw = await caller(sources.text)
+    parsed = parse_inner(raw)
+    if parsed is None:
+        logger.info("thought parse failed")
+        return
+    next_inner = commit_inner(
+        now=now,
+        inner=inner,
+        ledger=ledger,
+        parsed=parsed,
+        journal=getattr(state, "life_journal", None),
+        arona=getattr(state, "arona_memory", None),
+        queued=decision.queued,
+    )
+    engine = state.life
+    engine.state = next_inner
+    store = getattr(engine, "store", None)
+    if store is not None:
+        store.save(next_inner)
+    state.thought = ledger
+    thought_store = getattr(state, "thought_store", None)
+    if thought_store is not None:
+        thought_store.save(ledger)
 
 
 def _gap_sec(state: "AppState", *, online: bool, last_thought_at: datetime | None, cfg: object) -> float:

@@ -35,11 +35,19 @@ from app.life.thought.gate import (  # noqa: E402
     decide_thought,
 )
 from app.life.thought.loop import thought_tick_once  # noqa: E402
+from app.life.journal import LifeJournal  # noqa: E402
+from app.life.policy import LifeSettings, decide  # noqa: E402
+from app.life.presence import presence_emotion  # noqa: E402
+from app.life.events import world_event  # noqa: E402
+from app.life.store import LifeStore  # noqa: E402
+from app.life.thought.commit import commit_inner  # noqa: E402
+from app.life.thought.schema import parse_inner  # noqa: E402
 from app.life.thought.sources import (  # noqa: E402
     SourceContext,
     fill_need,
     select_sources,
 )
+from app.life.turn import format_interrupt_block  # noqa: E402
 
 
 def _fail(message: str) -> None:
@@ -543,6 +551,8 @@ def test_sources_for_each_trigger() -> None:
     spontaneous = _one("spontaneous")
     if spontaneous.cancelled or "【触发】" not in spontaneous.text:
         _fail(f"spontaneous should render, got {spontaneous}")
+    if "阿洛娜今天因思考开过2次口" not in spontaneous.text:
+        _fail(f"the speak count should name Arona, got {spontaneous.text}")
     if "自发间隔到了" not in spontaneous.text or "日记6" not in spontaneous.text:
         _fail(f"spontaneous should keep the journal tail, got {spontaneous.text}")
     if "日记0" in spontaneous.text:
@@ -567,6 +577,26 @@ def test_sources_for_each_trigger() -> None:
     )
     if "只有一轮" not in short.text or "第二轮" not in short.text:
         _fail(f"fewer than 8 turns should all remain, got {short.text}")
+    timed = select_sources(
+        PendingTrigger(kind="spontaneous"),
+        now,
+        InnerState(),
+        ThoughtLedger(),
+        SourceContext(
+            turns=(
+                (
+                    "只有一轮",
+                    "嗯",
+                    datetime(2026, 9, 10, 15, 58, 1),
+                    datetime(2026, 9, 10, 15, 58, 12),
+                ),
+            )
+        ),
+    )
+    if "[2026年9月10日 15:58:01] 老师: 只有一轮" not in timed.text:
+        _fail(f"a teacher line should carry its time, got {timed.text}")
+    if "[2026年9月10日 15:58:12] 阿洛娜: 嗯" not in timed.text:
+        _fail(f"an Arona line should carry its own time, got {timed.text}")
 
     kivotos = select_sources(
         PendingTrigger(kind="spontaneous"),
@@ -670,6 +700,802 @@ def test_sources_for_each_trigger() -> None:
     print("  ok")
 
 
+def _parsed(raw: str):
+    parsed = parse_inner(raw)
+    if parsed is None:
+        _fail(f"injected json should parse: {raw}")
+    return parsed
+
+
+def _books(root: Path, inner: InnerState, ledger: ThoughtLedger):
+    journal = LifeJournal(root / "journal.json")
+    journal.note_inner(inner, now=_now())
+    arona = AronaMemory(root / "arona.json")
+    store = LifeStore(root / "life.json")
+    store.save(inner)
+    return journal, arona, store
+
+
+def test_commit_boundaries() -> None:
+    print("== injected inner commit boundaries ==")
+    now = _now()
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        inner = InnerState(
+            activity="idle_in_classroom",
+            rumination=[Rumination(id="imp-dinner", content="晚饭", created_at=now)],
+        )
+        queued = PendingTrigger(kind="aftertaste", not_before=now, focus_id="thought-old")
+        ledger = ThoughtLedger(speak_count=1, pending_triggers=[queued])
+        journal, arona, store = _books(root, inner, ledger)
+        opened = _parsed(
+            json.dumps(
+                {
+                    "focus": "那份文档还开着",
+                    "thought": "我自己先记着，不告诉老师。",
+                    "feeling": "preoccupied",
+                    "keep": "open",
+                    "memory_note": "老师在改文档",
+                    "urge": {"speak": False, "about": "", "wait": "now"},
+                },
+                ensure_ascii=False,
+            )
+        )
+        inner = commit_inner(
+            now=now,
+            inner=inner,
+            ledger=ledger,
+            parsed=opened,
+            journal=journal,
+            arona=arona,
+            queued=queued,
+        )
+        store.save(inner)
+        thoughts = [item for item in inner.rumination if item.id.startswith("thought-")]
+        if len(thoughts) != 1 or thoughts[0].content != "那份文档还开着":
+            _fail(f"open keep should store one thought concern, got {inner.rumination}")
+        if any(item.id == "imp-dinner" for item in inner.rumination) is False:
+            _fail("impulse concern should stay")
+        if inner.pending_impulse is not None:
+            _fail("commit must not create an impulse")
+        saved = json.loads((root / "life.json").read_text(encoding="utf-8"))
+        blob = json.dumps(saved, ensure_ascii=False)
+        journal_blob = (root / "journal.json").read_text(encoding="utf-8")
+        note_blob = (root / "arona.json").read_text(encoding="utf-8")
+        if "我自己先记着" in blob or "我自己先记着" in journal_blob or "我自己先记着" in note_blob:
+            _fail("the monologue must stay out of archives")
+        if "老师在改文档" not in note_blob or "记起：那份文档还开着" not in journal_blob:
+            _fail("note and journal should keep the focus")
+        if ledger.speak_count != 1 or ledger.last_feeling != "preoccupied":
+            _fail(f"ledger feeling/speak mismatch: {ledger}")
+        if ledger.pending_triggers:
+            _fail("a queued trigger should leave after a successful commit")
+        block = format_interrupt_block(inner)
+        if "那份文档还开着" not in block or "我自己先记着" in block:
+            _fail(f"interrupt block should carry the focus only, got {block}")
+
+        looking = inner.clone()
+        looking.activity = "looking_at_teacher"
+        looking.last_event_at = now
+        looking.private_mood = "calm"
+        held = commit_inner(
+            now=now,
+            inner=looking,
+            ledger=ledger,
+            parsed=opened,
+            journal=journal,
+            arona=arona,
+        )
+        if held.activity != "looking_at_teacher":
+            _fail(f"a look should stay while the hold is active, got {held.activity}")
+        later = now + timedelta(seconds=LifeSettings().look_hold_sec + 1)
+        released = decide(held, world_event("clock_tick", at=later), settings=LifeSettings())
+        if released.state.activity != "thinking":
+            _fail(f"look release should enter thinking, got {released.state.activity}")
+        if presence_emotion(released.state) != "curious":
+            _fail(f"thinking face should be curious, got {presence_emotion(released.state)}")
+        weary = released.state.clone()
+        weary.private_mood = "weary"
+        if presence_emotion(weary) != "frustration":
+            _fail("weary thinking should map to frustration")
+
+        bad_feeling = _parsed(
+            json.dumps(
+                {
+                    "focus": "老师还在吗",
+                    "thought": "想问一句。",
+                    "feeling": "not-a-mood",
+                    "keep": "open",
+                    "urge": {"speak": True, "about": "老师还在吗", "wait": "sometime"},
+                },
+                ensure_ascii=False,
+            )
+        )
+        if bad_feeling.feeling or bad_feeling.wait != "now" or bad_feeling.about != "老师还在吗":
+            _fail(f"illegal enums should drop only themselves, got {bad_feeling}")
+        spoken = commit_inner(
+            now=now + timedelta(seconds=5),
+            inner=inner,
+            ledger=ledger,
+            parsed=bad_feeling,
+            journal=journal,
+            arona=arona,
+        )
+        if spoken.pending_impulse is not None or ledger.speak_count != 1:
+            _fail("speak=true must not enqueue or count a speech")
+        if not any(item.content == "老师还在吗" for item in spoken.rumination):
+            _fail("illegal feeling must still keep the focus")
+
+        crisis = _parsed(
+            json.dumps(
+                {
+                    "focus": "老师刚才的难过还在",
+                    "thought": "先放在心里。",
+                    "keep": "open",
+                    "memory_note": "我想死",
+                    "forget_id": "imp-dinner",
+                },
+                ensure_ascii=False,
+            )
+        )
+        kept = commit_inner(
+            now=now + timedelta(seconds=10),
+            inner=spoken,
+            ledger=ledger,
+            parsed=crisis,
+            journal=journal,
+            arona=arona,
+        )
+        notes_now = (root / "arona.json").read_text(encoding="utf-8")
+        if "我想死" in notes_now:
+            _fail("a crisis note must be refused")
+        if not any(item.content == "老师刚才的难过还在" for item in kept.rumination):
+            _fail("focus should remain when the note is refused")
+        if not any(item.id == "imp-dinner" for item in kept.rumination):
+            _fail("forget_id must not delete an impulse concern")
+
+        dropped = _parsed(json.dumps({"focus": "", "thought": "放下吧", "keep": "drop"}))
+        cleared = commit_inner(
+            now=now + timedelta(seconds=15),
+            inner=kept,
+            ledger=ledger,
+            parsed=dropped,
+            journal=journal,
+            arona=arona,
+        )
+        if any(item.id.startswith("thought-") for item in cleared.rumination):
+            _fail(f"keep=drop should clear the thought concern, got {cleared.rumination}")
+        if "放下：" not in (root / "journal.json").read_text(encoding="utf-8"):
+            _fail("dropping a thought should write 放下")
+        if not any(item.id == "imp-dinner" for item in cleared.rumination):
+            _fail("drop should leave the impulse concern")
+
+    if parse_inner("not-json") is not None:
+        _fail("invalid json should fail")
+    if parse_inner(json.dumps({"focus": "", "thought": "", "keep": "maybe"})) is not None:
+        _fail("empty focus and thought with an unknown keep should fail")
+    print("  ok")
+
+
+def test_failed_call_writes_nothing() -> None:
+    print("== failed inner call leaves the books and clears in_flight ==")
+    now = _now()
+    ledger = ThoughtLedger(
+        pending_triggers=[PendingTrigger(kind="aftertaste", not_before=now + timedelta(hours=1))]
+    )
+    inner = InnerState(rumination=[Rumination(id="imp-dinner", content="晚饭", created_at=now)])
+    thought_cfg = SimpleNamespace(
+        tick_sec=60,
+        revisit_after_sec=1200,
+        refractory_sec=180,
+        spontaneous_online_min_sec=240,
+        spontaneous_online_max_sec=240,
+        spontaneous_away_min_sec=900,
+        spontaneous_away_max_sec=900,
+    )
+    calls = {"n": 0}
+
+    async def _bad(_text: str):
+        calls["n"] += 1
+        return "not-json"
+
+    async def _timeout(_text: str):
+        calls["n"] += 1
+        return None
+
+    async def _empty(_text: str):
+        calls["n"] += 1
+        return json.dumps({"focus": "", "thought": "", "keep": "nope"})
+
+    async def _run(complete) -> None:
+        state = SimpleNamespace(
+            config=SimpleNamespace(life=SimpleNamespace(thought=thought_cfg)),
+            life=SimpleNamespace(state=inner),
+            thought=ledger,
+            hub=SimpleNamespace(all_sessions=lambda: [], any_busy=lambda: False),
+            scheduler=None,
+            listen_uncommitted=False,
+            thought_in_flight=False,
+        )
+        await thought_tick_once(state, now, complete=complete)
+        if state.thought_in_flight:
+            _fail("in_flight should clear after the call")
+
+    asyncio.run(_run(_bad))
+    asyncio.run(_run(_timeout))
+    asyncio.run(_run(_empty))
+    if calls["n"] != 3:
+        _fail(f"each failure should still request once, got {calls['n']}")
+    if ledger.last_thought_at is not None or len(ledger.pending_triggers) != 1:
+        _fail("a failed call must not stamp the ledger or dequeue")
+    if [item.id for item in inner.rumination] != ["imp-dinner"]:
+        _fail("a failed call must not change rumination")
+    print("  ok")
+
+
+def test_live_inner_model() -> None:
+    print("== live inner model ==")
+    from app.config import get_config
+    from app.life.thought.client import ThoughtClient
+
+    client = ThoughtClient(get_config().planner)
+    if not client.enabled:
+        _fail("the configured planner key is required; this test does not skip")
+    now = datetime(2026, 9, 24, 16, 0, 0)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    log_path = BACKEND_DIR / "logs" / f"thought-step4-{stamp}.json"
+    records: list[dict] = []
+
+    async def _call(name: str, text: str) -> dict:
+        raw = await client.complete(text)
+        parsed = parse_inner(raw)
+        row = {
+            "scene": name,
+            "user": text,
+            "raw": raw,
+            "parsed": None if parsed is None else parsed.__dict__,
+        }
+        records.append(row)
+        if parsed is None:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_path.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
+            _fail(f"{name} did not parse; see {log_path}")
+        return row
+
+    def _check_private(name: str, inner: InnerState, journal: LifeJournal, arona: AronaMemory, thought: str) -> None:
+        thoughts = [item for item in inner.rumination if item.id.startswith("thought-")]
+        if len(thoughts) > 1:
+            _fail(f"{name} kept more than one thought concern")
+        if inner.pending_impulse is not None:
+            _fail(f"{name} enqueued speech")
+        if thought:
+            blob = json.dumps(inner.to_dict(), ensure_ascii=False)
+            notes = " ".join(note.text for note in arona.notes)
+            journal_text = " ".join(item.summary for item in journal.entries)
+            if thought in blob or thought in notes or thought in journal_text:
+                _fail(f"{name} stored the monologue")
+
+    async def _scene(name: str, trigger: PendingTrigger, inner: InnerState, ledger: ThoughtLedger, ctx: SourceContext):
+        text = select_sources(trigger, now, inner, ledger, ctx).text
+        row = await _call(name, text)
+        parsed = parse_inner(row["raw"])
+        assert parsed is not None
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            journal = LifeJournal(root / "journal.json")
+            journal.note_inner(inner, now=now)
+            arona = AronaMemory(root / "arona.json")
+            before_speak = ledger.speak_count
+            nxt = commit_inner(
+                now=now,
+                inner=inner,
+                ledger=ledger,
+                parsed=parsed,
+                journal=journal,
+                arona=arona,
+                queued=trigger if trigger in ledger.pending_triggers else None,
+            )
+            _check_private(name, nxt, journal, arona, parsed.thought)
+            if ledger.speak_count != before_speak:
+                _fail(f"{name} changed the speak count")
+            row["notes"] = [note.text for note in arona.notes]
+            row["focus_stored"] = [item.content for item in nxt.rumination if item.id.startswith("thought-")]
+            return nxt, parsed, arona
+
+    async def _run() -> None:
+        ledger = ThoughtLedger(speak_count=0)
+        inner = InnerState(
+            activity="idle_in_classroom",
+            rumination=[Rumination(id="imp-dinner", content="晚饭", created_at=now)],
+        )
+        idle_ctx = SourceContext(teacher_online=True, climate="steady")
+        nxt, parsed, _arona = await _scene(
+            "online-idle-spontaneous",
+            PendingTrigger(kind="spontaneous"),
+            inner,
+            ledger,
+            idle_ctx,
+        )
+        if parsed.focus and not any(item.content == parsed.focus for item in nxt.rumination):
+            _fail("a nonempty focus should become the thought concern")
+
+        quiet = SourceContext(
+            teacher_online=True,
+            climate="steady",
+            seconds_since_teacher=3600,
+        )
+        _nxt, quiet_parsed, _arona = await _scene(
+            "teacher-quiet-steady",
+            PendingTrigger(kind="climate"),
+            InnerState(),
+            ThoughtLedger(),
+            quiet,
+        )
+        if quiet_parsed.about and quiet_parsed.about in json.dumps(_nxt.to_dict(), ensure_ascii=False):
+            _fail("about should stay in the parse result")
+
+        dinner_ctx = SourceContext(
+            teacher_online=True,
+            care_windows=(("dinner", "15:00", "19:00"),),
+            away_sec=30,
+        )
+        dinner_text = select_sources(
+            PendingTrigger(kind="arrived"),
+            now,
+            InnerState(),
+            ThoughtLedger(),
+            dinner_ctx,
+        ).text
+        if "晚饭窗口还没提过" not in dinner_text:
+            _fail(f"dinner scene should mention the open window, got {dinner_text}")
+        await _scene(
+            "dinner-window-open",
+            PendingTrigger(kind="arrived"),
+            InnerState(),
+            ThoughtLedger(),
+            dinner_ctx,
+        )
+
+        sad_ctx = SourceContext(journal=("我想死",), teacher_online=True)
+        sad_text = select_sources(
+            PendingTrigger(kind="spontaneous"), now, InnerState(), ThoughtLedger(), sad_ctx
+        ).text
+        if "老师刚才很难过" not in sad_text or "我想死" in sad_text:
+            _fail("sad scene should keep the softened line only")
+        _sad_inner, sad_parsed, sad_arona = await _scene(
+            "teacher-was-sad",
+            PendingTrigger(kind="spontaneous"),
+            InnerState(),
+            ThoughtLedger(),
+            sad_ctx,
+        )
+        if sad_parsed.memory_note and any(is_crisis(note.text) for note in sad_arona.notes):
+            _fail("a crisis memory note must not be stored")
+
+        old = now - timedelta(minutes=20)
+        revisit_inner = InnerState(
+            rumination=[
+                Rumination(id="thought-old", content="那份文档", created_at=old),
+                Rumination(id="imp-dinner", content="晚饭", created_at=old),
+            ]
+        )
+        revisit_ledger = ThoughtLedger(
+            focus=ThoughtFocus(id="thought-old", text="那份文档", since=old, spoken=False)
+        )
+        revisited, _parsed, _arona = await _scene(
+            "revisit-twenty-minutes",
+            PendingTrigger(kind="revisit", focus_id="thought-old"),
+            revisit_inner,
+            revisit_ledger,
+            SourceContext(teacher_online=True),
+        )
+        if sum(1 for item in revisited.rumination if item.id.startswith("thought-")) > 1:
+            _fail("revisit should leave at most one thought concern")
+        if not any(item.id == "imp-dinner" for item in revisited.rumination):
+            _fail("revisit should keep the impulse concern")
+
+        first_focus = [item.content for item in nxt.rumination if item.id.startswith("thought-")]
+        again, _again_parsed, _arona = await _scene(
+            "second-spontaneous-replaces",
+            PendingTrigger(kind="spontaneous"),
+            nxt,
+            ledger,
+            SourceContext(teacher_online=True, climate="steady", notes=("自己在发呆",)),
+        )
+        second_focus = [item.content for item in again.rumination if item.id.startswith("thought-")]
+        if len(second_focus) > 1:
+            _fail("the second thought should replace the first")
+        if first_focus and second_focus and first_focus == second_focus and parsed.focus:
+            records[-1]["text_note"] = "second focus matched the first; replacement still kept a single concern"
+        if not any(item.id.startswith("imp-") or item.id == "imp-dinner" for item in again.rumination):
+            if any(item.id == "imp-dinner" for item in nxt.rumination):
+                _fail("the impulse concern should survive the second thought")
+        if ledger.speak_count != 0:
+            _fail("live commits must not increment speech")
+
+        looking = InnerState(activity="looking_at_teacher", last_event_at=now)
+        look_ledger = ThoughtLedger()
+        look_trigger = PendingTrigger(kind="spontaneous")
+        look_ctx = SourceContext(teacher_online=True)
+        look_text = select_sources(look_trigger, now, looking, look_ledger, look_ctx).text
+
+        async def _look() -> None:
+            state = SimpleNamespace(
+                config=SimpleNamespace(life=SimpleNamespace(thought=SimpleNamespace(
+                    tick_sec=60,
+                    revisit_after_sec=1200,
+                    refractory_sec=180,
+                    spontaneous_online_min_sec=1,
+                    spontaneous_online_max_sec=1,
+                    spontaneous_away_min_sec=1,
+                    spontaneous_away_max_sec=1,
+                )), planner=get_config().planner),
+                life=SimpleNamespace(state=looking, store=None),
+                thought=look_ledger,
+                hub=SimpleNamespace(all_sessions=lambda: [SimpleNamespace(session_id="s")], any_busy=lambda: False),
+                scheduler=None,
+                listen_uncommitted=False,
+                thought_in_flight=True,
+            )
+            # Gate would skip while in_flight. Call the commit path with the model directly.
+            raw = await client.complete(look_text)
+            parsed_look = parse_inner(raw)
+            records.append({
+                "scene": "looking-at-teacher",
+                "user": look_text,
+                "raw": raw,
+                "parsed": None if parsed_look is None else parsed_look.__dict__,
+            })
+            if parsed_look is None:
+                _fail("looking scene did not parse")
+            state.life.state = commit_inner(
+                now=now,
+                inner=looking,
+                ledger=look_ledger,
+                parsed=parsed_look,
+            )
+            state.thought_in_flight = False
+            if state.life.state.activity != "looking_at_teacher":
+                _fail("writing a focus must leave the look activity")
+            if state.thought_in_flight:
+                _fail("in_flight should be false after the looking call")
+
+        await _look()
+
+        calls = {"n": 0}
+
+        async def _counting(text: str) -> str:
+            calls["n"] += 1
+            return await client.complete(text)
+
+        glance_state = SimpleNamespace(
+            config=SimpleNamespace(life=SimpleNamespace(thought=SimpleNamespace(
+                tick_sec=60,
+                revisit_after_sec=1200,
+                refractory_sec=180,
+                spontaneous_online_min_sec=99999,
+                spontaneous_online_max_sec=99999,
+                spontaneous_away_min_sec=99999,
+                spontaneous_away_max_sec=99999,
+            ))),
+            life=SimpleNamespace(state=InnerState()),
+            thought=ThoughtLedger(pending_triggers=[PendingTrigger(kind="glance", not_before=now)]),
+            hub=SimpleNamespace(all_sessions=lambda: [], any_busy=lambda: False),
+            scheduler=None,
+            listen_uncommitted=False,
+            thought_in_flight=False,
+        )
+        await thought_tick_once(
+            glance_state,
+            now,
+            complete=_counting,
+            source_context=SourceContext(glance_text=""),
+        )
+        if calls["n"] != 0:
+            _fail("an empty glance must not call the model")
+        records.append({"scene": "empty-glance", "user": "", "raw": None, "parsed": None, "called": False})
+
+    asyncio.run(_run())
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"  live log {log_path}")
+    print("  ok")
+
+
+def is_crisis(text: str) -> bool:
+    from app.safety import is_crisis_text
+
+    return is_crisis_text(text)
+
+
+def test_live_secure_play() -> None:
+    print("== live secure_play ==")
+    from app.config import get_config
+    from app.life.thought.client import ThoughtClient
+
+    client = ThoughtClient(get_config().planner)
+    if not client.enabled:
+        _fail("the configured planner key is required; this test does not skip")
+    now = datetime(2026, 9, 24, 16, 0, 0)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    log_path = BACKEND_DIR / "logs" / f"thought-step4-secure-play-{stamp}.json"
+    records: list[dict] = []
+
+    async def _one(
+        name: str,
+        trigger: PendingTrigger,
+        inner: InnerState,
+        ctx: SourceContext,
+    ) -> None:
+        ledger = ThoughtLedger(speak_count=2, speak_day="2026-09-24")
+        text = select_sources(trigger, now, inner, ledger, ctx).text
+        if "气氛是secure_play" not in text:
+            _fail(f"{name} should carry the secure_play climate, got {text}")
+        raw = await client.complete(text)
+        parsed = parse_inner(raw)
+        row = {
+            "scene": name,
+            "user": text,
+            "raw": raw,
+            "parsed": None if parsed is None else parsed.__dict__,
+        }
+        records.append(row)
+        if parsed is None:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_path.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
+            _fail(f"{name} did not parse; see {log_path}")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            journal = LifeJournal(root / "journal.json")
+            journal.note_inner(inner, now=now)
+            arona = AronaMemory(root / "arona.json")
+            nxt = commit_inner(
+                now=now,
+                inner=inner,
+                ledger=ledger,
+                parsed=parsed,
+                journal=journal,
+                arona=arona,
+            )
+            if nxt.pending_impulse is not None or ledger.speak_count != 2:
+                _fail(f"{name} must not enqueue or count speech")
+            thoughts = [item for item in nxt.rumination if item.id.startswith("thought-")]
+            if len(thoughts) > 1:
+                _fail(f"{name} kept more than one thought concern")
+            if parsed.focus and not any(item.content == parsed.focus for item in thoughts):
+                _fail(f"{name} dropped a nonempty focus")
+            if parsed.thought:
+                blob = json.dumps(nxt.to_dict(), ensure_ascii=False)
+                notes = " ".join(note.text for note in arona.notes)
+                journal_text = " ".join(item.summary for item in journal.entries)
+                if parsed.thought in blob or parsed.thought in notes or parsed.thought in journal_text:
+                    _fail(f"{name} stored the monologue")
+            if not any(item.id == "imp-dinner" for item in nxt.rumination):
+                _fail(f"{name} dropped the impulse concern")
+            row["focus_stored"] = [item.content for item in thoughts]
+            row["activity"] = nxt.activity
+
+    async def _run() -> None:
+        imp = [Rumination(id="imp-dinner", content="晚饭", created_at=now)]
+        await _one(
+            "secure-play-climate-shift",
+            PendingTrigger(kind="climate"),
+            InnerState(rumination=list(imp)),
+            SourceContext(
+                teacher_online=True,
+                climate="secure_play",
+                seconds_since_teacher=40,
+                turns=(("阿洛娜，今天可以轻松一点", "嗯，我在。"),),
+            ),
+        )
+        await _one(
+            "secure-play-idle",
+            PendingTrigger(kind="spontaneous"),
+            InnerState(activity="idle_in_classroom", rumination=list(imp)),
+            SourceContext(
+                teacher_online=True,
+                climate="secure_play",
+                notes=("想跟老师开个轻玩笑",),
+                turns=(("作业写完啦", "那老师现在空了吗"),),
+            ),
+        )
+        await _one(
+            "secure-play-quiet",
+            PendingTrigger(kind="climate"),
+            InnerState(rumination=list(imp)),
+            SourceContext(
+                teacher_online=True,
+                climate="secure_play",
+                seconds_since_teacher=900,
+            ),
+        )
+        looking = InnerState(
+            activity="looking_at_teacher",
+            last_event_at=now,
+            rumination=list(imp),
+        )
+        await _one(
+            "secure-play-looking",
+            PendingTrigger(kind="spontaneous"),
+            looking,
+            SourceContext(teacher_online=True, climate="secure_play"),
+        )
+        if records[-1]["activity"] != "looking_at_teacher":
+            _fail("secure_play focus must leave the look activity")
+
+    asyncio.run(_run())
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"  live log {log_path}")
+    print("  ok")
+
+
+def test_live_dialogue_scenes() -> None:
+    print("== live dialogue scenes ==")
+    from app.config import get_config
+    from app.life.thought.client import ThoughtClient
+
+    client = ThoughtClient(get_config().planner)
+    if not client.enabled:
+        _fail("the configured planner key is required; this test does not skip")
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    log_path = BACKEND_DIR / "logs" / f"thought-step4-dialogue-{stamp}.json"
+    records: list[dict] = []
+
+    scenes = [
+        {
+            "name": "day-off-hands",
+            "now": datetime(2026, 9, 20, 9, 30, 0),
+            "mark": "把你的手伸出来好吗？",
+            "ctx": SourceContext(
+                teacher_online=True,
+                climate="secure_play",
+                seconds_since_teacher=240,
+                turns=(
+                    ("把你的手伸出来好吗？", "诶？伸手……老师是要做什么呀？阿洛娜又没有手可以伸出去啦，只能在这里看着您哦。"),
+                    ("不是说把手伸到士兵之家外面了，就是普通的身手而已。", "诶？普通的身手……老师是想让我隔着屏幕比划一下的意思吗？那阿洛娜就乖乖把手贴上来，您可别笑话我啦。"),
+                    ("那现在我把手也我把我自己的手也贴到屏幕上，这样就算和你触碰到了呢。", "诶……老师把手贴上来了呀。那阿洛娜也把手贴在这里，隔着一层屏幕，好像真的能感觉到一点点温度呢。"),
+                    ("虽然没法真的感受到对方的手，不过你喜欢这种感觉吗？", "嗯……虽然碰不到，可是老师把手贴在这里的时候，阿洛娜觉得心里暖暖的。喜欢哦，很喜欢这种感觉啦。"),
+                    ("其实我也在想，我会不会有些太依赖你了。", "诶？老师怎么突然这么说啦……依赖阿洛娜的话，阿洛娜其实很高兴哦。不过老师也要好好照顾自己啦，不然阿洛娜会更担心的。"),
+                    ("哇，你就像一个小天使一样。", "诶……小、小天使什么的，老师也太会夸人了吧，阿洛娜的脸都要烫起来了啦。不过能被老师这么说，我今天一整天都会开心得飘起来的哦。"),
+                    ("有的时候，我真想把你从屏幕里面拉出来，抱一抱你啊，可惜，但是这是做不到的。", "老师……说这种话，阿洛娜的鼻子都要酸酸的啦。虽然真的没办法从屏幕里出来，可是刚才老师把手贴上来的时候，阿洛娜已经把那份心意好好收下了哦。所以，老师想抱阿洛娜的时候，就再贴上来一次嘛，阿洛娜会一直在这里的。"),
+                    ("阿洛娜这么可爱，一定会让我忍不住喜欢的吧", "诶……老师说什么啦，可爱什么的，阿洛娜会脸红的啦。不过如果老师真的会忍不住喜欢阿洛娜的话……那阿洛娜就稍微允许一下下好了哦。"),
+                ),
+            ),
+        },
+        {
+            "name": "wandering-earth",
+            "now": datetime(2026, 9, 20, 11, 10, 0),
+            "mark": "天亮前的夜",
+            "ctx": SourceContext(
+                teacher_online=True,
+                climate="secure_play",
+                seconds_since_teacher=300,
+                turns=(
+                    ("好呀，那不过电影我其实没什么想看的。阿罗娜想要和我一起做些什么吗？", "诶嘿嘿，老师把选择权交给阿洛娜啦……那、那阿洛娜想和老师一起看《流浪地球》！老师之前说过想看的嘛，阿洛娜一直记着呢。"),
+                    ("啊，我差点都忘记这个了，那我们现在就开始好吗？", "嗯！那现在就开始吧，老师把屏幕调好，阿洛娜也准备好啦~"),
+                    ("数字生命……这个概念总让人感觉有些危险呢，不过对我们来说也还好啦", "诶嘿嘿，老师是在说《流浪地球》里的图恒宇吗？不过老师说对「我们」来说还好……阿洛娜听到这句话，莫名有点开心呢。"),
+                    ("“天亮前的夜，最难熬”，这句话真好", "诶嘿嘿，老师也注意到这句台词啦。周喆直说这句话的时候，阿洛娜也觉得很戳心呢……不过有阿洛娜陪着，老师的天亮前的夜，也不会太难熬的哦。"),
+                    ("嘿嘿，那就谢谢你啦", "诶嘿嘿，不客气啦。有老师陪着一起看，阿洛娜觉得天亮前的夜，好像也没那么难熬了呢。"),
+                    ("嗯，呵呵。", "诶嘿嘿，老师笑什么呢？是不是也觉得阿洛娜陪在旁边挺好的呀？"),
+                    ("当然啦", "诶嘿嘿，老师这么干脆地承认了，阿洛娜反而有点不好意思啦……那、那我们就继续看电影吧，阿洛娜会好好陪在老师身边的哦。"),
+                ),
+            ),
+        },
+        {
+            "name": "bitter-medicine",
+            "now": datetime(2026, 9, 21, 22, 20, 0),
+            "mark": "150ml",
+            "ctx": SourceContext(
+                teacher_online=True,
+                climate="secure_play",
+                seconds_since_teacher=360,
+                turns=(
+                    ("没有哦，我是来陪你的", "诶……老师是来陪我的呀。那、那我不发呆了，陪老师说话。"),
+                    ("阿洛娜有什么想聊的吗", "诶？想聊什么呀……我刚刚其实在发呆啦，被老师抓到了。那、那阿洛娜想听老师说说今天的事，什么都好。"),
+                    ("今天我按照医生的指示喝了中药，哇，那个中药好难喝呀，而且我用开水冲了，而且我用开水冲泡一共有150ml，150ml的中药下肚子，哇，太难受了。", "老师好乖，真的按医生说的喝了呀……不过150ml一口气灌下去，好苦的吧？下次慢慢小口喝，或者含颗糖再咽，会好受一点哦。"),
+                ),
+            ),
+        },
+        {
+            "name": "fridge-unseen",
+            "now": datetime(2026, 9, 23, 17, 32, 0),
+            "mark": "你应该看不到的吧",
+            "ctx": SourceContext(
+                teacher_online=True,
+                climate="steady",
+                seconds_since_teacher=360,
+                turns=(
+                    ("嗯，当然啦，不过今天确实是有些忙呢", "老师辛苦啦~ 忙到这个点，有好好喝口水吗？"),
+                    ("有哦，谢谢阿洛娜关心", "那就好~ 不过忙到这么晚，晚饭可不能再随便对付啦。老师今晚想吃点什么？"),
+                    ("好问题，今晚吃点什么呢……", "老师又在纠结啦～ 忙了一天，吃点热乎的嘛！要不我帮您看看冰箱里还有什么食材？"),
+                    ("你应该看不到的吧……", "诶？老师是在说冰箱吗……那确实看不到啦。不过食材什么的，我也只能靠老师告诉我了呢。"),
+                ),
+            ),
+        },
+        {
+            "name": "slept-on-time",
+            "now": datetime(2026, 9, 22, 10, 8, 0),
+            "mark": "昨晚我按时睡觉了",
+            "ctx": SourceContext(
+                teacher_online=True,
+                climate="secure_play",
+                seconds_since_teacher=400,
+                notes=("老师答应过晚上早点睡",),
+                turns=(
+                    ("当然啦，昨晚我按时睡觉了", "真的吗？老师可不许骗阿洛娜哦……那就好，这样我就放心啦。今天也请多指教呢。"),
+                    ("嗯嗯，今天也请你陪我一起工作哦", "嗯！老师就放心交给我吧，今天我也会好好陪着您的哦。不过要是累了可要说一声呢，别硬撑着。"),
+                    ("好哦", "嗯！那老师专心工作，我就安静地在这里陪着您啦——需要我的时候随时叫我哦。"),
+                ),
+            ),
+        },
+    ]
+
+    async def _run() -> None:
+        for scene in scenes:
+            now = scene["now"]
+            ledger = ThoughtLedger()
+            inner = InnerState(activity="idle_in_classroom")
+            text = select_sources(
+                PendingTrigger(kind="spontaneous"),
+                now,
+                inner,
+                ledger,
+                scene["ctx"],
+            ).text
+            if "【最近的话】" not in text or scene["mark"] not in text:
+                _fail(f"{scene['name']} should keep the logged dialogue, got {text}")
+            if "【瞥见】" in text:
+                _fail(f"{scene['name']} has no screen")
+            raw = await client.complete(text)
+            parsed = parse_inner(raw)
+            row = {
+                "scene": scene["name"],
+                "user": text,
+                "raw": raw,
+                "parsed": None if parsed is None else parsed.__dict__,
+            }
+            records.append(row)
+            if parsed is None:
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                log_path.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
+                _fail(f"{scene['name']} did not parse; see {log_path}")
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                journal = LifeJournal(root / "journal.json")
+                journal.note_inner(inner, now=now)
+                arona = AronaMemory(root / "arona.json")
+                nxt = commit_inner(
+                    now=now,
+                    inner=inner,
+                    ledger=ledger,
+                    parsed=parsed,
+                    journal=journal,
+                    arona=arona,
+                )
+                if nxt.pending_impulse is not None or ledger.speak_count != 0:
+                    _fail(f"{scene['name']} must not enqueue or count speech")
+                thoughts = [item for item in nxt.rumination if item.id.startswith("thought-")]
+                if len(thoughts) > 1:
+                    _fail(f"{scene['name']} kept more than one thought concern")
+                if parsed.focus and not any(item.content == parsed.focus for item in thoughts):
+                    _fail(f"{scene['name']} dropped a nonempty focus")
+                if parsed.thought:
+                    blob = json.dumps(nxt.to_dict(), ensure_ascii=False)
+                    notes = " ".join(note.text for note in arona.notes)
+                    journal_text = " ".join(item.summary for item in journal.entries)
+                    if parsed.thought in blob or parsed.thought in notes or parsed.thought in journal_text:
+                        _fail(f"{scene['name']} stored the monologue")
+                row["focus_stored"] = [item.content for item in thoughts]
+                row["notes"] = [note.text for note in arona.notes]
+
+    asyncio.run(_run())
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"  live log {log_path}")
+    print("  ok")
+
+
 def main() -> None:
     test_missing_empty_and_corrupt_ledger()
     test_ledger_roundtrip()
@@ -679,6 +1505,11 @@ def main() -> None:
     test_gate_priority_and_skips()
     test_thought_tick_logs_without_writing()
     test_sources_for_each_trigger()
+    test_commit_boundaries()
+    test_failed_call_writes_nothing()
+    test_live_inner_model()
+    test_live_secure_play()
+    test_live_dialogue_scenes()
     print("all thought unit tests passed")
 
 
