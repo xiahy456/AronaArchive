@@ -140,6 +140,8 @@ private:
 
 	// 处理用户输入的文本（语音识别或文本输入）
 	void processInputText(const QString& text);
+	// __DEBUG_OUTPUT__ 调试播报。前缀命中则消费输入并返回 true。
+	bool tryHandleDebugOutput(const QString& trimmed);
 	void sendTranscriptToBackend(const QString& text);
 	void flushPendingTranscript();
 	QString maybeCaptureScreenBase64() const;

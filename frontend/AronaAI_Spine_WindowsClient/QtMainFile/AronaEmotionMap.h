@@ -65,4 +65,14 @@ inline QString toAnimationName(const QString& emotionEnglish)
     return map.value(key, QStringLiteral("00"));
 }
 
+/** Known emotion key, or "normal" when the string is not in the map. */
+inline QString resolveOrNormal(const QString& emotionEnglish)
+{
+    const QString key = emotionEnglish.trimmed().toLower();
+    if (englishToAnim().contains(key)) {
+        return key;
+    }
+    return QStringLiteral("normal");
+}
+
 }  // namespace AronaEmotion

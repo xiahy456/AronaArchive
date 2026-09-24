@@ -667,6 +667,46 @@ void MainController::onTranscriptReceived(const QString& text, bool isFinal, int
     sendTranscriptToBackend(trimmed);
 }
 
+bool MainController::tryHandleDebugOutput(const QString& trimmed)
+{
+    static const QString kPrefix = QStringLiteral("__DEBUG_OUTPUT__");
+    if (!trimmed.startsWith(kPrefix)) {
+        return false;
+    }
+
+    const QString rest = trimmed.mid(kPrefix.size());
+    if (rest.trimmed().isEmpty()) {
+        FINE_DEBUG_OUTPUT("[Main Controller] Debug output ignored: empty command");
+        return true;
+    }
+
+    const int sep = rest.lastIndexOf(QStringLiteral("__"));
+    QString statement;
+    QString emotion = QStringLiteral("normal");
+    if (sep < 0) {
+        statement = rest.trimmed();
+    } else {
+        statement = rest.left(sep).trimmed();
+        const QString emotionRaw = rest.mid(sep + 2).trimmed();
+        if (statement.isEmpty() || emotionRaw.isEmpty()) {
+            FINE_DEBUG_OUTPUT("[Main Controller] Debug output ignored: unrecognized command");
+            return true;
+        }
+        emotion = AronaEmotion::resolveOrNormal(emotionRaw);
+    }
+
+    if (statement.isEmpty()) {
+        FINE_DEBUG_OUTPUT("[Main Controller] Debug output ignored: unrecognized command");
+        return true;
+    }
+
+    FINE_DEBUG_OUTPUT(QString("[Main Controller] Debug output emotion=%1 text=%2")
+        .arg(emotion, statement.left(50)));
+    m_currentEmotion = emotion;
+    executeOutput(statement);
+    return true;
+}
+
 void MainController::processInputText(const QString& text)
 {
     const QString trimmed = text.trimmed();
@@ -674,6 +714,10 @@ void MainController::processInputText(const QString& text)
 
     if (trimmed.isEmpty()) {
         ERROR_DEBUG_OUTPUT("[Main Controller] Empty input, skip send");
+        return;
+    }
+
+    if (tryHandleDebugOutput(trimmed)) {
         return;
     }
 
