@@ -23,7 +23,7 @@ from typing import Any
 
 from .events import WorldEvent, world_event
 from .policy import LifeDecision, LifeSettings, decide
-from .state import InnerState, format_life_dt
+from .state import DEFAULT_ACTIVITY, DEFAULT_ATTENTION, InnerState, format_life_dt
 from .store import LifeStore
 
 logger = logging.getLogger(__name__)
@@ -48,6 +48,21 @@ class LifeEngine:
             think_hold_sec=float(getattr(cfg, "think_hold_sec", 120)),
         )
         return cls.from_path(path, settings)
+
+    def release_startup_look(self, now: datetime | None = None) -> bool:
+        """A look at the teacher does not survive a process restart."""
+        if self.state.activity != "looking_at_teacher":
+            return False
+        when = (now or datetime.now()).replace(microsecond=0)
+        nxt = self.state.clone()
+        nxt.activity = DEFAULT_ACTIVITY
+        if nxt.attention == "teacher":
+            nxt.attention = DEFAULT_ATTENTION
+        nxt.activity_since = when
+        self.state = nxt
+        self.store.save(self.state)
+        logger.info("life startup activity=%s", self.state.activity)
+        return True
 
     def _commit(self, decision: LifeDecision, *, climate: str | None) -> LifeDecision:
         before = self.state.to_dict()

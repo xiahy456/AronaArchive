@@ -119,6 +119,7 @@ def create_app() -> FastAPI:
     thought_store = None
     if config.life.enabled:
         life = LifeEngine.from_config(config.life_abs_path, config.life)
+        life.release_startup_look()
         journal = LifeJournal(config.journal_abs_path)
         arona_memory = AronaMemory(
             config.arona_memory_abs_path,

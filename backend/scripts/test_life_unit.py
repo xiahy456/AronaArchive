@@ -791,8 +791,31 @@ def test_glance_gate_and_hands() -> None:
     print("  ok")
 
 
+def test_startup_releases_look() -> None:
+    print("== startup turns a leftover look into idle ==")
+    now = _afternoon()
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "life.json"
+        engine = LifeEngine.from_path(path, _settings())
+        engine.apply(world_event("teacher_spoke", at=now))
+        if engine.state.activity != "looking_at_teacher":
+            _fail("teacher speech should start a look")
+        if not engine.release_startup_look(now + timedelta(seconds=5)):
+            _fail("startup should release a leftover look")
+        if engine.state.activity != "idle_in_classroom" or engine.state.attention != "diffuse":
+            _fail(f"startup look should become idle, got {engine.state.activity} {engine.state.attention}")
+        saved = LifeStore(path).load()
+        if saved.activity != "idle_in_classroom":
+            _fail("released look should be saved")
+        idle = LifeEngine.from_path(path, _settings())
+        if idle.release_startup_look(now):
+            _fail("idle should stay idle")
+    print("  ok")
+
+
 def main() -> None:
     test_json_roundtrip_isolated_from_relationship()
+    test_startup_releases_look()
     test_look_hold_decays_to_idle()
     test_rest_slots_and_leave()
     test_rumination_thinking_then_idle()
