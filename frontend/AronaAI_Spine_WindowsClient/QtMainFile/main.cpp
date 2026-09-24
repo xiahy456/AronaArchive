@@ -146,8 +146,10 @@ int main(int argc, char *argv[])
         .arg(startupTotal.elapsed()));
 
     if (startWidget) {
-        QObject::connect(mainController, &MainController::welcomePlaybackReady,
-            startWidget, &StartWidget::onWelcomeReady);
+        QObject::connect(mainController, &MainController::backendConnected,
+            startWidget, &StartWidget::onBackendConnected);
+        QObject::connect(mainController, &MainController::backendFailed,
+            startWidget, &StartWidget::onBackendFailed);
         QObject::connect(startWidget, &StartWidget::closeFinished,
             mainController, &MainController::onSplashClosed);
         if (startWidget->hasClosed()) {

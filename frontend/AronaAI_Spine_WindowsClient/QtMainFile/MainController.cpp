@@ -263,9 +263,6 @@ void MainController::onTTSError(const QString& errorString, const QString& text,
         m_measuringUserTurn = false;
         if (m_awaitingStartupWelcome) {
             m_awaitingStartupWelcome = false;
-            if (m_splashActive) {
-                emit welcomePlaybackReady();
-            }
         }
         m_ttsManager->notifyPlaybackFinished();
         return;
@@ -317,11 +314,6 @@ void MainController::holdOrPresentOutput(const QByteArray& audioData, const QStr
             m_pendingEmotion = emotion;
             FINE_DEBUG_OUTPUT(QString("[Main Controller] Welcome TTS %1, waiting for splash close")
                 .arg(isError ? "error" : "ready"));
-            emit welcomePlaybackReady();
-            if (receivers(SIGNAL(welcomePlaybackReady())) == 0) {
-                FINE_DEBUG_OUTPUT("[Main Controller] Splash already gone, presenting welcome now");
-                onSplashClosed();
-            }
             return;
         }
     }
@@ -363,7 +355,7 @@ void MainController::dismissSplashOnUnrecoverableError()
     }
     m_awaitingStartupWelcome = false;
     FINE_DEBUG_OUTPUT("[Main Controller] Unrecoverable WS error, dismissing splash");
-    emit welcomePlaybackReady();
+    emit backendFailed();
 }
 
 void MainController::startAudioProcessing()
@@ -725,6 +717,7 @@ void MainController::onWebSocketConnected(const QString& sessionId)
     FINE_DEBUG_OUTPUT("[WebSocket] Connected! Session ID: " + sessionId);
     FINE_DEBUG_OUTPUT(QString("[Startup] WebSocket connected, TTS models reloaded: %1/2")
         .arg(m_ttsModelsLoaded));
+    emit backendConnected();
 }
 
 void MainController::onWebSocketChatResponse(const QString& content, const QString& contextUsed, double latency, const QString& emotion)
@@ -874,6 +867,8 @@ void MainController::onWebSocketError(WebSocketController::ErrorCode code, const
         m_currentEmotion = QStringLiteral("normal");
         m_hasPendingOutput = true;
         m_pendingIsError = true;
+        m_pendingText = userMessage;
+        m_pendingEmotion = QStringLiteral("normal");
         dismissSplashOnUnrecoverableError();
         return;
     }

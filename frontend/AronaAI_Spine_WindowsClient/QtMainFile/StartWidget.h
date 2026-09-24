@@ -53,7 +53,8 @@ signals:
 public slots:
 	void onSpineReady();
 	void onAppReady();
-	void onWelcomeReady();
+	void onBackendConnected();
+	void onBackendFailed();
 	void onEscapePressed();
 
 protected:
@@ -108,7 +109,9 @@ private:
 	bool m_videoEnded = false;
 	bool m_spineReady = false;
 	bool m_appReady = false;
-	bool m_welcomeReady = false;
+	bool m_backendReady = false;
+	bool m_backendFailed = false;
+	bool m_introFinished = false;
 	bool m_closing = false;
 	bool m_closeFinishedEmitted = false;
 	bool m_waitingLineGap = false;

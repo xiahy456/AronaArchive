@@ -159,10 +159,17 @@ void StartWidget::onAppReady()
 	tryClose();
 }
 
-void StartWidget::onWelcomeReady()
+void StartWidget::onBackendConnected()
 {
-	FINE_DEBUG_OUTPUT("[StartWidget] welcome ready");
-	m_welcomeReady = true;
+	FINE_DEBUG_OUTPUT("[StartWidget] backend connected");
+	m_backendReady = true;
+	tryClose();
+}
+
+void StartWidget::onBackendFailed()
+{
+	FINE_DEBUG_OUTPUT("[StartWidget] backend failed");
+	m_backendFailed = true;
 	tryClose();
 }
 
@@ -390,6 +397,7 @@ void StartWidget::startStartupText()
 	m_dotsIndex = 0;
 	m_waitingLineGap = false;
 	m_showingDots = false;
+	m_introFinished = false;
 
 	FINE_DEBUG_OUTPUT("[StartWidget] start typewriter text");
 	m_typeTimer->start(40);
@@ -407,6 +415,12 @@ void StartWidget::onTypewriterTick()
 		m_dotsIndex = (m_dotsIndex + 1) % 3;
 		m_visibleLines[3] = QLatin1String(kDots[m_dotsIndex]);
 		update();
+		// 开场必须走完一轮 . → .. → ...，之后才允许按加载条件关闭
+		if (!m_introFinished && m_dotsIndex == 2) {
+			m_introFinished = true;
+			FINE_DEBUG_OUTPUT("[StartWidget] intro dots cycle finished");
+			tryClose();
+		}
 		return;
 	}
 
@@ -432,9 +446,9 @@ void StartWidget::onTypewriterTick()
 		return;
 	}
 
-	// 当前行打完：行间停顿 500ms；若已是最后一行，停顿后进入加载点循环
+	// 当前行打完：行间停顿；若已是最后一行，停顿后进入加载点循环
 	m_waitingLineGap = true;
-	m_typeTimer->setInterval(1000);
+	m_typeTimer->setInterval(800);
 	++m_typeLine;
 	m_typeCol = 0;
 }
@@ -482,14 +496,19 @@ void StartWidget::markVideoEnded()
 
 void StartWidget::tryClose()
 {
-	if (m_closing) {
+	if (m_closing || !m_introFinished) {
 		return;
 	}
-	if (!(m_spineReady && m_appReady && m_welcomeReady)) {
-		FINE_DEBUG_OUTPUT(QString("[StartWidget] tryClose waiting spine=%1 app=%2 welcome=%3")
+	if (m_backendFailed) {
+		FINE_DEBUG_OUTPUT("[StartWidget] tryClose backend failed after intro");
+		startCloseScaleAnimation();
+		return;
+	}
+	if (!(m_spineReady && m_appReady && m_backendReady)) {
+		FINE_DEBUG_OUTPUT(QString("[StartWidget] tryClose waiting spine=%1 app=%2 backend=%3")
 			.arg(m_spineReady ? "true" : "false")
 			.arg(m_appReady ? "true" : "false")
-			.arg(m_welcomeReady ? "true" : "false"));
+			.arg(m_backendReady ? "true" : "false"));
 		return;
 	}
 	startCloseScaleAnimation();

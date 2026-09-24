@@ -22,6 +22,7 @@ from typing import Any
 import httpx
 
 from ...config import PlannerConfig
+from ...logging_utils import format_llm_exchange
 from .prompt import THOUGHT_SYSTEM
 
 logger = logging.getLogger(__name__)
@@ -64,7 +65,33 @@ class ThoughtClient:
                 resp = await client.post(url, headers=headers, json=payload)
                 resp.raise_for_status()
                 data = resp.json()
-            return str(data["choices"][0]["message"]["content"] or "")
+            content = str(data["choices"][0]["message"]["content"] or "")
+            logger.info(
+                "%s",
+                format_llm_exchange(
+                    title="thought",
+                    prompt=payload["messages"],
+                    response=content,
+                    extra={
+                        "model": payload["model"],
+                        "temperature": payload["temperature"],
+                        "max_tokens": payload["max_tokens"],
+                    },
+                ),
+            )
+            return content
         except Exception:
-            logger.exception("thought model call failed")
+            logger.exception(
+                "%s",
+                format_llm_exchange(
+                    title="thought",
+                    prompt=payload["messages"],
+                    response=None,
+                    extra={
+                        "model": payload["model"],
+                        "temperature": payload["temperature"],
+                        "max_tokens": payload["max_tokens"],
+                    },
+                ),
+            )
             return None

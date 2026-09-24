@@ -68,7 +68,8 @@ public:
 	void startSession();
 
 signals:
-	void welcomePlaybackReady();
+	void backendConnected();
+	void backendFailed();
 	void imageInputChanged(bool enabled);
 
 private slots:
