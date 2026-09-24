@@ -24,6 +24,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+from ..journal import TEACHER_OPENED_SUMMARY
 from ..policy import SIMMER_SEC
 from ..state import InnerState
 from .client import ThoughtClient
@@ -104,7 +105,8 @@ async def thought_tick_once(
         listen_uncommitted=bool(getattr(state, "listen_uncommitted", False)),
         motive_pending=await _motive_pending(state, at),
         resting=_resting(at),
-        consolidated_today=False,
+        consolidated_today=ledger.consolidated_day == at.date().isoformat(),
+        teacher_just_spoke=_teacher_just_spoke(state, at),
         spontaneous_gap_sec=_gap_sec(state, online=online, last_thought_at=ledger.last_thought_at, cfg=cfg),
     )
     clocks = ThoughtClocks(
@@ -182,7 +184,7 @@ async def _think(
         parsed=parsed,
         journal=getattr(state, "life_journal", None),
         arona=getattr(state, "arona_memory", None),
-        queued=decision.queued,
+        queued=trigger,
     )
     engine = state.life
     engine.state = next_inner
@@ -268,6 +270,22 @@ def _gap_sec(state: "AppState", *, online: bool, last_thought_at: datetime | Non
         holder.anchored_at = last_thought_at
         holder.rolled = True
     return holder.gap_sec
+
+
+def _teacher_just_spoke(state: "AppState", now: datetime) -> bool:
+    journal = getattr(state, "journal", None)
+    latest: datetime | None = None
+    for entry in getattr(journal, "entries", []) or []:
+        if str(getattr(entry, "kind", "") or "") != "teacher_interrupt":
+            continue
+        if str(getattr(entry, "summary", "") or "") != TEACHER_OPENED_SUMMARY:
+            continue
+        spoken_at = getattr(entry, "at", None)
+        if isinstance(spoken_at, datetime) and (latest is None or spoken_at > latest):
+            latest = spoken_at
+    if latest is None:
+        return False
+    return (now - latest).total_seconds() <= DEFAULT_TICK_SEC
 
 
 def _resting(now: datetime) -> bool:

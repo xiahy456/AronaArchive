@@ -69,7 +69,11 @@ def commit_inner(
     next_inner.rumination = retain_rumination(items)
     if journal is not None:
         journal.note_inner(next_inner, now=stamp, arona=arona)
-    if arona is not None and parsed.memory_note:
+    if queued is not None and queued.kind == "consolidate":
+        if arona is not None and parsed.memory_note.strip():
+            arona.replace_notes(_note_lines(parsed.memory_note), stamp)
+        ledger.consolidated_day = stamp.date().isoformat()
+    elif arona is not None and parsed.memory_note:
         arona.append_note(parsed.memory_note, stamp)
     ledger.last_thought_at = stamp
     if parsed.focus:
@@ -92,6 +96,10 @@ def commit_inner(
             item for item in ledger.pending_triggers if item is not queued
         ]
     return next_inner
+
+
+def _note_lines(note: str) -> list[str]:
+    return [line.strip() for line in note.splitlines() if line.strip()]
 
 
 def _is_thought(item: Rumination) -> bool:

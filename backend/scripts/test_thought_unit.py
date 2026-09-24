@@ -353,8 +353,8 @@ def test_gate_priority_and_skips() -> None:
         _fail(f"refractory must keep a queued aftertaste, got {kept}")
 
     resting = _decide(resting=True, teacher_online=True, now=now)
-    if resting.kind != "spontaneous":
-        _fail(f"rest should still allow spontaneous, got {resting}")
+    if resting.kind != "consolidate":
+        _fail(f"an unconsolidated rest should consolidate, got {resting}")
     away = _decide(teacher_online=False, now=now, spontaneous_gap_sec=900)
     if away.kind != "spontaneous":
         _fail(f"offline should still think, got {away}")
@@ -2410,6 +2410,155 @@ def test_dialogue_log_persists() -> None:
     print("  ok")
 
 
+def test_rest_consolidate() -> None:
+    print("== rest consolidates once, then still allows a spontaneous thought ==")
+    from app.life.journal import JournalEntry, TEACHER_OPENED_SUMMARY
+    from app.life.thought.sources import SourceContext
+
+    night = datetime(2026, 9, 23, 23, 10, 0)
+    later = night + timedelta(minutes=2)
+    next_night = datetime(2026, 9, 24, 23, 10, 0)
+    spoken = json.dumps(
+        {
+            "focus": "休息时还记着那份文档",
+            "thought": "先把笔记收短。",
+            "keep": "drop",
+            "memory_note": "留下这一句\n我想死\n还有一句\n第四句",
+            "urge": {
+                "speak": True,
+                "about": "休息时想说的话",
+                "why": "想让老师知道她还在",
+                "wait": "now",
+            },
+            "confidence": "high",
+        },
+        ensure_ascii=False,
+    )
+    quiet = json.dumps(
+        {
+            "focus": "笔记已经够短了",
+            "thought": "不用再改。",
+            "keep": "drop",
+            "memory_note": "",
+            "urge": {"speak": False, "about": "", "wait": "now"},
+            "confidence": "high",
+        },
+        ensure_ascii=False,
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        engine = LifeEngine.from_path(root / "life.json", LifeSettings())
+        engine.state.rumination = [
+            Rumination(id="thought-1", content="那份文档", created_at=night),
+            Rumination(id="imp-dinner", content="晚饭", created_at=night),
+        ]
+        engine.store.save(engine.state)
+        memory = AronaMemory(root / "arona.json")
+        memory.append_note("旧句子一", night)
+        memory.append_note("旧句子二", night)
+        ledger = ThoughtLedger(last_thought_at=night - timedelta(hours=1))
+        store = ThoughtStore(root / "thought.json")
+        store.save(ledger)
+        journal = SimpleNamespace(entries=[])
+        cfg = SimpleNamespace(
+            tick_sec=60,
+            revisit_after_sec=1200,
+            refractory_sec=180,
+            spontaneous_online_min_sec=99999,
+            spontaneous_online_max_sec=99999,
+            spontaneous_away_min_sec=99999,
+            spontaneous_away_max_sec=99999,
+        )
+        busy = {"on": False}
+        state = SimpleNamespace(
+            config=SimpleNamespace(life=SimpleNamespace(thought=cfg), proactive=None),
+            thought=ledger,
+            thought_store=store,
+            life=engine,
+            hub=SimpleNamespace(
+                all_sessions=lambda: [("s", None)],
+                any_busy=lambda: busy["on"],
+            ),
+            scheduler=None,
+            listen_uncommitted=False,
+            thought_in_flight=False,
+            welcome=None,
+            journal=journal,
+            arona_memory=memory,
+            life_journal=None,
+            orchestrator=None,
+        )
+
+        async def _run(at: datetime, payload: str) -> int:
+            calls = {"n": 0}
+
+            async def _complete(_text: str) -> str:
+                calls["n"] += 1
+                return payload
+
+            await thought_tick_once(
+                state,
+                at,
+                complete=_complete,
+                source_context=SourceContext(),
+            )
+            return calls["n"]
+
+        postponed = _decide(
+            resting=True,
+            teacher_just_spoke=True,
+            teacher_online=True,
+            now=night,
+        )
+        if postponed.kind == "consolidate":
+            _fail("a teacher who just spoke should not be consolidated")
+        journal.entries = [
+            JournalEntry(
+                at=night - timedelta(seconds=30),
+                kind="teacher_interrupt",
+                summary=TEACHER_OPENED_SUMMARY,
+            )
+        ]
+        if asyncio.run(_run(night, spoken)) != 0 or state.thought.consolidated_day:
+            _fail("a teacher who just spoke should postpone consolidation")
+        journal.entries = []
+        busy["on"] = True
+        if asyncio.run(_run(night, spoken)) != 0 or state.thought.consolidated_day:
+            _fail("a busy session should postpone consolidation")
+        busy["on"] = False
+        if asyncio.run(_run(night, spoken)) != 1:
+            _fail("the first rest of the day should consolidate once")
+        if state.thought.consolidated_day != "2026-09-23":
+            _fail(f"consolidation should stamp the day, got {state.thought.consolidated_day}")
+        texts = [note.text for note in memory.notes]
+        if texts != ["留下这一句", "还有一句"]:
+            _fail(f"notes should be the short rewrite, got {texts}")
+        if any("旧句子" in text for text in texts):
+            _fail(f"old notes should not all remain, got {texts}")
+        ids = [item.id for item in engine.state.rumination]
+        if "thought-1" in ids or "imp-dinner" not in ids:
+            _fail(f"only the thought concern should drop, got {ids}")
+        impulse = engine.state.pending_impulse
+        if impulse is None or impulse.hint != "休息时想说的话" or not impulse.allow_speak:
+            _fail(f"a spoken rest thought should enqueue, got {impulse}")
+        if asyncio.run(_run(later, spoken)) != 0:
+            _fail("the same day should not consolidate again")
+        spontaneous = _decide(
+            resting=True,
+            consolidated_today=True,
+            teacher_online=True,
+            now=later,
+        )
+        if spontaneous.kind != "spontaneous":
+            _fail(f"a consolidated rest should still allow spontaneous, got {spontaneous}")
+        if asyncio.run(_run(next_night, quiet)) != 1:
+            _fail("the next night should consolidate again")
+        if [note.text for note in memory.notes] != texts:
+            _fail("an empty rewrite should leave the notes alone")
+        if state.thought.consolidated_day != "2026-09-24":
+            _fail("the next night should stamp its own day")
+
+
 def main() -> None:
     test_missing_empty_and_corrupt_ledger()
     test_ledger_roundtrip()
@@ -2425,6 +2574,7 @@ def main() -> None:
     test_event_triggers()
     test_aftertaste_includes_finished_talk()
     test_dialogue_log_persists()
+    test_rest_consolidate()
     test_live_inner_model()
     test_live_secure_play()
     test_live_dialogue_scenes()

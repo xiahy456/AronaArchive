@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 MAX_LINES = 3
 DEFAULT_NOTES_MAX = 8
+CONSOLIDATE_NOTE_LIMIT = 3
 DEFAULT_NOTES_MAX_AGE_HOURS = 24.0
 SLOT_ORDER = ("classroom", "open_worry", "worry")
 
@@ -161,6 +162,21 @@ class AronaMemory:
             logger.exception("arona memory save failed path=%s", self.path)
             return False
         return True
+
+    def replace_notes(self, lines: list[str], now: datetime | None = None) -> None:
+        """Replace her notes with a short rest rewrite. Crisis lines are dropped."""
+        at = (now or datetime.now()).replace(microsecond=0)
+        kept: list[AronaNote] = []
+        for raw in lines[:CONSOLIDATE_NOTE_LIMIT]:
+            text = _clean_note(raw)
+            if text:
+                kept.append(AronaNote(at=at, text=text))
+        self.notes = kept
+        self._trim_notes(at)
+        try:
+            self.save()
+        except OSError:
+            logger.exception("arona memory save failed path=%s", self.path)
 
     def set_worry(self, content: str, stopped_at: datetime) -> None:
         """Record a worry that has ended, including when it stopped."""

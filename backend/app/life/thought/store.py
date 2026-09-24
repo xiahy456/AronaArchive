@@ -137,6 +137,7 @@ class ThoughtLedger:
     last_feeling: str = ""
     last_crisis_at: datetime | None = None
     last_glance_seen: str = ""
+    consolidated_day: str = ""
     seen_memory_keys: list[str] = field(default_factory=list)
     pending_triggers: list[PendingTrigger] = field(default_factory=list)
     focus: ThoughtFocus | None = None
@@ -173,6 +174,7 @@ class ThoughtLedger:
             "last_feeling": self.last_feeling,
             "last_crisis_at": format_life_dt(self.last_crisis_at),
             "last_glance_seen": self.last_glance_seen,
+            "consolidated_day": self.consolidated_day,
             "seen_memory_keys": list(self.seen_memory_keys),
             "pending_triggers": [item.to_dict() for item in self.pending_triggers],
             "focus": self.focus.to_dict() if self.focus is not None else None,
@@ -230,6 +232,7 @@ class ThoughtLedger:
             last_feeling=feeling,
             last_crisis_at=parse_life_dt(data.get("last_crisis_at")),
             last_glance_seen=glance,
+            consolidated_day=str(data.get("consolidated_day") or "").strip(),
             seen_memory_keys=keys,
             pending_triggers=triggers,
             focus=ThoughtFocus.from_dict(

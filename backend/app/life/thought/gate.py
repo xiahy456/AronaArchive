@@ -34,6 +34,7 @@ class ThoughtGateFacts:
     motive_pending: bool = False
     resting: bool = False
     consolidated_today: bool = False
+    teacher_just_spoke: bool = False
     spontaneous_gap_sec: float = 240.0
 
 
@@ -68,6 +69,8 @@ def decide_thought(
     if chosen is not None:
         kind, focus_id = _maybe_revisit(now, inner, ledger, facts, limits, chosen)
         return ThoughtDecision(kind=kind, focus_id=focus_id, queued=chosen)
+    if _can_consolidate(facts):
+        return ThoughtDecision(kind="consolidate")
     return _synthesize_spontaneous(now, inner, ledger, facts, limits)
 
 
@@ -107,9 +110,7 @@ def _pick_queued(
     for index, trigger in enumerate(ledger.pending_triggers):
         if not _due(trigger, now):
             continue
-        if trigger.kind == "consolidate" and (
-            not facts.resting or facts.consolidated_today
-        ):
+        if trigger.kind == "consolidate" and not _can_consolidate(facts):
             continue
         if trigger.kind == "revisit" and not _revisit_context(inner, facts):
             continue
@@ -128,6 +129,14 @@ def _pick_queued(
         )
     )
     return eligible[0][1]
+
+
+def _can_consolidate(facts: ThoughtGateFacts) -> bool:
+    return (
+        facts.resting
+        and not facts.consolidated_today
+        and not facts.teacher_just_spoke
+    )
 
 
 def _synthesize_spontaneous(
