@@ -230,6 +230,9 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
         apply_turn_action(state, action, emotion)
 
     _note_life("teacher_arrived")
+    from .life.thought.triggers import note_arrived
+
+    note_arrived(state, now=datetime.now())
     if state.life is not None:
         await publish_presence(state, force_session=session_id)
 
@@ -278,6 +281,9 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
         journal = getattr(state, "journal", None)
         if journal is not None:
             journal.append("glance", seen)
+        from .life.thought.triggers import note_glance
+
+        note_glance(state, seen, now=datetime.now())
 
     async def _run_chat(
         content: str,
@@ -322,6 +328,9 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
                 turn_buffer.prepend(inflight_user)
                 _sync_listen_pending()
                 _clear_inflight()
+            from .life.thought.triggers import note_finished_turn
+
+            note_finished_turn(state, content, now=datetime.now())
         except asyncio.CancelledError:
             logger.info("chat cancelled session=%s", session_id)
             raise
@@ -1176,3 +1185,6 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
         state.note_listen_pending(session_id, False)
         state.conversations.drop(session_id)
         _note_life("teacher_left")
+        from .life.thought.triggers import note_left
+
+        note_left(state, now=datetime.now())

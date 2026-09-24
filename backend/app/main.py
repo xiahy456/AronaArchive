@@ -21,6 +21,7 @@ import logging
 import os
 import sys
 from contextlib import asynccontextmanager
+from datetime import datetime
 
 from fastapi import FastAPI, WebSocket
 
@@ -156,6 +157,18 @@ def create_app() -> FastAPI:
     state.thought_store = thought_store
     state.glance_request_id = ""
     expire_stale_care(state)
+    from .life.thought.triggers import note_climate_enter, note_memory
+
+    def _on_memory(key: str, category: str) -> None:
+        del category
+        note_memory(state, key, now=datetime.now())
+
+    orchestrator.extractor.on_memory_upsert = _on_memory
+    if orchestrator.relationship is not None:
+        def _on_urgent(before: str, after: str) -> None:
+            note_climate_enter(state, before, after, now=datetime.now())
+
+        orchestrator.relationship.on_urgent_enter = _on_urgent
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

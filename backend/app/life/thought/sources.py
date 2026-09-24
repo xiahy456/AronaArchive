@@ -111,6 +111,7 @@ class SourceContext:
     away_sec: float | None = None
     last_user_act: str = ""
     glance_text: str = ""
+    already_greeted: bool = False
     memory_key: str = ""
     memory_content: str = ""
     care_windows: tuple[tuple[str, str, str], ...] = ()
@@ -335,6 +336,8 @@ def _status(
     rows: list[str] = []
     if ctx.away_sec is not None:
         rows.append(_keep(f"离开了{_ago(ctx.away_sec)}", seen))
+    if ctx.already_greeted:
+        rows.append(_keep("已经问候过", seen))
     for key, content in ctx.goals:
         if not goal_is_due_soon(content, now, due_soon_sec=ctx.due_soon_sec):
             continue

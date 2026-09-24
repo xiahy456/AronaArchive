@@ -185,6 +185,7 @@ class MemoryExtractor:
         self._worker_task: asyncio.Task[None] | None = None
         self._calls_today = 0
         self._calls_day = time.strftime("%Y-%m-%d")
+        self.on_memory_upsert: Any = None
 
     @property
     def memory_config(self) -> MemoryConfig:
@@ -726,6 +727,11 @@ class MemoryExtractor:
                         "category": category,
                     }
                 )
+                if category in {"goal", "emotional"} and self.on_memory_upsert is not None:
+                    try:
+                        self.on_memory_upsert(keep_key or key, category)
+                    except Exception:
+                        logger.exception("memory thought notify failed key=%s", keep_key or key)
         self._drop_unaddressed_context_conflicts(
             existing or [],
             addressed,

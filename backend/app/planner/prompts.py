@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from ..life.thought.schema import is_thought_history_marker
 from ..query_time import format_extract_now, format_full_datetime
 from ..relationship.events import USER_ACT_WHITELIST_CSV
 from ..taxonomy import CRISIS_USER_ACT
@@ -244,6 +245,8 @@ def build_planner_user_message(
         if not content:
             continue
         if role == "user":
+            if is_thought_history_marker(content):
+                continue
             hist_lines.append(f"{_history_time_prefix(msg)}老师：{content}")
         elif role == "assistant":
             hist_lines.append(f"{_history_time_prefix(msg)}阿洛娜：{content}")

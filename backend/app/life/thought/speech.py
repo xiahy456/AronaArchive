@@ -22,7 +22,7 @@ from typing import Any
 from ..impulse import offer_impulse
 from ..policy import SIMMER_SEC
 from ..state import Impulse
-from .schema import InnerThought
+from .schema import THOUGHT_HISTORY_PREFIX, InnerThought
 
 
 def maybe_offer_thought(
@@ -49,7 +49,7 @@ def maybe_offer_thought(
         created_at=created,
         hint=about,
         instruction=instruction,
-        history_marker=f"她想提起：{about}",
+        history_marker=f"{THOUGHT_HISTORY_PREFIX}{about}",
         allow_speak=True,
     )
     return offer_impulse(engine, impulse)

@@ -24,6 +24,12 @@ _KEEPS = frozenset({"open", "drop"})
 _WAITS = frozenset({"now", "simmer", "later"})
 _CONFIDENCE = frozenset({"high", "low"})
 _NEEDS = frozenset({"memory", "screen", "knowledge", "recent_talk"})
+THOUGHT_HISTORY_PREFIX = "她想提起："
+
+
+def is_thought_history_marker(text: str | None) -> bool:
+    """True when this line is Arona's urge, not something the teacher said."""
+    return (text or "").strip().startswith(THOUGHT_HISTORY_PREFIX)
 
 
 @dataclass

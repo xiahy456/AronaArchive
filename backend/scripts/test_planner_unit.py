@@ -334,6 +334,19 @@ def main() -> None:
     assert "在教室休息过" not in injected.contents
     assert not should_record_history_marker("【提醒】")
     assert should_record_history_marker("【摸头】")
+    thought_marker = "她想提起：轻轻问一句老师在不在忙"
+    assert not should_record_history_marker(thought_marker)
+    hidden = build_planner_user_message(
+        user_text="帮我打开记事本",
+        history=[
+            {"role": "user", "content": thought_marker},
+            {"role": "assistant", "content": "老师，您现在忙吗？"},
+        ],
+        memories=[],
+        knowledge=[],
+    )
+    assert thought_marker not in hidden
+    assert "阿洛娜：老师，您现在忙吗？" in hidden
     day_msg = build_planner_user_message(
         user_text="你刚才在做什么",
         history=[{"role": "assistant", "content": "该休息了"}],

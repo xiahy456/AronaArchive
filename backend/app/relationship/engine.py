@@ -30,7 +30,15 @@ from .events import (
     normalize_user_act,
     user_delta,
 )
-from .policy import Action, Climate, Decision, decide, decide_proactive, map_arona_act
+from .policy import (
+    URGENT_CLIMATES,
+    Action,
+    Climate,
+    Decision,
+    decide,
+    decide_proactive,
+    map_arona_act,
+)
 from .state import RelationshipState
 from .store import RelationshipStore
 from ..taxonomy import CRISIS_USER_ACT
@@ -90,6 +98,7 @@ class RelationshipEngine:
         self.store = store
         self.state = store.load()
         self._last_rule_act: UserAct | None = None
+        self.on_urgent_enter: Any = None
 
     @classmethod
     def from_path(cls, path: Path, settings: RelationshipSettings) -> RelationshipEngine:
@@ -127,7 +136,20 @@ class RelationshipEngine:
         self.state.recover_remaining = recover_remaining
         return act, decision
 
+    def _note_climate(self, before: str) -> None:
+        after = self.peek_climate()
+        if before in URGENT_CLIMATES or after not in URGENT_CLIMATES:
+            return
+        listener = self.on_urgent_enter
+        if listener is None:
+            return
+        try:
+            listener(before, after)
+        except Exception:
+            logger.exception("relationship urgent climate notify failed")
+
     def on_user_text(self, text: str) -> tuple[UserAct, Decision]:
+        before = self.peek_climate()
         act = classify_user_act(text)
         self._apply(user_delta(act))
         decision = decide(
@@ -150,10 +172,12 @@ class RelationshipEngine:
             self.state.dependence,
             self.state.tension,
         )
+        self._note_climate(before)
         return act, decision
 
     def on_user_act(self, act: UserAct | str) -> tuple[UserAct, Decision]:
         """Apply a known user_act Δ without classifying text."""
+        before = self.peek_climate()
         normalized = normalize_user_act(act)
         self._apply(user_delta(normalized))
         decision = decide(
@@ -176,6 +200,7 @@ class RelationshipEngine:
             self.state.dependence,
             self.state.tension,
         )
+        self._note_climate(before)
         return normalized, decision
 
     def note_planner_user_act(self, act: str) -> tuple[UserAct, bool]:
@@ -190,6 +215,7 @@ class RelationshipEngine:
         self._last_rule_act = None
 
         backfilled = False
+        before = self.peek_climate()
         if rule_act == DEFAULT_USER_ACT and normalized not in _PLANNER_BACKFILL_SKIP:
             self._apply(user_delta(normalized))
             self.state.last_user_act = normalized
@@ -212,6 +238,8 @@ class RelationshipEngine:
             logger.info("relationship planner_user_act=%s", normalized)
 
         self.store.save(self.state)
+        if backfilled:
+            self._note_climate(before)
         return normalized, backfilled
 
     def peek_climate(self) -> str:
@@ -242,6 +270,7 @@ class RelationshipEngine:
         event = map_arona_act(action, climate, user_act, motive_kind=motive_kind)
         if event is None:
             return None
+        before = self.peek_climate()
         self._apply(arona_delta(event))
         self.store.save(self.state)
         logger.info(
@@ -251,4 +280,5 @@ class RelationshipEngine:
             self.state.dependence,
             self.state.tension,
         )
+        self._note_climate(before)
         return event

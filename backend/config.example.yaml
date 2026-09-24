@@ -167,6 +167,8 @@ life:
     refractory_sec: 180
     simmer_sec: 30
     impulse_priority: 30
+    aftertaste_min_sec: 30
+    aftertaste_max_sec: 90
 
 interact:
   enabled: true

@@ -83,6 +83,11 @@ def commit_inner(
     if parsed.feeling:
         ledger.last_feeling = parsed.feeling
     if queued is not None:
+        if queued.kind == "glance" and (queued.detail or "").strip():
+            ledger.last_glance_seen = queued.detail.strip()
+        if queued.kind == "memory" and queued.memory_key:
+            if queued.memory_key not in ledger.seen_memory_keys:
+                ledger.seen_memory_keys.append(queued.memory_key)
         ledger.pending_triggers = [
             item for item in ledger.pending_triggers if item is not queued
         ]

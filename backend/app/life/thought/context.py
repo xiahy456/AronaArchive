@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING
 
 from ...proactive.care import care_window_specs
 from .sources import SourceContext
+from .schema import is_thought_history_marker
 from .store import PendingTrigger
 
 if TYPE_CHECKING:
@@ -93,16 +94,64 @@ def gather_context(
         care_done=care_done,
         goal_acked=goal_acked,
         last_user_act=last_act,
-        glance_text=glance if trigger.kind == "glance" else "",
+        glance_text=_glance_text(trigger, glance),
         memory_key=trigger.memory_key,
-        memory_content="",
+        memory_content=_memory_text(state, trigger),
+        already_greeted=_already_greeted(state, now),
         care_windows=windows,
         knowledge=_knowledge(state),
     )
 
 
+def _glance_text(trigger: PendingTrigger, journal_glance: str) -> str:
+    if trigger.kind != "glance":
+        return ""
+    detail = (trigger.detail or "").strip()
+    return detail or journal_glance
+
+
+def _memory_text(state: "AppState", trigger: PendingTrigger) -> str:
+    if trigger.kind != "memory" or not (trigger.memory_key or "").strip():
+        return ""
+    memory = getattr(getattr(state, "orchestrator", None), "memory_store", None)
+    if memory is None:
+        return ""
+    try:
+        rows = memory.get_entries([trigger.memory_key])
+    except Exception:
+        logger.exception("thought memory read failed")
+        return ""
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        content = str(row.get("content") or "").strip()
+        if content:
+            return content
+    return ""
+
+
+def _already_greeted(state: "AppState", now: datetime) -> bool:
+    welcome = getattr(state, "welcome", None)
+    if welcome is None:
+        return False
+    try:
+        from ...proactive.slots import resolve_slot
+
+        slot = resolve_slot(now)
+        return not welcome.is_first_period_greeting(slot.date_key, slot.slot_id)
+    except Exception:
+        logger.exception("thought welcome read failed")
+        return False
+
+
+def _session_id(session: object) -> str:
+    if isinstance(session, tuple) and session:
+        return str(session[0] or "")
+    return str(getattr(session, "session_id", "") or "")
+
+
 def _turns(state: "AppState") -> tuple[tuple, ...]:
-    conversation = getattr(getattr(state, "orchestrator", None), "conversation", None)
+    conversation = getattr(getattr(state, "orchestrator", None), "conversations", None)
     hub = getattr(state, "hub", None)
     if conversation is None or hub is None:
         return ()
@@ -113,7 +162,7 @@ def _turns(state: "AppState") -> tuple[tuple, ...]:
         logger.exception("thought session list failed")
     history: list[dict] = []
     for session in sessions:
-        sid = str(getattr(session, "session_id", "") or "")
+        sid = _session_id(session)
         if not sid:
             continue
         history = conversation.get_history(sid)
@@ -127,14 +176,19 @@ def _turns(state: "AppState") -> tuple[tuple, ...]:
         content = str(msg.get("content") or "").strip()
         spoken_at = _message_time(msg)
         if role == "user":
+            if is_thought_history_marker(content):
+                continue
             if pending_user:
                 pairs.append((pending_user, "", pending_at, None))
             pending_user = content
             pending_at = spoken_at
-        elif role == "assistant" and pending_user:
-            pairs.append((pending_user, content, pending_at, spoken_at))
-            pending_user = ""
-            pending_at = None
+        elif role == "assistant" and content:
+            if pending_user:
+                pairs.append((pending_user, content, pending_at, spoken_at))
+                pending_user = ""
+                pending_at = None
+            else:
+                pairs.append(("", content, None, spoken_at))
     if pending_user:
         pairs.append((pending_user, "", pending_at, None))
     return tuple(pairs)

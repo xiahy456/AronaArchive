@@ -41,7 +41,10 @@ PROACTIVE_HISTORY_MARKERS = frozenset(
 
 
 def should_record_history_marker(marker: str) -> bool:
-    return (marker or "").strip() not in PROACTIVE_HISTORY_MARKERS
+    text = (marker or "").strip()
+    if text in PROACTIVE_HISTORY_MARKERS or is_thought_history_marker(text):
+        return False
+    return True
 
 from .config import AppConfig
 from .conversation import ConversationManager
@@ -49,6 +52,7 @@ from .image_input import ImagePayload
 from .interact import resolve_interact_action
 from .knowledge import KnowledgeRetriever
 from .life.state import InnerState
+from .life.thought.schema import is_thought_history_marker
 from .life.turn import format_interrupt_block
 from .logging_utils import begin_trace, preview, preview_list, reset_trace, update_trace
 from .memory.extractor import MemoryExtractor

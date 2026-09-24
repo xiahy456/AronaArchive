@@ -228,6 +228,8 @@ class ThoughtConfig(BaseModel):
     refractory_sec: float = 180
     simmer_sec: float = 30
     impulse_priority: int = 30
+    aftertaste_min_sec: float = 30
+    aftertaste_max_sec: float = 90
 
 
 class LifeConfig(BaseModel):

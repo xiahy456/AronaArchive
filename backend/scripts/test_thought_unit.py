@@ -2025,6 +2025,322 @@ def test_second_hop() -> None:
     print("  ok")
 
 
+def _event_state(root: Path, now: datetime) -> SimpleNamespace:
+    from app.life.thought.store import ThoughtStore
+
+    store = ThoughtStore(root / "thought.json")
+    ledger = ThoughtLedger()
+    store.save(ledger)
+    cfg = SimpleNamespace(
+        enabled=True,
+        aftertaste_min_sec=30,
+        aftertaste_max_sec=30,
+        tick_sec=60,
+        revisit_after_sec=1200,
+        refractory_sec=180,
+        spontaneous_online_min_sec=99999,
+        spontaneous_online_max_sec=99999,
+        spontaneous_away_min_sec=99999,
+        spontaneous_away_max_sec=99999,
+    )
+    return SimpleNamespace(
+        config=SimpleNamespace(life=SimpleNamespace(thought=cfg), proactive=None),
+        thought=ledger,
+        thought_store=store,
+        life=SimpleNamespace(
+            state=InnerState(),
+            store=SimpleNamespace(save=lambda _state: None),
+        ),
+        hub=SimpleNamespace(all_sessions=lambda: [], any_busy=lambda: False),
+        scheduler=None,
+        listen_uncommitted=False,
+        thought_in_flight=False,
+        welcome=None,
+        journal=None,
+        arona_memory=None,
+        orchestrator=None,
+    )
+
+
+def test_event_triggers() -> None:
+    print("== thought events enqueue without calling the model ==")
+    from app.life.thought.context import gather_context
+    from app.life.thought.triggers import (
+        note_arrived,
+        note_climate_enter,
+        note_finished_turn,
+        note_glance,
+        note_left,
+        note_memory,
+    )
+    from app.ws_handler import websocket_endpoint
+
+    source = inspect.getsource(websocket_endpoint)
+    if "create_task(_run_welcome" not in source or "note_arrived" not in source:
+        _fail("welcome must still start, and arrival must join the thought queue")
+    now = _now()
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        state = _event_state(root, now)
+        if not note_finished_turn(state, "我想死", now=now):
+            _fail("a finished turn should enqueue")
+        trigger = state.thought.pending_triggers[0]
+        blob = json.dumps(trigger.to_dict(), ensure_ascii=False)
+        if trigger.kind != "aftertaste" or "我想死" in blob:
+            _fail(f"aftertaste must not carry the crisis wording, got {blob}")
+        if trigger.not_before != now.replace(microsecond=0) + timedelta(seconds=30):
+            _fail(f"aftertaste should wait 30s, got {trigger.not_before}")
+        if state.thought.last_crisis_at != now.replace(microsecond=0):
+            _fail("a crisis turn should stamp last_crisis_at")
+        state.thought.last_thought_at = now
+        state.thought_store.save(state.thought)
+
+        async def _think(at: datetime, *, busy: bool = False) -> int:
+            calls = {"n": 0}
+
+            async def _complete(_text: str) -> str:
+                calls["n"] += 1
+                return json.dumps(
+                    {
+                        "focus": "老师还在吗",
+                        "thought": "想问一句。",
+                        "keep": "open",
+                        "confidence": "high",
+                        "need": [],
+                        "urge": {
+                            "speak": True,
+                            "about": "老师还在吗",
+                            "why": "想确认老师还在",
+                            "wait": "now",
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+
+            state.hub.any_busy = lambda: busy
+            await thought_tick_once(state, at, complete=_complete, source_context=SourceContext())
+            return calls["n"]
+
+        early = asyncio.run(_think(now))
+        if early != 0 or any(item.id.startswith("thought-") for item in state.life.state.rumination):
+            _fail("an aftertaste still waiting should not think")
+        due = asyncio.run(_think(now + timedelta(seconds=30)))
+        if due != 1 or not any(item.content == "老师还在吗" for item in state.life.state.rumination):
+            _fail("a due aftertaste should form the concern")
+
+        glance_state = _event_state(root / "glance", now)
+        if note_glance(glance_state, "", now=now) or note_glance(glance_state, "   ", now=now):
+            _fail("an empty glance should not enqueue")
+        if not note_glance(glance_state, "屏幕上是文档", now=now):
+            _fail("a new glance should enqueue")
+        if note_glance(glance_state, "屏幕上是文档", now=now):
+            _fail("the same glance should not enqueue twice")
+        queued = glance_state.thought.pending_triggers[0]
+        commit_inner(
+            now=now,
+            inner=InnerState(),
+            ledger=glance_state.thought,
+            parsed=_parsed(json.dumps({"focus": "那份文档", "thought": "先记着。", "keep": "open"})),
+            queued=queued,
+        )
+        if glance_state.thought.last_glance_seen != "屏幕上是文档":
+            _fail("a finished glance should remember the summary")
+        glance_state.thought_store.save(glance_state.thought)
+        if note_glance(glance_state, "屏幕上是文档", now=now):
+            _fail("a remembered glance should not enqueue again")
+
+        memory_state = _event_state(root / "memory", now)
+        memory_state.orchestrator = SimpleNamespace(
+            memory_store=SimpleNamespace(
+                get_entries=lambda keys: [{"key": keys[0], "content": "去交那份文件"}],
+                list_by_category=lambda _category: [],
+            ),
+            relationship=None,
+        )
+        if not note_memory(memory_state, "goal_file", now=now):
+            _fail("a new goal should enqueue")
+        gathered = gather_context(
+            memory_state,
+            now,
+            PendingTrigger(kind="memory", memory_key="goal_file"),
+        )
+        material = select_sources(
+            PendingTrigger(kind="memory", memory_key="goal_file"),
+            now,
+            InnerState(),
+            memory_state.thought,
+            gathered,
+        )
+        if "去交那份文件" not in material.text:
+            _fail(f"memory material should show the plan, got {material.text}")
+        commit_inner(
+            now=now,
+            inner=InnerState(),
+            ledger=memory_state.thought,
+            parsed=_parsed(json.dumps({"focus": "那份文件", "thought": "先记着。", "keep": "open"})),
+            queued=memory_state.thought.pending_triggers[0],
+        )
+        if "goal_file" not in memory_state.thought.seen_memory_keys:
+            _fail("a finished memory trigger should record the key")
+        memory_state.thought_store.save(memory_state.thought)
+        if note_memory(memory_state, "goal_file", now=now):
+            _fail("a named key should not enqueue again")
+
+        climate_state = _event_state(root / "climate", now)
+        if not note_climate_enter(climate_state, "steady", "fragile", now=now):
+            _fail("entering fragile should enqueue")
+        if note_climate_enter(climate_state, "fragile", "rupture", now=now):
+            _fail("moving between urgent bands should not enqueue")
+
+        async def _speak() -> None:
+            async def _complete(_text: str) -> str:
+                return json.dumps(
+                    {
+                        "focus": "老师还在吗",
+                        "thought": "想问一句。",
+                        "keep": "open",
+                        "confidence": "high",
+                        "urge": {"speak": True, "about": "老师还在吗", "why": "想确认老师还在", "wait": "now"},
+                    },
+                    ensure_ascii=False,
+                )
+
+            await thought_tick_once(
+                climate_state,
+                now,
+                complete=_complete,
+                source_context=SourceContext(climate="fragile"),
+            )
+
+        asyncio.run(_speak())
+        impulse = climate_state.life.state.pending_impulse
+        if impulse is None or impulse.kind != "thought" or impulse.hint != "老师还在吗":
+            _fail(f"fragile should still allow the line, got {impulse}")
+
+        left_state = _event_state(root / "left", now)
+        if not note_left(left_state, now=now):
+            _fail("leaving should enqueue")
+
+        async def _left_speak() -> None:
+            async def _complete(_text: str) -> str:
+                return json.dumps(
+                    {
+                        "focus": "老师先走了",
+                        "thought": "想留一句。",
+                        "keep": "open",
+                        "confidence": "high",
+                        "urge": {"speak": True, "about": "老师还在吗", "why": "想确认老师还在", "wait": "now"},
+                    },
+                    ensure_ascii=False,
+                )
+
+            await thought_tick_once(
+                left_state,
+                now,
+                complete=_complete,
+                source_context=SourceContext(teacher_online=False),
+            )
+
+        asyncio.run(_left_speak())
+        if left_state.life.state.pending_impulse is None:
+            _fail("leaving should still queue a line")
+
+        class _Hub:
+            def get(self, _sid):
+                return None
+
+            def is_busy(self, _sid):
+                return False
+
+            def set_busy(self, _sid, _busy):
+                return None
+
+            def idle_sessions(self):
+                return []
+
+        app = SimpleNamespace(
+            life=left_state.life,
+            hub=_Hub(),
+            orchestrator=SimpleNamespace(handle_initiate=None, relationship=None),
+            scheduler=None,
+            journal=None,
+            thought=left_state.thought,
+            thought_store=left_state.thought_store,
+        )
+        decision = decide(
+            left_state.life.state,
+            world_event("impulse_due", at=now + timedelta(seconds=SIMMER_SEC)),
+            settings=LifeSettings(),
+        )
+        asyncio.run(deliver_impulse(app, decision, now=now + timedelta(seconds=SIMMER_SEC)))
+        if left_state.life.state.pending_impulse is None:
+            _fail("no session should keep the left impulse")
+
+        greeted = select_sources(
+            PendingTrigger(kind="arrived"),
+            now,
+            InnerState(),
+            ThoughtLedger(),
+            SourceContext(already_greeted=True),
+        )
+        if "已经问候过" not in greeted.text:
+            _fail(f"a greeted arrival should say so, got {greeted.text}")
+        fresh = LifeEngine.from_path(root / "arrived-life.json", LifeSettings())
+        if not maybe_offer_thought(
+            fresh,
+            _urge(about="老师还在吗", why="想确认老师还在"),
+            now=now,
+        ):
+            _fail("already having greeted must not block another line")
+        if note_arrived(_event_state(root / "arrived", now), now=now) is not True:
+            _fail("arrival should enqueue")
+    print("  ok")
+
+
+def test_aftertaste_includes_finished_talk() -> None:
+    print("== aftertaste sees the greeting that already happened ==")
+    from app.life.thought.context import gather_context
+
+    now = _now()
+    history = [
+        {"role": "assistant", "content": "老师，下午好呀！我一直在等您上线呢。", "time": "2026-09-24T14:23:55"},
+        {"role": "user", "content": "下午好呀，阿洛娜", "time": "2026-09-24T14:24:24"},
+        {"role": "assistant", "content": "下午好呀老师！我一直在这里等您呢。", "time": "2026-09-24T14:24:24"},
+        {"role": "user", "content": "【摸头】", "time": "2026-09-24T14:24:53"},
+        {"role": "assistant", "content": "呜……老师，突然摸头的话，我会害羞的啦……", "time": "2026-09-24T14:24:53"},
+    ]
+    state = SimpleNamespace(
+        hub=SimpleNamespace(all_sessions=lambda: [("s", None)]),
+        orchestrator=SimpleNamespace(
+            conversations=SimpleNamespace(get_history=lambda sid: history if sid == "s" else []),
+            relationship=None,
+            memory_store=None,
+        ),
+        life=SimpleNamespace(state=InnerState()),
+        journal=None,
+        arona_memory=None,
+        scheduler=None,
+        welcome=None,
+        config=SimpleNamespace(proactive=None),
+    )
+    gathered = gather_context(state, now, PendingTrigger(kind="aftertaste"))
+    text = select_sources(
+        PendingTrigger(kind="aftertaste"),
+        now,
+        InnerState(),
+        ThoughtLedger(focus=ThoughtFocus(id="thought-1", text="老师刚接上", since=now, spoken=False)),
+        gathered,
+    ).text
+    for line in ("我一直在等您上线", "下午好呀，阿洛娜", "突然摸头"):
+        if line not in text:
+            _fail(f"aftertaste should include the finished talk, missing {line!r} in {text}")
+    if "【最近的话】" not in text:
+        _fail(f"aftertaste should keep the recent-talk section, got {text}")
+    if "还没说过" not in text:
+        _fail("an unspoken focus should still say it has not been spoken")
+    print("  ok")
+
+
 def main() -> None:
     test_missing_empty_and_corrupt_ledger()
     test_ledger_roundtrip()
@@ -2037,6 +2353,8 @@ def main() -> None:
     test_commit_boundaries()
     test_failed_call_writes_nothing()
     test_second_hop()
+    test_event_triggers()
+    test_aftertaste_includes_finished_talk()
     test_live_inner_model()
     test_live_secure_play()
     test_live_dialogue_scenes()

@@ -64,6 +64,7 @@ class PendingTrigger:
     not_before: datetime | None = None
     focus_id: str = ""
     memory_key: str = ""
+    detail: str = ""
 
     def to_dict(self) -> dict[str, str]:
         return {
@@ -71,6 +72,7 @@ class PendingTrigger:
             "not_before": format_life_dt(self.not_before),
             "focus_id": self.focus_id,
             "memory_key": self.memory_key,
+            "detail": self.detail,
         }
 
     @classmethod
@@ -80,11 +82,15 @@ class PendingTrigger:
         kind = str(data.get("kind") or "").strip()
         if kind not in TRIGGER_KINDS:
             return None
+        detail = str(data.get("detail") or "").strip()
+        if is_crisis_text(detail):
+            detail = ""
         return cls(
             kind=kind,
             not_before=parse_life_dt(data.get("not_before")),
             focus_id=str(data.get("focus_id") or "").strip(),
             memory_key=str(data.get("memory_key") or "").strip(),
+            detail=detail,
         )
 
 

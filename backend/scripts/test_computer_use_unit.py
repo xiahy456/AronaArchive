@@ -833,6 +833,18 @@ def test_format_route_history() -> None:
         _fail("prompt should include current text")
     if "老师：帮我打开记事本写今天日期" not in msg:
         _fail("prompt should label the teacher's original utterance")
+    thought = "她想提起：轻轻问一句老师在不在忙，只是想让他知道阿洛娜还在屏幕这边。"
+    mixed = format_route_history(
+        [
+            {"role": "user", "content": thought},
+            {"role": "assistant", "content": "老师，您现在忙吗？"},
+            {"role": "user", "content": "帮我打开记事本"},
+        ]
+    )
+    if thought in mixed or "老师：她想提起" in mixed:
+        _fail(f"a thought marker must not be labeled as the teacher, got {mixed}")
+    if "阿洛娜：老师，您现在忙吗？" not in mixed or "老师：帮我打开记事本" not in mixed:
+        _fail(f"real turns should remain, got {mixed}")
     print("  ok")
 
 
