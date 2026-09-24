@@ -74,7 +74,9 @@ def create_app() -> FastAPI:
     config = get_config()
     model = get_model_loader()
     conversations = ConversationManager(
-        max_history_turns=config.conversation.max_history_turns
+        max_history_turns=config.conversation.max_history_turns,
+        persist_path=config.dialogue_abs_path,
+        max_entries=config.conversation.max_entries,
     )
     # Shared BGE encoder for memory + knowledge retrieval. Load lazily so a
     # missing models/bge-small-zh-v1.5 does not block Planner-only startup.

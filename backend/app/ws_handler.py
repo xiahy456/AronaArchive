@@ -230,8 +230,10 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
         apply_turn_action(state, action, emotion)
 
     _note_life("teacher_arrived")
+    from .conversation import ARRIVE_TEXT
     from .life.thought.triggers import note_arrived
 
+    state.conversations.append(session_id, "event", ARRIVE_TEXT, kind="arrive")
     note_arrived(state, now=datetime.now())
     if state.life is not None:
         await publish_presence(state, force_session=session_id)
@@ -1185,6 +1187,8 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
         state.note_listen_pending(session_id, False)
         state.conversations.drop(session_id)
         _note_life("teacher_left")
+        from .conversation import LEAVE_TEXT
         from .life.thought.triggers import note_left
 
+        state.conversations.append(session_id, "event", LEAVE_TEXT, kind="leave")
         note_left(state, now=datetime.now())

@@ -528,6 +528,7 @@ def test_sources_for_each_trigger() -> None:
         away_sec=7200,
         last_user_act="short_ack",
         glance_text="记事本开着",
+        glance_at=datetime(2026, 9, 10, 15, 59, 8),
         memory_key="goal_a",
         memory_content=goal,
         care_windows=(("dinner", "15:00", "19:00"),),
@@ -645,8 +646,8 @@ def test_sources_for_each_trigger() -> None:
         _fail(f"left should keep only the last round, got {left.text}")
 
     glance = _one("glance")
-    if "【瞥见】" not in glance.text or "记事本开着" not in glance.text:
-        _fail(f"glance should carry the new summary, got {glance.text}")
+    if "【瞥见】" not in glance.text or "[2026年9月10日 15:59:08] 记事本开着" not in glance.text:
+        _fail(f"glance should carry the time before the summary, got {glance.text}")
     if "老师在改文档" not in glance.text or "自己发呆" in glance.text:
         _fail("glance notes should be the recent impression of the teacher")
     empty = select_sources(
@@ -2312,7 +2313,7 @@ def test_aftertaste_includes_finished_talk() -> None:
     state = SimpleNamespace(
         hub=SimpleNamespace(all_sessions=lambda: [("s", None)]),
         orchestrator=SimpleNamespace(
-            conversations=SimpleNamespace(get_history=lambda sid: history if sid == "s" else []),
+            conversations=SimpleNamespace(get_history=lambda _sid="": history),
             relationship=None,
             memory_store=None,
         ),
@@ -2341,6 +2342,74 @@ def test_aftertaste_includes_finished_talk() -> None:
     print("  ok")
 
 
+def test_dialogue_log_persists() -> None:
+    print("== dialogue log keeps speech and touch after disconnect ==")
+    from app.conversation import ARRIVE_TEXT, ConversationManager
+    from app.life.thought.context import gather_context
+
+    now = _now()
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "dialogue.json"
+        first = ConversationManager(max_history_turns=6, persist_path=path, max_entries=256)
+        first.append("s", "event", ARRIVE_TEXT, kind="arrive", at=now)
+        first.append("s", "user", "下午好呀，阿洛娜", at=now)
+        first.append("s", "assistant", "下午好呀老师。", at=now)
+        first.append("s", "user", "【摸头】", kind="touch", action="pat_head", at=now)
+        first.append("s", "assistant", "呜……老师，突然摸头的话，我会害羞的啦……", at=now)
+        first.append("s", "user", "她想提起：轻轻问一句老师在不在忙")
+        first.drop("s")
+        if any("她想提起" in item.content for item in first.entries()):
+            _fail("a thought marker must not be stored as dialogue")
+        if first.get_history(""):
+            reloaded = ConversationManager(max_history_turns=6, persist_path=path, max_entries=256)
+        else:
+            _fail("speech should remain after the session drops")
+            return
+        lines = [item.content for item in reloaded.entries()]
+        if "下午好呀，阿洛娜" not in lines or "【摸头】" not in lines or ARRIVE_TEXT not in lines:
+            _fail(f"reload should keep speech, touch, and arrival, got {lines}")
+        touch = next(item for item in reloaded.entries() if item.content == "【摸头】")
+        if touch.kind != "touch" or touch.action != "pat_head":
+            _fail(f"touch should keep its action, got {touch}")
+        spoken = [item["content"] for item in reloaded.get_history("")]
+        if ARRIVE_TEXT in spoken:
+            _fail("presence events stay in the log and out of the prompt window")
+        state = SimpleNamespace(
+            hub=SimpleNamespace(all_sessions=lambda: []),
+            orchestrator=SimpleNamespace(
+                conversations=reloaded,
+                relationship=None,
+                memory_store=None,
+            ),
+            life=SimpleNamespace(state=InnerState()),
+            journal=None,
+            arona_memory=None,
+            scheduler=None,
+            welcome=None,
+            config=SimpleNamespace(proactive=None),
+        )
+        text = select_sources(
+            PendingTrigger(kind="aftertaste"),
+            now,
+            InnerState(),
+            ThoughtLedger(focus=ThoughtFocus(id="thought-1", text="老师刚接上", since=now, spoken=False)),
+            gather_context(state, now, PendingTrigger(kind="aftertaste")),
+        ).text
+        for line in ("下午好呀，阿洛娜", "突然摸头"):
+            if line not in text:
+                _fail(f"offline aftertaste should still see the talk, missing {line!r} in {text}")
+        if "她想提起" in text:
+            _fail("offline aftertaste must not treat the thought marker as the teacher")
+        capped = ConversationManager(max_history_turns=6, persist_path=path, max_entries=256)
+        oldest = capped.entries()[0].content
+        for index in range(257):
+            capped.append("s", "user", f"第{index}句")
+        kept = [item.content for item in capped.entries()]
+        if len(kept) != 256 or oldest in kept or kept[-1] != "第256句":
+            _fail(f"the 257th line should drop the oldest, len={len(kept)} tail={kept[-1:]}")
+    print("  ok")
+
+
 def main() -> None:
     test_missing_empty_and_corrupt_ledger()
     test_ledger_roundtrip()
@@ -2355,6 +2424,7 @@ def main() -> None:
     test_second_hop()
     test_event_triggers()
     test_aftertaste_includes_finished_talk()
+    test_dialogue_log_persists()
     test_live_inner_model()
     test_live_secure_play()
     test_live_dialogue_scenes()

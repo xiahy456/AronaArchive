@@ -39,6 +39,7 @@ def gather_context(
     journal = getattr(state, "life_journal", None)
     summaries: list[str] = []
     glance = ""
+    glance_at = None
     teacher_at = None
     if journal is not None:
         for entry in getattr(journal, "entries", []) or []:
@@ -48,6 +49,7 @@ def gather_context(
                 summaries.append(text)
             if kind == "glance" and text:
                 glance = text
+                glance_at = getattr(entry, "at", None)
             if kind == "teacher_interrupt":
                 teacher_at = getattr(entry, "at", None)
     arona = getattr(state, "arona_memory", None)
@@ -81,6 +83,7 @@ def gather_context(
         last_act = str(getattr(getattr(relationship, "state", None), "last_user_act", "") or "")
     windows = _windows(state)
     goals = _goals(state)
+    _picked_glance = _glance_text(trigger, glance, glance_at)
     return SourceContext(
         teacher_online=bool(state.hub.all_sessions()),
         climate=climate,
@@ -94,7 +97,8 @@ def gather_context(
         care_done=care_done,
         goal_acked=goal_acked,
         last_user_act=last_act,
-        glance_text=_glance_text(trigger, glance),
+        glance_text=_picked_glance[0],
+        glance_at=_picked_glance[1],
         memory_key=trigger.memory_key,
         memory_content=_memory_text(state, trigger),
         already_greeted=_already_greeted(state, now),
@@ -103,11 +107,20 @@ def gather_context(
     )
 
 
-def _glance_text(trigger: PendingTrigger, journal_glance: str) -> str:
+def _glance_text(
+    trigger: PendingTrigger,
+    journal_glance: str,
+    journal_at: datetime | None,
+) -> tuple[str, datetime | None]:
     if trigger.kind != "glance":
-        return ""
+        return "", None
     detail = (trigger.detail or "").strip()
-    return detail or journal_glance
+    if detail:
+        when = trigger.not_before if isinstance(trigger.not_before, datetime) else journal_at
+        return detail, when
+    if not journal_glance:
+        return "", None
+    return journal_glance, journal_at if isinstance(journal_at, datetime) else None
 
 
 def _memory_text(state: "AppState", trigger: PendingTrigger) -> str:
@@ -144,30 +157,15 @@ def _already_greeted(state: "AppState", now: datetime) -> bool:
         return False
 
 
-def _session_id(session: object) -> str:
-    if isinstance(session, tuple) and session:
-        return str(session[0] or "")
-    return str(getattr(session, "session_id", "") or "")
-
-
 def _turns(state: "AppState") -> tuple[tuple, ...]:
     conversation = getattr(getattr(state, "orchestrator", None), "conversations", None)
-    hub = getattr(state, "hub", None)
-    if conversation is None or hub is None:
+    if conversation is None:
         return ()
-    sessions = []
     try:
-        sessions = list(hub.all_sessions() or [])
+        history = list(conversation.get_history("") or [])
     except Exception:
-        logger.exception("thought session list failed")
-    history: list[dict] = []
-    for session in sessions:
-        sid = _session_id(session)
-        if not sid:
-            continue
-        history = conversation.get_history(sid)
-        if history:
-            break
+        logger.exception("thought dialogue read failed")
+        return ()
     pairs: list[tuple] = []
     pending_user = ""
     pending_at: datetime | None = None

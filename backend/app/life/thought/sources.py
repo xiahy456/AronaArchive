@@ -111,6 +111,7 @@ class SourceContext:
     away_sec: float | None = None
     last_user_act: str = ""
     glance_text: str = ""
+    glance_at: datetime | None = None
     already_greeted: bool = False
     memory_key: str = ""
     memory_content: str = ""
@@ -363,7 +364,11 @@ def _status(
 
 def _glance_rows(ctx: SourceContext, seen: dict[str, bool]) -> list[str]:
     line = _keep(ctx.glance_text, seen)
-    return [line] if line else []
+    if not line:
+        return []
+    if isinstance(ctx.glance_at, datetime):
+        line = f"[{format_full_datetime(ctx.glance_at)}] {line}"
+    return [line]
 
 
 def _need_rows(

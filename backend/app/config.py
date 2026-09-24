@@ -66,6 +66,8 @@ class PromptConfig(BaseModel):
 
 class ConversationConfig(BaseModel):
     max_history_turns: int = 6
+    persist_path: str = "data/memory/dialogue.json"
+    max_entries: int = 256
 
 
 class KnowledgeConfig(BaseModel):
@@ -343,6 +345,10 @@ class AppConfig(BaseModel):
     @property
     def relationship_abs_path(self) -> Path:
         return self.resolve_path(self.proactive.relationship.persist_path)
+
+    @property
+    def dialogue_abs_path(self) -> Path:
+        return self.resolve_path(self.conversation.persist_path)
 
     @property
     def welcome_abs_path(self) -> Path:

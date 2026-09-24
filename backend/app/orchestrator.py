@@ -49,7 +49,7 @@ def should_record_history_marker(marker: str) -> bool:
 from .config import AppConfig
 from .conversation import ConversationManager
 from .image_input import ImagePayload
-from .interact import resolve_interact_action
+from .interact import HISTORY_PAT_HEAD_MARKER, resolve_interact_action
 from .knowledge import KnowledgeRetriever
 from .life.state import InnerState
 from .life.thought.schema import is_thought_history_marker
@@ -203,7 +203,11 @@ class Orchestrator:
     def _record_initiate_user(self, session_id: str, marker: str) -> None:
         if should_record_history_marker(marker):
             text = (marker or "").strip()
-            if text:
+            if text == HISTORY_PAT_HEAD_MARKER:
+                self.conversations.append(
+                    session_id, "user", text, kind="touch", action="pat_head"
+                )
+            elif text:
                 self.conversations.append(session_id, "user", text)
 
     def _note_teacher_journal(self, user_text: str) -> None:
