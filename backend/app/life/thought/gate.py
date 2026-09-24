@@ -51,6 +51,7 @@ class ThoughtDecision:
     skip_reason: str = ""
     focus_id: str = ""
     queued: PendingTrigger | None = None
+    outcome: str = ""
 
 
 def decide_thought(

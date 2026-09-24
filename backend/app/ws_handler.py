@@ -872,7 +872,25 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
             inflight_kind = None
             state.hub.set_busy(session_id, False)
 
-    if state.config.proactive.welcome.enabled:
+    thought_cfg = getattr(getattr(state.config, "life", None), "thought", None)
+    if state.config.proactive.welcome.enabled and getattr(thought_cfg, "enabled", False):
+        from .life.thought.loop import greet_on_connect
+
+        async def _run_arrival_thought() -> None:
+            nonlocal inflight_kind
+            inflight_kind = "welcome"
+            try:
+                await greet_on_connect(state, session_id=session_id)
+            except asyncio.CancelledError:
+                logger.info("welcome cancelled session=%s", session_id)
+                raise
+            except Exception:
+                logger.exception("welcome error session=%s", session_id)
+            finally:
+                inflight_kind = None
+
+        chat_task = asyncio.create_task(_run_arrival_thought())
+    elif state.config.proactive.welcome.enabled:
         chat_task = asyncio.create_task(_run_welcome())
     else:
         logger.info("welcome skipped session=%s reason=disabled", session_id)

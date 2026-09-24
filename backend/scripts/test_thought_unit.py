@@ -2284,7 +2284,7 @@ def test_event_triggers() -> None:
             ThoughtLedger(),
             SourceContext(already_greeted=True),
         )
-        if "已经问候过" not in greeted.text:
+        if "本时段已经问候过" not in greeted.text:
             _fail(f"a greeted arrival should say so, got {greeted.text}")
         fresh = LifeEngine.from_path(root / "arrived-life.json", LifeSettings())
         if not maybe_offer_thought(
@@ -2821,6 +2821,214 @@ async def _async_sent() -> str:
     return "sent"
 
 
+def test_arrival_greeting_falls_back_only_on_failure() -> None:
+    print("== arrival thinks first and welcomes only when that fails ==")
+    from app.config import FestivalConfig, IdleConfig, CareConfig, GoalConfig, MoodFollowupConfig
+    from app.life.impulse import flush_impulse
+    from app.life.thought.loop import greet_on_connect
+    from app.life.thought.sources import SourceContext, select_sources
+    from app.life.thought.triggers import note_arrived
+    from app.proactive.scheduler import ProactiveScheduler
+    from app.proactive.welcome import WelcomeState
+
+    afternoon = datetime(2026, 9, 23, 15, 0, 0)
+    teacher_day = datetime(2026, 9, 10, 15, 0, 0)
+
+    def _payload(kind: str, speak: bool, about: str) -> str:
+        return json.dumps(
+            {
+                "focus": about or "上线了",
+                "thought": "先看一眼。",
+                "keep": "drop",
+                "urge": {"speak": speak, "about": about, "kind": kind, "wait": "now"},
+                "confidence": "high",
+            },
+            ensure_ascii=False,
+        )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+
+        async def _send(_payload: dict) -> None:
+            return None
+
+        class _Hub:
+            def __init__(self) -> None:
+                self.busy = False
+
+            def all_sessions(self):
+                return [("s1", _send)]
+
+            def idle_sessions(self):
+                return [] if self.busy else [("s1", _send)]
+
+            def get(self, sid):
+                return _send if sid == "s1" else None
+
+            def is_busy(self, _sid):
+                return self.busy
+
+            def any_busy(self):
+                return self.busy
+
+            def set_busy(self, _sid, busy):
+                self.busy = busy
+
+        def _world(at: datetime, *, fallback: float = 2, festival: bool = False):
+            engine = LifeEngine.from_path(root / f"life-{at.timestamp()}-{fallback}.json", LifeSettings())
+            welcome = WelcomeState(None)
+            scheduler = ProactiveScheduler(
+                root / f"pro-{at.timestamp()}-{fallback}.json",
+                idle_cfg=IdleConfig(),
+                care_cfg=CareConfig(),
+                goal_cfg=GoalConfig(enabled=False),
+                festival_cfg=FestivalConfig(enabled=festival),
+                mood_cfg=MoodFollowupConfig(enabled=False),
+            )
+            ledger = ThoughtLedger()
+            store = ThoughtStore(root / f"thought-{at.timestamp()}-{fallback}.json")
+            store.save(ledger)
+            cfg = SimpleNamespace(
+                enabled=True,
+                tick_sec=60,
+                revisit_after_sec=1200,
+                refractory_sec=0,
+                spontaneous_online_min_sec=99999,
+                spontaneous_online_max_sec=99999,
+                spontaneous_away_min_sec=99999,
+                spontaneous_away_max_sec=99999,
+                arrived_fallback_sec=fallback,
+            )
+            spoken: list[dict] = []
+
+            async def _handle(**kwargs):
+                spoken.append(kwargs)
+                return "sent"
+
+            state = SimpleNamespace(
+                config=SimpleNamespace(
+                    life=SimpleNamespace(thought=cfg),
+                    proactive=SimpleNamespace(relationship=SimpleNamespace(enabled=False)),
+                ),
+                thought=ledger,
+                thought_store=store,
+                life=engine,
+                hub=_Hub(),
+                scheduler=scheduler,
+                listen_uncommitted=False,
+                thought_in_flight=False,
+                welcome=welcome,
+                journal=None,
+                arona_memory=None,
+                life_journal=None,
+                orchestrator=SimpleNamespace(
+                    relationship=None,
+                    memory_store=SimpleNamespace(list_by_category=lambda _cat: []),
+                    handle_initiate=_handle,
+                ),
+                spoken=spoken,
+            )
+            note_arrived(state, now=at)
+            return state
+
+        async def _greet(state, at, payload: str | None, *, delay: float = 0) -> None:
+            async def _complete(_text: str) -> str:
+                if delay:
+                    await asyncio.sleep(delay)
+                return payload or "not-json"
+
+            await greet_on_connect(state, session_id="s1", now=at, complete=_complete)
+
+        greeted = select_sources(
+            PendingTrigger(kind="arrived"),
+            afternoon,
+            InnerState(),
+            ThoughtLedger(),
+            SourceContext(already_greeted=True),
+        )
+        if "本时段已经问候过" not in greeted.text:
+            _fail(f"a greeted slot should say so, got {greeted.text}")
+
+        hello = _world(afternoon)
+        asyncio.run(_greet(hello, afternoon, _payload("welcome", True, "下午好")))
+        impulse = hello.life.state.pending_impulse
+        if impulse is None or impulse.kind != "welcome" or impulse.hint != "下午好":
+            _fail(f"arrival should enqueue her greeting, got {impulse}")
+        hello.hub = _Hub()
+        hello.journal = None
+        if not asyncio.run(flush_impulse(hello, now=afternoon)):
+            _fail("the greeting should speak")
+        if not hello.welcome._period_greeted:
+            _fail("a welcome line should mark this period")
+        if hello.life.state.pending_impulse is not None:
+            _fail("fallback must not add a second line")
+
+        quiet_ask = _world(afternoon + timedelta(minutes=1))
+        asyncio.run(_greet(quiet_ask, afternoon, _payload("thought", True, "老师还在吗")))
+        asked = quiet_ask.life.state.pending_impulse
+        if asked is None or asked.kind != "thought" or asked.hint != "老师还在吗":
+            _fail(f"asking if he is there should stay thought, got {asked}")
+        if asked.first_in_slot or quiet_ask.welcome._period_greeted:
+            _fail("a non-greeting must not mark the period")
+
+        declined = _world(afternoon + timedelta(minutes=2))
+        asyncio.run(_greet(declined, afternoon, _payload("welcome", False, "")))
+        if declined.life.state.pending_impulse is not None or declined.welcome._period_greeted:
+            _fail("speak false must not welcome and must not fall back")
+
+        again = _world(afternoon + timedelta(minutes=3))
+        again.welcome.mark_period_greeted("2026-09-23", "afternoon")
+        asyncio.run(_greet(again, afternoon, _payload("welcome", True, "又见面了")))
+        if again.life.state.pending_impulse is None or again.life.state.pending_impulse.kind != "welcome":
+            _fail("already greeting must not block her from speaking again")
+        silent = _world(afternoon + timedelta(minutes=4))
+        silent.welcome.mark_period_greeted("2026-09-23", "afternoon")
+        asyncio.run(_greet(silent, afternoon, _payload("welcome", False, "")))
+        pending = silent.life.state.pending_impulse
+        if pending is not None:
+            _fail(f"a silent return must not add 下午好, got {pending.instruction}")
+
+        broken = _world(afternoon + timedelta(minutes=5))
+        asyncio.run(_greet(broken, afternoon, None))
+        if len(broken.spoken) != 1 or broken.spoken[0].get("kind") != "welcome":
+            _fail(f"a failed parse should fall back to one welcome, got {broken.spoken}")
+        if "她想提起" in str(broken.spoken[0].get("history_marker") or ""):
+            _fail("the fallback must not be her thought line")
+        if broken.life.state.pending_impulse is not None:
+            _fail("the fallback must not leave a second impulse")
+
+        slow = _world(afternoon + timedelta(minutes=6), fallback=0.2)
+        asyncio.run(_greet(slow, afternoon, _payload("thought", True, "老师还在吗"), delay=1))
+        if len(slow.spoken) != 1 or slow.spoken[0].get("kind") != "welcome":
+            _fail(f"a slow thought should leave only the welcome fallback, got {slow.spoken}")
+        if slow.life.state.pending_impulse is not None:
+            _fail("a late thought must not enqueue after the fallback")
+
+        goal = _world(afternoon + timedelta(minutes=7))
+        asyncio.run(_greet(goal, afternoon, _payload("goal", True, "报告快到了")))
+        if goal.life.state.pending_impulse is None or goal.life.state.pending_impulse.kind != "goal":
+            _fail("a goal arrival should enqueue as goal")
+        if goal.welcome._period_greeted:
+            _fail("a goal must not mark the period before it is spoken")
+        goal.hub = _Hub()
+        goal.journal = None
+        asyncio.run(flush_impulse(goal, now=afternoon))
+        if goal.welcome._period_greeted:
+            _fail("a spoken goal must not mark the period")
+
+        festive = _world(teacher_day, festival=True)
+        asyncio.run(_greet(festive, teacher_day, _payload("festival", True, "教师节快乐")))
+        festive.hub = _Hub()
+        festive.journal = None
+        if not asyncio.run(flush_impulse(festive, now=teacher_day)):
+            _fail("the festival line should speak")
+        if "teacher" not in festive.scheduler.state.festival_done or not festive.welcome._period_greeted:
+            _fail(
+                f"festival speech should record both facts, "
+                f"done={festive.scheduler.state.festival_done} greeted={festive.welcome._period_greeted}"
+            )
+
+
 def main() -> None:
     test_missing_empty_and_corrupt_ledger()
     test_ledger_roundtrip()
@@ -2838,6 +3046,7 @@ def main() -> None:
     test_dialogue_log_persists()
     test_rest_consolidate()
     test_situation_facts_do_not_enqueue()
+    test_arrival_greeting_falls_back_only_on_failure()
     test_live_inner_model()
     test_live_secure_play()
     test_live_dialogue_scenes()

@@ -32,6 +32,7 @@ def maybe_offer_thought(
     now: datetime,
     motive_pending: bool = False,
     facts: tuple = (),
+    welcome: Any = None,
 ) -> bool:
     """Enqueue speech when she decided to say it. A pending motive yields."""
     about = (parsed.about or "").strip()
@@ -59,6 +60,13 @@ def maybe_offer_thought(
         allow_speak=True,
         from_thought=True,
     )
+    if kind in {"welcome", "festival"} and welcome is not None:
+        from ...proactive.welcome import resolve_welcome_context
+
+        slot, first = resolve_welcome_context(welcome, now)
+        impulse.first_in_slot = first
+        impulse.slot_id = str(slot.slot_id)
+        impulse.date_key = slot.date_key
     return offer_impulse(engine, impulse)
 
 

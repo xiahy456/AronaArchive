@@ -120,7 +120,7 @@ async def thought_tick_once(
         return decision
     state.thought_in_flight = True
     try:
-        await _think(
+        outcome = await _think(
             state,
             at,
             inner if isinstance(inner, InnerState) else InnerState(),
@@ -130,6 +130,7 @@ async def thought_tick_once(
             source_context=source_context,
             motive_pending=facts.motive_pending,
         )
+        decision = replace(decision, outcome=outcome)
     finally:
         state.thought_in_flight = False
     return decision
@@ -145,7 +146,7 @@ async def _think(
     complete,
     source_context,
     motive_pending: bool = False,
-) -> None:
+) -> str:
     trigger = decision.queued or PendingTrigger(
         kind=decision.kind, focus_id=decision.focus_id
     )
@@ -153,19 +154,19 @@ async def _think(
     sources = select_sources(trigger, now, inner, ledger, ctx)
     if sources.cancelled or not (sources.text or "").strip():
         logger.info("thought sources cancelled kind=%s", decision.kind)
-        return
+        return ""
     caller = complete
     if caller is None:
         planner = getattr(getattr(state, "config", None), "planner", None)
         if planner is None or not ThoughtClient(planner).enabled:
             logger.info("thought model skipped reason=disabled_or_no_key")
-            return
+            return "failed"
         caller = ThoughtClient(planner).complete
     raw = await _invoke(caller, sources.text)
     parsed = parse_inner(raw)
     if parsed is None:
         logger.info("thought parse failed")
-        return
+        return "failed"
     if _needs_second_hop(parsed):
         second_raw = await _invoke(
             caller,
@@ -202,7 +203,9 @@ async def _think(
         now=now,
         motive_pending=motive_pending,
         facts=tuple(getattr(offered_ctx, "situation", ()) or ()),
+        welcome=getattr(state, "welcome", None),
     )
+    return "committed"
 
 
 def _needs_second_hop(parsed: InnerThought) -> bool:
@@ -288,6 +291,35 @@ def _teacher_just_spoke(state: "AppState", now: datetime) -> bool:
     if latest is None:
         return False
     return (now - latest).total_seconds() <= DEFAULT_TICK_SEC
+
+
+async def greet_on_connect(
+    state: "AppState",
+    *,
+    session_id: str = "",
+    now: datetime | None = None,
+    complete=None,
+) -> None:
+    """Think once on arrival. Fall back to today's welcome only if that produces nothing."""
+    from ...proactive.welcome import offer_arrival_fallback
+
+    at = now or datetime.now()
+    cfg = getattr(getattr(state.config, "life", None), "thought", None)
+    limit = float(getattr(cfg, "arrived_fallback_sec", 2) or 2)
+    decision: ThoughtDecision | None
+    try:
+        decision = await asyncio.wait_for(
+            thought_tick_once(state, at, complete=complete),
+            timeout=max(0.1, limit),
+        )
+    except TimeoutError:
+        decision = None
+    engine = getattr(state, "life", None)
+    if engine is not None and engine.state.pending_impulse is not None:
+        return
+    if decision is not None and decision.outcome != "failed":
+        return
+    await offer_arrival_fallback(state, session_id=session_id, now=at)
 
 
 def _resting(now: datetime) -> bool:

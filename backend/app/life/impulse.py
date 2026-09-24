@@ -431,17 +431,18 @@ async def _speak_impulse(
         snapshot = impulse
         clear_impulse(engine)
         if scheduler is not None and snapshot.kind != "thought":
-            if snapshot.kind == "welcome":
+            if snapshot.from_thought:
+                if snapshot.kind != "welcome" and hasattr(scheduler, "note_mentioned"):
+                    scheduler.note_mentioned(
+                        snapshot.kind,
+                        now,
+                        goal_key=snapshot.source_id if snapshot.kind == "goal" else "",
+                        mood_key=snapshot.source_id if snapshot.kind == "mood_followup" else "",
+                        festival_id=snapshot.source_id if snapshot.kind == "festival" else "",
+                        due_soon=snapshot.due_soon,
+                    )
+            elif snapshot.kind == "welcome":
                 scheduler.note_proactive(now)
-            elif snapshot.from_thought and hasattr(scheduler, "note_mentioned"):
-                scheduler.note_mentioned(
-                    snapshot.kind,
-                    now,
-                    goal_key=snapshot.source_id if snapshot.kind == "goal" else "",
-                    mood_key=snapshot.source_id if snapshot.kind == "mood_followup" else "",
-                    festival_id=snapshot.source_id if snapshot.kind == "festival" else "",
-                    due_soon=snapshot.due_soon,
-                )
             else:
                 scheduler.mark_fired(
                     snapshot.kind,  # type: ignore[arg-type]

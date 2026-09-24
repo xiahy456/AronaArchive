@@ -34,6 +34,7 @@ URGE_KINDS = frozenset(
         "goal",
         "mood_followup",
         "idle",
+        "welcome",
         "thought",
     }
 )

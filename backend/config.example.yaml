@@ -171,6 +171,7 @@ life:
     impulse_priority: 30
     aftertaste_min_sec: 30
     aftertaste_max_sec: 90
+    arrived_fallback_sec: 2
 
 interact:
   enabled: true

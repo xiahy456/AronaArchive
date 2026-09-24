@@ -21,6 +21,7 @@ import logging
 import random
 from datetime import date, datetime
 from pathlib import Path
+from typing import Any
 
 from .slots import REST_SLOTS, ResolvedSlot, SlotId, resolve_slot
 
@@ -174,3 +175,61 @@ def resolve_welcome_context(
     slot = resolve_slot(now)
     first = state.is_first_period_greeting(slot.date_key, slot.slot_id)
     return slot, first
+
+
+async def offer_arrival_fallback(state: Any, *, session_id: str = "", now: datetime | None = None) -> bool:
+    """One existing welcome line when arrival thought did not produce a result."""
+    from ..life.impulse import flush_impulse, offer_impulse
+    from ..life.state import Impulse
+    from .festival import HISTORY_FESTIVAL_MARKER, build_festival_instruction
+    from .loop import load_birthday_content
+
+    engine = getattr(state, "life", None)
+    welcome = getattr(state, "welcome", None)
+    if engine is None or welcome is None or engine.state.pending_impulse is not None:
+        return False
+    at = now or datetime.now()
+    slot, first = resolve_welcome_context(welcome, at)
+    scheduler = getattr(state, "scheduler", None)
+    hit = None
+    if scheduler is not None:
+        birthday = await load_birthday_content(state)
+        hit = scheduler.pending_festival(at, birthday_content=birthday)
+    if hit is not None:
+        extras = (hit.extra_memory,) if hit.extra_memory else ()
+        offer_impulse(
+            engine,
+            Impulse(
+                kind="festival",
+                created_at=at.replace(microsecond=0),
+                source_id=hit.id,
+                instruction=build_festival_instruction(hit, None),
+                history_marker=HISTORY_FESTIVAL_MARKER,
+                extra_memories=extras,
+                allow_speak=True,
+                first_in_slot=first,
+                slot_id=str(slot.slot_id),
+                date_key=slot.date_key,
+            ),
+        )
+    elif first:
+        offer_impulse(
+            engine,
+            Impulse(
+                kind="welcome",
+                created_at=at.replace(microsecond=0),
+                instruction=build_welcome_instruction(
+                    slot,
+                    first_in_slot=True,
+                    closing_hint=pick_welcome_closing_hint(),
+                ),
+                history_marker=HISTORY_USER_MARKER,
+                allow_speak=True,
+                first_in_slot=True,
+                slot_id=str(slot.slot_id),
+                date_key=slot.date_key,
+            ),
+        )
+    else:
+        return False
+    return await flush_impulse(state, now=at, session_id=session_id)

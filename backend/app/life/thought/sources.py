@@ -348,12 +348,12 @@ def _status(
         if ctx.away_sec is not None:
             rows.append(_keep(f"离开了{_ago(ctx.away_sec)}", seen))
         if ctx.already_greeted:
-            rows.append(_keep("已经问候过", seen))
+            rows.append(_keep("本时段已经问候过", seen))
         return [row for row in rows if row]
     if ctx.away_sec is not None:
         rows.append(_keep(f"离开了{_ago(ctx.away_sec)}", seen))
     if ctx.already_greeted:
-        rows.append(_keep("已经问候过", seen))
+        rows.append(_keep("本时段已经问候过", seen))
     for key, content in ctx.goals:
         if not goal_is_due_soon(content, now, due_soon_sec=ctx.due_soon_sec):
             continue

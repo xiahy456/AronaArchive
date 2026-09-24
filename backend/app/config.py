@@ -232,6 +232,7 @@ class ThoughtConfig(BaseModel):
     impulse_priority: int = 30
     aftertaste_min_sec: float = 30
     aftertaste_max_sec: float = 90
+    arrived_fallback_sec: float = 2
 
 
 class LifeConfig(BaseModel):
