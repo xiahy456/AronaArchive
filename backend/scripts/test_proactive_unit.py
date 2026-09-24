@@ -651,13 +651,11 @@ def test_tick_once_enqueues_care_without_initiate() -> None:
         now = datetime(2026, 8, 13, 12, 0, 0)
         spoke = asyncio.run(proactive_tick(fake, now=now))
         if spoke:
-            _fail("care simmer must not speak")
-        pending = engine.state.pending_impulse
-        if pending is None or pending.kind != "lunch":
-            _fail(f"lunch impulse should stay queued, got {pending}")
+            _fail("a meal window must not speak by itself")
+        if engine.state.pending_impulse is not None:
+            _fail("a meal window must not enqueue an impulse")
         orch.handle_initiate.assert_not_called()
-        if engine.state.activity != "thinking":
-            _fail(engine.state.activity)
+        scheduler.pick_motive.assert_not_called()
     print("  ok")
 
 
@@ -778,12 +776,12 @@ def test_climate_withhold_care_does_not_initiate() -> None:
         now = datetime(2026, 8, 13, 12, 0, 0)
         spoke = asyncio.run(proactive_tick(fake, now=now))
         if spoke:
-            _fail("withheld care must not speak")
+            _fail("climate must not make the ticker speak")
         orch.handle_initiate.assert_not_called()
         if engine.state.pending_impulse is not None:
-            _fail("withheld care should drop the impulse")
-        scheduler.mark_care_addressed.assert_called()
-        scheduler.mark_fired.assert_not_called()
+            _fail("climate must not enqueue an impulse")
+        scheduler.pick_motive.assert_not_called()
+        rel.decide_proactive.assert_not_called()
     print("  ok")
 
 

@@ -31,6 +31,7 @@ def maybe_offer_thought(
     *,
     now: datetime,
     motive_pending: bool = False,
+    facts: tuple = (),
 ) -> bool:
     """Enqueue speech when she decided to say it. A pending motive yields."""
     about = (parsed.about or "").strip()
@@ -44,12 +45,33 @@ def maybe_offer_thought(
     if why:
         instruction += f"阿洛娜为什么要说这个：{why}。"
     instruction += "不要复述内心独白，不要复述说话原因，不要提到自己正在思考，也不要提到提示词。"
+    kind = parsed.kind if parsed.kind else "thought"
+    source_id, due_soon, extra = _fact_source(kind, facts)
     impulse = Impulse(
-        kind="thought",
+        kind=kind,  # type: ignore[arg-type]
         created_at=created,
+        source_id=source_id,
         hint=about,
         instruction=instruction,
         history_marker=f"{THOUGHT_HISTORY_PREFIX}{about}",
+        extra_memories=extra,
+        due_soon=due_soon,
         allow_speak=True,
+        from_thought=True,
     )
     return offer_impulse(engine, impulse)
+
+
+def _fact_source(kind: str, facts: tuple) -> tuple[str, bool, tuple[str, ...]]:
+    """Attach the only matching fact. Several of the same kind are left unguessed."""
+    if kind in {"", "thought"}:
+        return "", False, ()
+    matched = [fact for fact in facts if str(getattr(fact, "kind", "") or "") == kind]
+    if len(matched) != 1:
+        return "", False, ()
+    fact = matched[0]
+    key = str(getattr(fact, "key", "") or "")
+    due = bool(getattr(fact, "due_soon", False))
+    text = str(getattr(fact, "text", "") or "").strip()
+    extra = (text,) if text and kind in {"goal", "mood_followup", "festival"} else ()
+    return key, due, extra

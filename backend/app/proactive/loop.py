@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Process-level ticker: pick at most one motive and enqueue it as an impulse."""
+"""Process-level ticker. It delivers a queued impulse and does not author one."""
 
 from __future__ import annotations
 
@@ -52,79 +52,16 @@ async def run_proactive_loop(state: "AppState") -> None:
 
 
 async def tick_once(state: "AppState", now: datetime | None = None) -> bool:
-    """Pick at most one motive, enqueue an impulse, maybe speak.
+    """Deliver an impulse thought already queued. Motives are facts, not speech.
 
     Returns True if a line was sent. Listening does not skip the tick.
     """
-    # Import inside the body so app.proactive.__init__ can load while
-    # life.policy is still importing slots (no circular import).
-    from ..life.impulse import flush_impulse, impulse_from_motive, offer_impulse
+    from ..life.impulse import flush_impulse
 
     if not state.hub.all_sessions():
         return False
     engine = getattr(state, "life", None)
-    if engine is None:
+    if engine is None or engine.state.pending_impulse is None:
         return False
-
     dt = now or datetime.now()
-    relationship = state.orchestrator.relationship
-    last_user_act = "other"
-    climate = None
-    if relationship is not None and state.config.proactive.relationship.enabled:
-        last_user_act = relationship.state.last_user_act or "other"
-        climate = relationship.peek_climate()
-
-    birthday = await load_birthday_content(state)
-    goals: list[dict] = []
-    if getattr(state.scheduler.goal_cfg, "enabled", False):
-        goals = await asyncio.to_thread(
-            state.orchestrator.memory_store.list_by_category, "goal"
-        )
-    moods: list[dict] = []
-    if getattr(state.scheduler.mood_cfg, "enabled", False):
-        moods = await asyncio.to_thread(
-            state.orchestrator.memory_store.list_by_category, "emotional"
-        )
-
-    motive = state.scheduler.pick_motive(
-        dt,
-        last_user_act=last_user_act,
-        climate=climate,
-        goals=goals,
-        moods=moods,
-        birthday_content=birthday,
-    )
-    if motive is None:
-        care_reason = state.scheduler.care_block_reason(dt)
-        if care_reason:
-            logger.info("proactive care skipped reason=%s", care_reason)
-        else:
-            reason = state.scheduler.idle_block_reason(dt, last_user_act=last_user_act)
-            if reason:
-                logger.info("proactive idle skipped reason=%s", reason)
-        if engine.state.pending_impulse is None:
-            return False
-        return await flush_impulse(state, now=dt)
-
-    allow_speak = True
-    if relationship is not None and state.config.proactive.relationship.enabled:
-        gate = relationship.decide_proactive(motive.kind)
-        allow_speak = gate.action == "initiate"
-        if not allow_speak:
-            logger.info(
-                "impulse climate withhold kind=%s climate=%s action=%s",
-                motive.kind,
-                gate.climate,
-                gate.action,
-            )
-
-    impulse = impulse_from_motive(motive, dt, allow_speak=allow_speak)
-    offered = offer_impulse(engine, impulse)
-    logger.info(
-        "impulse enqueue kind=%s accepted=%s allow_speak=%s pending=%s",
-        motive.kind,
-        offered,
-        allow_speak,
-        engine.state.pending_impulse.kind if engine.state.pending_impulse else "-",
-    )
     return await flush_impulse(state, now=dt)

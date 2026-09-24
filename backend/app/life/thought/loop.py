@@ -103,7 +103,7 @@ async def thought_tick_once(
         in_flight=bool(getattr(state, "thought_in_flight", False)),
         session_busy=bool(state.hub.any_busy()),
         listen_uncommitted=bool(getattr(state, "listen_uncommitted", False)),
-        motive_pending=await _motive_pending(state, at),
+        motive_pending=False,
         resting=_resting(at),
         consolidated_today=ledger.consolidated_day == at.date().isoformat(),
         teacher_just_spoke=_teacher_just_spoke(state, at),
@@ -195,11 +195,13 @@ async def _think(
     thought_store = getattr(state, "thought_store", None)
     if thought_store is not None:
         thought_store.save(ledger)
+    offered_ctx = source_context if source_context is not None else ctx
     maybe_offer_thought(
         engine,
         parsed,
         now=now,
         motive_pending=motive_pending,
+        facts=tuple(getattr(offered_ctx, "situation", ()) or ()),
     )
 
 
@@ -294,37 +296,3 @@ def _resting(now: datetime) -> bool:
     return resolve_slot(now).slot_id in REST_SLOTS
 
 
-async def _motive_pending(state: "AppState", now: datetime) -> bool:
-    scheduler = getattr(state, "scheduler", None)
-    if scheduler is None:
-        return False
-    try:
-        from ...proactive.loop import load_birthday_content
-
-        relationship = getattr(getattr(state, "orchestrator", None), "relationship", None)
-        last_user_act = "other"
-        climate = None
-        rel_cfg = getattr(getattr(state.config, "proactive", None), "relationship", None)
-        if relationship is not None and (rel_cfg is None or getattr(rel_cfg, "enabled", True)):
-            last_user_act = relationship.state.last_user_act or "other"
-            climate = relationship.peek_climate()
-        birthday = await load_birthday_content(state)
-        goals: list[dict] = []
-        moods: list[dict] = []
-        memory = getattr(getattr(state, "orchestrator", None), "memory_store", None)
-        if memory is not None and getattr(scheduler.goal_cfg, "enabled", False):
-            goals = await asyncio.to_thread(memory.list_by_category, "goal")
-        if memory is not None and getattr(scheduler.mood_cfg, "enabled", False):
-            moods = await asyncio.to_thread(memory.list_by_category, "emotional")
-        motive = scheduler.pick_motive(
-            now,
-            last_user_act=last_user_act,
-            climate=climate,
-            goals=goals,
-            moods=moods,
-            birthday_content=birthday,
-        )
-        return motive is not None
-    except Exception:
-        logger.exception("thought motive check failed")
-        return False

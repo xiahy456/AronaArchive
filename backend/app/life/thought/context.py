@@ -84,6 +84,19 @@ def gather_context(
     windows = _windows(state)
     goals = _goals(state)
     _picked_glance = _glance_text(trigger, glance, glance_at)
+    ledger = getattr(state, "thought", None)
+    speak_count = 0
+    if getattr(ledger, "speak_day", "") == now.date().isoformat():
+        speak_count = int(getattr(ledger, "speak_count", 0) or 0)
+    situation = _situation(
+        state,
+        now,
+        goals=goals,
+        last_user_act=last_act,
+        climate=climate,
+        quiet_sec=since_teacher,
+        speak_count=speak_count,
+    )
     return SourceContext(
         teacher_online=bool(state.hub.all_sessions()),
         climate=climate,
@@ -104,6 +117,7 @@ def gather_context(
         already_greeted=_already_greeted(state, now),
         care_windows=windows,
         knowledge=_knowledge(state),
+        situation=situation,
     )
 
 
@@ -233,6 +247,49 @@ def _goals(state: "AppState") -> tuple[tuple[str, str], ...]:
         if key and content:
             found.append((key, content))
     return tuple(found)
+
+
+def _situation(
+    state: "AppState",
+    now: datetime,
+    *,
+    goals: tuple[tuple[str, str], ...],
+    last_user_act: str,
+    climate: str,
+    quiet_sec: float | None,
+    speak_count: int,
+) -> tuple:
+    scheduler = getattr(state, "scheduler", None)
+    if scheduler is None or not hasattr(scheduler, "situation_facts"):
+        return ()
+    try:
+        from ...proactive.festival import birthday_from_profiles
+
+        birthday = ""
+        memory = getattr(getattr(state, "orchestrator", None), "memory_store", None)
+        if memory is not None and getattr(getattr(scheduler, "festival_cfg", None), "enabled", False):
+            birthday = birthday_from_profiles(memory.list_by_category("profile"))
+        moods: list[dict] = []
+        if memory is not None and getattr(getattr(scheduler, "mood_cfg", None), "enabled", False):
+            moods = [
+                row
+                for row in (memory.list_by_category("emotional") or [])
+                if isinstance(row, dict)
+            ]
+        facts = scheduler.situation_facts(
+            now,
+            last_user_act=last_user_act,
+            climate=climate,
+            goals=[{"key": key, "content": content} for key, content in goals],
+            moods=moods,
+            birthday_content=birthday,
+            quiet_sec=quiet_sec,
+            speak_count=speak_count,
+        )
+    except Exception:
+        logger.exception("thought situation read failed")
+        return ()
+    return tuple(facts)
 
 
 def _knowledge(state: "AppState"):

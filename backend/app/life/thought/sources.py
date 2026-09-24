@@ -120,6 +120,7 @@ class SourceContext:
     due_soon_sec: float = 3600.0
     focus_text: str = ""
     knowledge: Callable[[str], Sequence[str]] | None = None
+    situation: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -326,15 +327,29 @@ def _knowledge(
     return [line for line in (_keep(row, seen) for row in found) if line]
 
 
+_STATUS_KINDS = frozenset({"arrived", "spontaneous", "revisit"})
+
+
 def _status(
     kind: str,
     now: datetime,
     ctx: SourceContext,
     seen: dict[str, bool],
 ) -> list[str]:
-    if kind != "arrived":
-        return []
     rows: list[str] = []
+    if kind in _STATUS_KINDS:
+        for fact in ctx.situation:
+            line = _keep(str(getattr(fact, "text", "") or ""), seen)
+            if line:
+                rows.append(line)
+    if kind != "arrived":
+        return [row for row in rows if row]
+    if ctx.situation:
+        if ctx.away_sec is not None:
+            rows.append(_keep(f"离开了{_ago(ctx.away_sec)}", seen))
+        if ctx.already_greeted:
+            rows.append(_keep("已经问候过", seen))
+        return [row for row in rows if row]
     if ctx.away_sec is not None:
         rows.append(_keep(f"离开了{_ago(ctx.away_sec)}", seen))
     if ctx.already_greeted:

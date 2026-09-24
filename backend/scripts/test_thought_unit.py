@@ -2559,6 +2559,268 @@ def test_rest_consolidate() -> None:
             _fail("the next night should stamp its own day")
 
 
+def test_situation_facts_do_not_enqueue() -> None:
+    print("== motives are facts; dinner is recorded only after she speaks ==")
+    from app.config import CareConfig, FestivalConfig, GoalConfig, IdleConfig, MoodFollowupConfig
+    from app.proactive.loop import tick_once as proactive_tick
+    from app.proactive.scheduler import ProactiveScheduler
+    from app.life.impulse import flush_impulse
+    from app.life.thought.sources import SourceContext, select_sources
+
+    now = datetime(2026, 9, 23, 18, 0, 0)
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        scheduler = ProactiveScheduler(
+            root / "proactive.json",
+            idle_cfg=IdleConfig(after_sec=900),
+            care_cfg=CareConfig(),
+            goal_cfg=GoalConfig(),
+            festival_cfg=FestivalConfig(enabled=False),
+            mood_cfg=MoodFollowupConfig(enabled=False),
+        )
+        scheduler.state.goal_mute["report"] = "2026-10-01T00:00:00"
+        scheduler.save()
+        goals = [{"key": "report", "content": "老师2026年9月23日下午6点半要交报告"}]
+        facts = scheduler.situation_facts(
+            now,
+            last_user_act="depart",
+            climate="cling_risk",
+            goals=goals,
+            quiet_sec=1000,
+            speak_count=5,
+        )
+        blob = "\n".join(fact.text for fact in facts)
+        if "现在处于晚饭窗口，今天还没提过晚饭" not in blob:
+            _fail(f"an open dinner window should stay visible, got {blob}")
+        if "先别提" not in blob or "交报告" not in blob:
+            _fail(f"a muted goal should remain and say so, got {blob}")
+        if "老师刚刚道别" not in blob or "开口5次" not in blob:
+            _fail(f"depart and the speak count should stay visible, got {blob}")
+        if "当前气候是cling_risk" not in blob:
+            _fail(f"climate should be a fact, got {blob}")
+        rendered = select_sources(
+            PendingTrigger(kind="spontaneous"),
+            now,
+            InnerState(),
+            ThoughtLedger(),
+            SourceContext(situation=tuple(facts)),
+        ).text
+        if "现在处于晚饭窗口，今天还没提过晚饭" not in rendered:
+            _fail(f"spontaneous material should include dinner, got {rendered}")
+
+        engine = LifeEngine.from_path(root / "life.json", LifeSettings())
+        ledger = ThoughtLedger()
+        store = ThoughtStore(root / "thought.json")
+        cfg = SimpleNamespace(
+            tick_sec=60,
+            revisit_after_sec=1200,
+            refractory_sec=0,
+            spontaneous_online_min_sec=0,
+            spontaneous_online_max_sec=0,
+            spontaneous_away_min_sec=0,
+            spontaneous_away_max_sec=0,
+        )
+        state = SimpleNamespace(
+            config=SimpleNamespace(life=SimpleNamespace(thought=cfg), proactive=None),
+            thought=ledger,
+            thought_store=store,
+            life=engine,
+            hub=SimpleNamespace(all_sessions=lambda: [], any_busy=lambda: False),
+            scheduler=scheduler,
+            listen_uncommitted=False,
+            thought_in_flight=False,
+            welcome=None,
+            journal=SimpleNamespace(entries=[]),
+            arona_memory=None,
+            life_journal=None,
+            orchestrator=None,
+        )
+        ctx = SourceContext(situation=tuple(facts), teacher_online=True, climate="cling_risk")
+
+        async def _tick(payload: str) -> int:
+            calls = {"n": 0}
+
+            async def _complete(_text: str) -> str:
+                calls["n"] += 1
+                return payload
+
+            await thought_tick_once(state, now, complete=_complete, source_context=ctx)
+            return calls["n"]
+
+        quiet = json.dumps(
+            {
+                "focus": "晚饭到了",
+                "thought": "先不说。",
+                "keep": "drop",
+                "urge": {"speak": False, "about": "", "kind": "dinner", "wait": "now"},
+            },
+            ensure_ascii=False,
+        )
+        if asyncio.run(_tick(quiet)) != 1:
+            _fail("an open dinner window must not skip the thought")
+        if engine.state.pending_impulse is not None:
+            _fail("speak false must not enqueue")
+        again = "\n".join(
+            fact.text
+            for fact in scheduler.situation_facts(
+                now,
+                last_user_act="depart",
+                climate="cling_risk",
+                goals=goals,
+                quiet_sec=1000,
+                speak_count=5,
+            )
+        )
+        if "今天还没提过晚饭" not in again:
+            _fail(f"not speaking should leave the dinner fact, got {again}")
+
+        spoken = json.dumps(
+            {
+                "focus": "晚饭",
+                "thought": "还是想提一句。",
+                "keep": "drop",
+                "urge": {
+                    "speak": True,
+                    "about": "记得吃晚饭",
+                    "why": "到点了",
+                    "kind": "dinner",
+                    "wait": "now",
+                },
+                "confidence": "high",
+            },
+            ensure_ascii=False,
+        )
+        later = now + timedelta(seconds=1)
+        state.thought.last_thought_at = now - timedelta(hours=1)
+
+        async def _speak() -> None:
+            async def _complete(_text: str) -> str:
+                return spoken
+
+            await thought_tick_once(state, later, complete=_complete, source_context=ctx)
+
+        asyncio.run(_speak())
+        impulse = engine.state.pending_impulse
+        if (
+            impulse is None
+            or impulse.kind != "dinner"
+            or not impulse.allow_speak
+            or not impulse.from_thought
+        ):
+            _fail(f"dinner speech should enqueue as dinner, got {impulse}")
+        if "cling" in (impulse.instruction or "") and "沉默" in (impulse.instruction or ""):
+            _fail("climate must not rewrite the line")
+
+        async def _send(_payload: dict) -> None:
+            return None
+
+        class _Hub:
+            def all_sessions(self):
+                return [("s1", _send)]
+
+            def idle_sessions(self):
+                return [("s1", _send)] if not self.busy else []
+
+            def set_busy(self, _sid, busy):
+                self.busy = busy
+
+            busy = False
+
+        app = SimpleNamespace(
+            life=engine,
+            hub=_Hub(),
+            orchestrator=SimpleNamespace(
+                handle_initiate=lambda **_kw: _async_sent(),
+                relationship=SimpleNamespace(peek_climate=lambda: "cling_risk"),
+            ),
+            scheduler=scheduler,
+            journal=None,
+            thought=state.thought,
+            thought_store=store,
+        )
+        if not asyncio.run(flush_impulse(app, now=later)):
+            _fail("the dinner impulse should be speakable")
+        if "dinner" not in scheduler.state.care_done:
+            _fail(f"spoken dinner should be care_done, got {scheduler.state.care_done}")
+        if scheduler.state.last_proactive_at:
+            _fail("mentioning dinner must not start a cooldown")
+
+        goal_line = json.dumps(
+            {
+                "focus": "那份报告",
+                "thought": "他还是想提。",
+                "keep": "drop",
+                "urge": {
+                    "speak": True,
+                    "about": "报告快到了",
+                    "kind": "goal",
+                    "wait": "now",
+                },
+                "confidence": "high",
+            },
+            ensure_ascii=False,
+        )
+        state.thought.last_thought_at = later - timedelta(hours=1)
+
+        async def _goal() -> None:
+            async def _complete(_text: str) -> str:
+                return goal_line
+
+            await thought_tick_once(
+                state, later + timedelta(seconds=2), complete=_complete, source_context=ctx
+            )
+
+        asyncio.run(_goal())
+        queued = engine.state.pending_impulse
+        if queued is None or queued.kind != "goal" or queued.source_id != "report":
+            _fail(f"a muted goal should still enqueue, got {queued}")
+
+        unknown = json.dumps(
+            {
+                "focus": "想问一句",
+                "thought": "不知道这算不算现状。",
+                "keep": "drop",
+                "urge": {
+                    "speak": True,
+                    "about": "老师还在吗",
+                    "kind": "not-a-kind",
+                    "wait": "now",
+                },
+                "confidence": "high",
+            },
+            ensure_ascii=False,
+        )
+        from app.life.thought.schema import parse_inner
+
+        bare_impulse = LifeEngine.from_path(root / "bare.json", LifeSettings())
+        parsed = parse_inner(unknown)
+        if parsed is None or parsed.kind != "thought" or parsed.about != "老师还在吗":
+            _fail(f"an unknown kind should stay speakable as thought, got {parsed}")
+        if not maybe_offer_thought(bare_impulse, parsed, now=now):
+            _fail("an unknown kind should still enqueue")
+        if bare_impulse.state.pending_impulse.kind != "thought":
+            _fail(bare_impulse.state.pending_impulse)
+
+        class _EmptyHub:
+            def all_sessions(self):
+                return [("s1", _send)]
+
+        empty = SimpleNamespace(
+            hub=_EmptyHub(),
+            life=LifeEngine.from_path(root / "empty.json", LifeSettings()),
+            orchestrator=SimpleNamespace(relationship=None),
+            scheduler=scheduler,
+        )
+        if asyncio.run(proactive_tick(empty, now=now)):
+            _fail("the proactive tick must not speak from a meal window")
+        if empty.life.state.pending_impulse is not None:
+            _fail("the proactive tick must not enqueue dinner")
+
+
+async def _async_sent() -> str:
+    return "sent"
+
+
 def main() -> None:
     test_missing_empty_and_corrupt_ledger()
     test_ledger_roundtrip()
@@ -2575,6 +2837,7 @@ def main() -> None:
     test_aftertaste_includes_finished_talk()
     test_dialogue_log_persists()
     test_rest_consolidate()
+    test_situation_facts_do_not_enqueue()
     test_live_inner_model()
     test_live_secure_play()
     test_live_dialogue_scenes()

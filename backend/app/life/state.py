@@ -146,6 +146,7 @@ class Impulse:
     first_in_slot: bool = False
     slot_id: str = ""
     date_key: str = ""
+    from_thought: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -163,6 +164,7 @@ class Impulse:
             "first_in_slot": self.first_in_slot,
             "slot_id": self.slot_id,
             "date_key": self.date_key,
+            "from_thought": self.from_thought,
         }
 
     @classmethod
@@ -191,6 +193,7 @@ class Impulse:
             first_in_slot=bool(data.get("first_in_slot", False)),
             slot_id=str(data.get("slot_id") or "").strip(),
             date_key=str(data.get("date_key") or "").strip(),
+            from_thought=bool(data.get("from_thought", False)),
         )
 
 
@@ -255,6 +258,7 @@ class InnerState:
                 first_in_slot=impulse.first_in_slot,
                 slot_id=impulse.slot_id,
                 date_key=impulse.date_key,
+                from_thought=impulse.from_thought,
             )
         return replace(
             self,

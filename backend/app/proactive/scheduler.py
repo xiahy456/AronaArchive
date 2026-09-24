@@ -25,6 +25,7 @@ from typing import Any, Literal
 
 from ..config import FestivalConfig, GoalConfig, MoodFollowupConfig
 from ..taxonomy import MOOD_FOLLOWUP_KIND
+from ..safety import is_crisis_text
 from .care import (
     CARE_KINDS,
     CARE_MEMORY_QUERY,
@@ -32,6 +33,7 @@ from .care import (
     build_care_instruction,
     care_skip_reason,
     care_window_specs,
+    in_window,
 )
 from .festival import (
     HISTORY_FESTIVAL_MARKER,
@@ -58,6 +60,7 @@ from .mood import (
     HISTORY_MOOD_MARKER,
     build_mood_instruction,
     can_attempt_mood,
+    mood_entry_age_seconds,
     select_mood_entry,
 )
 
@@ -73,6 +76,24 @@ MotiveKind = Literal[
     "festival",
     "mood_followup",
 ]
+
+
+_CARE_FACT_LABEL = {
+    "breakfast": "早饭",
+    "lunch": "午饭",
+    "dinner": "晚饭",
+    "sleep": "睡觉",
+}
+
+
+@dataclass(frozen=True)
+class SituationFact:
+    """One present-tense fact. It does not write an instruction or enqueue speech."""
+
+    kind: str
+    text: str
+    key: str = ""
+    due_soon: bool = False
 
 
 @dataclass(frozen=True)
@@ -193,6 +214,16 @@ def _parse_iso(value: str) -> datetime | None:
         return None
 
 
+def _same_day(raw: object, now: datetime) -> bool:
+    stamp = _parse_iso(str(raw or ""))
+    return stamp is not None and stamp.date() == now.date()
+
+
+def _muted_until(raw: object, now: datetime) -> bool:
+    until = _parse_iso(str(raw or ""))
+    return until is not None and now < until
+
+
 class ProactiveScheduler:
     def __init__(
         self,
@@ -286,6 +317,42 @@ class ProactiveScheduler:
             if fid and fid not in self.state.festival_done:
                 self.state.festival_done.append(fid)
         elif kind not in self.state.care_done:
+            self.state.care_done.append(kind)
+        self.save()
+
+    def note_mentioned(
+        self,
+        kind: str,
+        now: datetime | None = None,
+        *,
+        goal_key: str = "",
+        festival_id: str = "",
+        mood_key: str = "",
+        due_soon: bool = False,
+    ) -> None:
+        """Record that she already mentioned this. Does not start a cooldown or a mute."""
+        dt = now or datetime.now()
+        self.state.roll_day(dt)
+        stamp = dt.isoformat(timespec="seconds")
+        if kind == "idle":
+            self.state.last_idle_at = stamp
+        elif kind == "goal":
+            key = (goal_key or "").strip()
+            if key:
+                self.state.last_goal_key = key
+                self.state.goal_last[key] = stamp
+                if due_soon:
+                    self.state.goal_acked[key] = stamp
+        elif kind == MOOD_FOLLOWUP_KIND:
+            key = (mood_key or "").strip()
+            if key:
+                self.state.last_mood_key = key
+                self.state.mood_last[key] = stamp
+        elif kind == "festival":
+            fid = (festival_id or "").strip()
+            if fid and fid not in self.state.festival_done:
+                self.state.festival_done.append(fid)
+        elif kind in CARE_KINDS and kind not in self.state.care_done:
             self.state.care_done.append(kind)
         self.save()
 
@@ -397,6 +464,98 @@ class ProactiveScheduler:
         if hit is None or hit.id in self.state.festival_done:
             return None
         return hit
+
+    def situation_facts(
+        self,
+        now: datetime | None = None,
+        *,
+        last_user_act: str = "other",
+        climate: str | None = None,
+        goals: list[dict[str, object]] | None = None,
+        moods: list[dict[str, object]] | None = None,
+        birthday_content: str = "",
+        quiet_sec: float | None = None,
+        speak_count: int = 0,
+    ) -> list[SituationFact]:
+        """Facts she can notice. Caps, cooldowns, mutes, and depart do not remove them."""
+        dt = now or datetime.now()
+        self.state.roll_day(dt)
+        facts: list[SituationFact] = []
+        if getattr(self.care_cfg, "enabled", True):
+            for kind, start, end in care_window_specs(self.care_cfg):
+                if not in_window(dt, start, end):
+                    continue
+                label = _CARE_FACT_LABEL.get(kind, kind)
+                if kind in self.state.care_done:
+                    text = f"今天已经提过{label}"
+                else:
+                    text = f"现在处于{label}窗口，今天还没提过{label}"
+                facts.append(SituationFact(kind=kind, text=text))
+        if getattr(self.festival_cfg, "enabled", True):
+            hit = match_festival(dt, birthday_content)
+            if hit is not None and hit.name:
+                if hit.id in self.state.festival_done:
+                    text = f"今天是{hit.name}，已经祝贺"
+                else:
+                    text = f"今天是{hit.name}，还没祝贺"
+                facts.append(SituationFact(kind="festival", text=text, key=hit.id))
+        if getattr(self.goal_cfg, "enabled", True):
+            due_soon_sec = float(getattr(self.goal_cfg, "due_soon_sec", 3600) or 0)
+            care_enabled = bool(getattr(self.care_cfg, "enabled", True))
+            for item in goals or []:
+                key = str(item.get("key") or "").strip()
+                content = str(item.get("content") or "").strip()
+                if not key or not content or is_crisis_text(content):
+                    continue
+                if not goal_is_due_soon(
+                    content, dt, due_soon_sec=due_soon_sec, care_enabled=care_enabled
+                ):
+                    continue
+                mentioned = _same_day(self.state.goal_last.get(key), dt)
+                mark = "今天已经提过" if mentioned else "今天还没提过"
+                text = f"{content}。{mark}"
+                if _muted_until(self.state.goal_mute.get(key), dt):
+                    text += "。老师说过先别提"
+                facts.append(
+                    SituationFact(kind="goal", text=text, key=key, due_soon=True)
+                )
+        if getattr(self.mood_cfg, "enabled", True):
+            min_age = float(self.mood_cfg.min_age_sec)
+            max_age = float(self.mood_cfg.max_age_hours) * 3600.0
+            for item in moods or []:
+                key = str(item.get("key") or "").strip()
+                content = str(item.get("content") or "").strip()
+                if not key or not content or is_crisis_text(content):
+                    continue
+                age = mood_entry_age_seconds(item, dt)
+                if age is None or age < min_age or age > max_age:
+                    continue
+                mentioned = _same_day(self.state.mood_last.get(key), dt)
+                mark = "今天已经提过" if mentioned else "今天还没提过"
+                text = f"{content}。{mark}"
+                if _muted_until(self.state.mood_mute.get(key), dt):
+                    text += "。老师说过先别提"
+                facts.append(SituationFact(kind=MOOD_FOLLOWUP_KIND, text=text, key=key))
+        after_sec = float(getattr(self.idle_cfg, "after_sec", 0) or 0)
+        elapsed = quiet_sec
+        if elapsed is None:
+            last_user = _parse_iso(self.state.last_user_at)
+            if last_user is not None:
+                elapsed = (dt - last_user).total_seconds()
+        if elapsed is not None and after_sec > 0 and elapsed >= after_sec:
+            count = max(0, int(speak_count))
+            facts.append(
+                SituationFact(
+                    kind="idle",
+                    text=f"老师已经安静很久。今天阿洛娜已经因为自己的想法开口{count}次",
+                )
+            )
+        if (last_user_act or "") == "depart":
+            facts.append(SituationFact(kind="thought", text="老师刚刚道别"))
+        band = (climate or "").strip()
+        if band:
+            facts.append(SituationFact(kind="thought", text=f"当前气候是{band}"))
+        return facts
 
     def pick_motive(
         self,

@@ -24,6 +24,19 @@ _KEEPS = frozenset({"open", "drop"})
 _WAITS = frozenset({"now", "simmer", "later"})
 _CONFIDENCE = frozenset({"high", "low"})
 _NEEDS = frozenset({"memory", "screen", "knowledge", "recent_talk"})
+URGE_KINDS = frozenset(
+    {
+        "breakfast",
+        "lunch",
+        "dinner",
+        "sleep",
+        "festival",
+        "goal",
+        "mood_followup",
+        "idle",
+        "thought",
+    }
+)
 THOUGHT_HISTORY_PREFIX = "她想提起："
 
 
@@ -44,6 +57,7 @@ class InnerThought:
     about: str = ""
     why: str = ""
     wait: str = "now"
+    kind: str = "thought"
     confidence: str = ""
     need: list[str] = field(default_factory=list)
 
@@ -72,6 +86,7 @@ def parse_inner(raw: str | None) -> InnerThought | None:
     feeling = feeling_raw if feeling_raw in _FEELINGS else ""
     urge = data.get("urge") if isinstance(data.get("urge"), dict) else {}
     wait_raw = str(urge.get("wait") or "").strip()
+    kind_raw = str(urge.get("kind") or "").strip()
     confidence_raw = str(data.get("confidence") or "").strip()
     need_raw = data.get("need") if isinstance(data.get("need"), list) else []
     need = []
@@ -90,6 +105,7 @@ def parse_inner(raw: str | None) -> InnerThought | None:
         about=str(urge.get("about") or "").strip(),
         why=str(urge.get("why") or "").strip(),
         wait=wait_raw if wait_raw in _WAITS else "now",
+        kind=kind_raw if kind_raw in URGE_KINDS else "thought",
         confidence=confidence_raw if confidence_raw in _CONFIDENCE else "",
         need=need,
     )
