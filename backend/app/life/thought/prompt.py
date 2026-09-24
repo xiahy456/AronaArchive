@@ -65,7 +65,7 @@ THOUGHT_SYSTEM = """你是桌面陪伴助手「阿洛娜」。请你根据以下
   "urge": {
     "speak": true|false,
     "about": "若开口，想让老师知道的要点",
-    "why": "为什么是现在",
+    "why": "为什么要说这个",
     "wait": "now|simmer|later"
   },
   "confidence": "high|low",

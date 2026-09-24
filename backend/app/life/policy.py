@@ -259,6 +259,22 @@ def _resolve_pending(
             return _pick(_clear_impulse(state), "emotion_only", "mark_fired")
         return _pick(state.clone(), "speak", "keep")
 
+    if kind == "thought":
+        if not allow:
+            return _pick(_clear_impulse(state), "emotion_only", "drop")
+        if age < SIMMER_SEC:
+            nxt = _shift(
+                state,
+                now,
+                activity="thinking",
+                attention="rumination",
+                mood="preoccupied",
+                last_event_at=now,
+            )
+            nxt.pending_impulse = state.pending_impulse
+            return _pick(nxt, "emotion_only", "keep")
+        return _pick(state.clone(), "speak", "keep")
+
     # goal / mood_followup
     if not allow:
         return _pick(_clear_impulse(state), "emotion_only", "drop")

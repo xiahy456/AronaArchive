@@ -165,6 +165,8 @@ life:
     spontaneous_away_min_sec: 900
     spontaneous_away_max_sec: 1800
     refractory_sec: 180
+    simmer_sec: 30
+    impulse_priority: 30
 
 interact:
   enabled: true

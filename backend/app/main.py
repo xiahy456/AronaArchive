@@ -118,6 +118,9 @@ def create_app() -> FastAPI:
     thought = None
     thought_store = None
     if config.life.enabled:
+        from .life.impulse import IMPULSE_PRIORITY
+
+        IMPULSE_PRIORITY["thought"] = int(config.life.thought.impulse_priority)
         life = LifeEngine.from_config(config.life_abs_path, config.life)
         life.release_startup_look()
         journal = LifeJournal(config.journal_abs_path)

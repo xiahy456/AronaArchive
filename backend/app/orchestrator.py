@@ -857,8 +857,9 @@ class Orchestrator:
                 intent is not None,
                 time.perf_counter() - t0,
             )
-            if intent is not None and care_planner_declined(
-                kind, reply_ok=intent.reply_ok
+            if intent is not None and (
+                care_planner_declined(kind, reply_ok=intent.reply_ok)
+                or (kind == "thought" and not intent.reply_ok)
             ):
                 self.stats["planner_hits"] += 1
                 logger.info(

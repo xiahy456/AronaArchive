@@ -49,6 +49,7 @@ ImpulseKind = Literal[
     "idle",
     "goal",
     "mood_followup",
+    "thought",
 ]
 IMPULSE_KINDS: frozenset[str] = frozenset(
     {
@@ -61,6 +62,7 @@ IMPULSE_KINDS: frozenset[str] = frozenset(
         "idle",
         "goal",
         "mood_followup",
+        "thought",
     }
 )
 

@@ -226,6 +226,8 @@ class ThoughtConfig(BaseModel):
     spontaneous_away_min_sec: float = 900
     spontaneous_away_max_sec: float = 1800
     refractory_sec: float = 180
+    simmer_sec: float = 30
+    impulse_priority: int = 30
 
 
 class LifeConfig(BaseModel):

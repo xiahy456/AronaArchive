@@ -47,6 +47,7 @@ IMPULSE_PRIORITY: dict[str, int] = {
     "sleep": 80,
     "goal": 50,
     "mood_followup": 40,
+    "thought": 30,
     "idle": 10,
 }
 
@@ -343,6 +344,42 @@ def _apply_followup(state: Any, decision: LifeDecision, *, now: datetime) -> Non
         logger.info("impulse withheld fired kind=%s", kind)
 
 
+def _close_spoken_thought(state: Any, engine: Any, now: datetime) -> None:
+    """Drop the spoken thought concern and count the speech. Does not mark care."""
+    from .state import THOUGHT_RUMINATION_PREFIX
+    from .thought.store import ThoughtLedger
+
+    items = [
+        item
+        for item in engine.state.rumination
+        if not item.id.startswith(THOUGHT_RUMINATION_PREFIX)
+    ]
+    if len(items) != len(list(engine.state.rumination)):
+        engine.state = engine.state.with_rumination(items)
+        try:
+            engine.store.save(engine.state)
+        except Exception:
+            logger.exception("life save after thought speech failed")
+    ledger = getattr(state, "thought", None)
+    if not isinstance(ledger, ThoughtLedger):
+        return
+    stamp = now.replace(microsecond=0)
+    if ledger.focus is not None:
+        ledger.focus.spoken = True
+    day = stamp.date().isoformat()
+    if ledger.speak_day != day:
+        ledger.speak_day = day
+        ledger.speak_count = 0
+    ledger.speak_count += 1
+    ledger.last_thought_spoke_at = stamp
+    store = getattr(state, "thought_store", None)
+    if store is not None:
+        try:
+            store.save(ledger)
+        except Exception:
+            logger.exception("thought save after speech failed")
+
+
 async def _speak_impulse(
     state: Any,
     *,
@@ -393,7 +430,7 @@ async def _speak_impulse(
         spoke = True
         snapshot = impulse
         clear_impulse(engine)
-        if scheduler is not None:
+        if scheduler is not None and snapshot.kind != "thought":
             if snapshot.kind == "welcome":
                 scheduler.note_proactive(now)
             else:
@@ -415,6 +452,8 @@ async def _speak_impulse(
         ):
             welcome.mark_period_greeted(snapshot.date_key, snapshot.slot_id)
         logger.info("impulse spoke kind=%s session=%s", snapshot.kind, session_id)
+        if snapshot.kind == "thought":
+            _close_spoken_thought(state, engine, now)
         _drop_spoken_rumination(engine, snapshot.kind)
         journal = _journal_of(state, engine)
         if journal is not None:

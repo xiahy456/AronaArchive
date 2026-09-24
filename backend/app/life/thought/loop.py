@@ -31,6 +31,7 @@ from .context import gather_context
 from .gate import ThoughtClocks, ThoughtDecision, ThoughtGateFacts, decide_thought
 from .schema import parse_inner
 from .sources import select_sources
+from .speech import maybe_offer_thought
 from .store import PendingTrigger, ThoughtLedger
 
 if TYPE_CHECKING:
@@ -123,6 +124,7 @@ async def thought_tick_once(
             decision,
             complete=complete,
             source_context=source_context,
+            motive_pending=facts.motive_pending,
         )
     finally:
         state.thought_in_flight = False
@@ -138,6 +140,7 @@ async def _think(
     *,
     complete,
     source_context,
+    motive_pending: bool = False,
 ) -> None:
     trigger = decision.queued or PendingTrigger(
         kind=decision.kind, focus_id=decision.focus_id
@@ -177,6 +180,12 @@ async def _think(
     thought_store = getattr(state, "thought_store", None)
     if thought_store is not None:
         thought_store.save(ledger)
+    maybe_offer_thought(
+        engine,
+        parsed,
+        now=now,
+        motive_pending=motive_pending,
+    )
 
 
 def _gap_sec(state: "AppState", *, online: bool, last_thought_at: datetime | None, cfg: object) -> float:

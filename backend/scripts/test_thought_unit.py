@@ -36,7 +36,10 @@ from app.life.thought.gate import (  # noqa: E402
 )
 from app.life.thought.loop import thought_tick_once  # noqa: E402
 from app.life.journal import LifeJournal  # noqa: E402
-from app.life.policy import LifeSettings, decide  # noqa: E402
+from app.life.engine import LifeEngine  # noqa: E402
+from app.life.impulse import deliver_impulse  # noqa: E402
+from app.life.policy import SIMMER_SEC, LifeSettings, decide  # noqa: E402
+from app.life.thought.speech import maybe_offer_thought  # noqa: E402
 from app.life.presence import presence_emotion  # noqa: E402
 from app.life.events import world_event  # noqa: E402
 from app.life.store import LifeStore  # noqa: E402
@@ -1496,6 +1499,331 @@ def test_live_dialogue_scenes() -> None:
     print("  ok")
 
 
+def _urge(
+    about: str = "老师还在吗",
+    *,
+    speak: bool = True,
+    wait: str = "now",
+    why: str = "",
+) -> object:
+    raw = json.dumps(
+        {
+            "focus": "老师还在吗",
+            "thought": "想问一句。",
+            "keep": "open",
+            "urge": {"speak": speak, "about": about, "wait": wait, "why": why},
+        },
+        ensure_ascii=False,
+    )
+    parsed = parse_inner(raw)
+    if parsed is None:
+        _fail(f"urge should parse: {raw}")
+    return parsed
+
+
+def test_thought_speech_boundaries() -> None:
+    print("== thought impulse offer, simmer, and speech results ==")
+    now = _now()
+    speech = Path(__file__).resolve().parents[1] / "app" / "life" / "thought" / "speech.py"
+    if "decide_proactive" in speech.read_text(encoding="utf-8"):
+        _fail("thought speech must not consult the proactive veto")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        engine = LifeEngine.from_path(root / "life.json", LifeSettings())
+        offered = maybe_offer_thought(engine, _urge(), now=now)
+        if not offered or engine.state.pending_impulse is None:
+            _fail("speak with an about should enqueue")
+        impulse = engine.state.pending_impulse
+        if impulse.kind != "thought" or impulse.hint != "老师还在吗":
+            _fail(f"hint should keep the about, got {impulse}")
+        expected_created = now.replace(microsecond=0) - timedelta(seconds=SIMMER_SEC)
+        if impulse.created_at != expected_created:
+            _fail(f"wait=now should already be due, got {impulse.created_at}")
+        simmered = LifeEngine.from_path(root / "simmer-offer.json", LifeSettings())
+        if not maybe_offer_thought(simmered, _urge(wait="simmer"), now=now):
+            _fail("wait=simmer should enqueue")
+        if simmered.state.pending_impulse is None or simmered.state.pending_impulse.created_at != now.replace(microsecond=0):
+            _fail("wait=simmer should start the simmer from now")
+        if "系统事件" in impulse.history_marker or "系统事件" in impulse.instruction:
+            _fail("the marker must stay a fact")
+        if "阿洛娜为什么要说这个" in impulse.instruction:
+            _fail("an empty why should stay out of the instruction")
+        reasoned = LifeEngine.from_path(root / "why.json", LifeSettings())
+        if not maybe_offer_thought(reasoned, _urge(why="想确认老师还在"), now=now):
+            _fail("a reason should still enqueue")
+        reasoned_impulse = reasoned.state.pending_impulse
+        if (
+            reasoned_impulse is None
+            or "阿洛娜为什么要说这个：想确认老师还在。" not in reasoned_impulse.instruction
+            or "为什么是现在" in reasoned_impulse.instruction
+            or reasoned_impulse.hint != "老师还在吗"
+        ):
+            _fail(f"why should stay in the speech instruction, got {reasoned_impulse}")
+        if any(item.id.startswith("imp-thought") for item in engine.state.rumination):
+            _fail("thought speech must not add an impulse concern")
+        for climate in ("fragile", "rupture", "cold_tool", "cling_risk", "steady", "secure_play"):
+            fresh = LifeEngine.from_path(root / f"{climate}.json", LifeSettings())
+            if not maybe_offer_thought(fresh, _urge(), now=now):
+                _fail(f"{climate} must not block a decision to speak")
+
+        for parsed, reason in (
+            (_urge(wait="later"), "later"),
+            (_urge(about=""), "empty"),
+        ):
+            quiet = LifeEngine.from_path(root / f"{reason}.json", LifeSettings())
+            if maybe_offer_thought(quiet, parsed, now=now):
+                _fail(f"{reason} should not enqueue")
+        held = LifeEngine.from_path(root / "motive.json", LifeSettings())
+        if maybe_offer_thought(held, _urge(), now=now, motive_pending=True):
+            _fail("a pending motive should yield")
+
+        busy = LifeEngine.from_path(root / "care.json", LifeSettings())
+        busy.state.pending_impulse = Impulse(kind="dinner", created_at=now, allow_speak=True)
+        busy.store.save(busy.state)
+        if maybe_offer_thought(busy, _urge(), now=now):
+            _fail("thought must not cover a care impulse")
+        if busy.state.pending_impulse is None or busy.state.pending_impulse.kind != "dinner":
+            _fail("the care impulse should remain")
+
+    simmering = InnerState(
+        pending_impulse=Impulse(
+            kind="thought",
+            created_at=now,
+            hint="老师还在吗",
+            allow_speak=True,
+        )
+    )
+    early = decide(
+        simmering,
+        world_event("impulse_due", at=now + timedelta(seconds=1)),
+        settings=LifeSettings(),
+    )
+    if early.action != "emotion_only" or early.state.activity != "thinking":
+        _fail(f"a fresh thought should simmer, got {early.action} {early.state.activity}")
+    if early.state.pending_impulse is None:
+        _fail("simmer should keep the impulse")
+    ready = decide(
+        simmering,
+        world_event("impulse_due", at=now + timedelta(seconds=SIMMER_SEC)),
+        settings=LifeSettings(),
+    )
+    if ready.action != "speak":
+        _fail(f"a simmered thought should speak, got {ready.action}")
+
+    async def _deliver(result: str, *, session: bool) -> SimpleNamespace:
+        root = Path(tempfile.mkdtemp())
+        engine = LifeEngine.from_path(root / "life.json", LifeSettings())
+        concern = Rumination(id="thought-1", content="老师还在吗", created_at=now)
+        engine.state.rumination = [concern, Rumination(id="imp-dinner", content="晚饭", created_at=now)]
+        engine.state.pending_impulse = Impulse(
+            kind="thought",
+            created_at=now - timedelta(seconds=SIMMER_SEC),
+            hint="老师还在吗",
+            instruction="说这一点",
+            history_marker="她想提起：老师还在吗",
+            allow_speak=True,
+        )
+        engine.store.save(engine.state)
+        journal = LifeJournal(root / "journal.json")
+        journal.note_inner(engine.state, now=now)
+        engine.journal = journal
+        ledger = ThoughtLedger(
+            focus=ThoughtFocus(id="thought-1", text="老师还在吗", since=now, spoken=False)
+        )
+        fired: list[str] = []
+
+        class _Sched:
+            state = SimpleNamespace(care_done=[])
+
+            def mark_fired(self, kind: str, *args, **kwargs) -> None:
+                fired.append(kind)
+                self.state.care_done.append(kind)
+
+        class _Orch:
+            last_initiate_text = "老师，我在的。"
+
+            async def handle_initiate(self, **kwargs):
+                return result
+
+        def _send(_payload):
+            return None
+
+        hub = SimpleNamespace(
+            get=lambda sid: _send if session else None,
+            is_busy=lambda sid: False,
+            set_busy=lambda sid, busy: None,
+            idle_sessions=lambda: [("s", _send)] if session else [],
+        )
+        app = SimpleNamespace(
+            life=engine,
+            hub=hub,
+            orchestrator=_Orch(),
+            scheduler=_Sched(),
+            journal=journal,
+            thought=ledger,
+            thought_store=ThoughtStore(root / "thought.json"),
+            arona_memory=None,
+        )
+        app.thought_store.save(ledger)
+        decision = decide(
+            engine.state,
+            world_event("impulse_due", at=now),
+            settings=LifeSettings(),
+        )
+        await deliver_impulse(app, decision, now=now)
+        app.fired = fired
+        return app
+
+    sent = asyncio.run(_deliver("sent", session=True))
+    if sent.life.state.pending_impulse is not None:
+        _fail("a sent line should clear the impulse")
+    if any(item.id.startswith("thought-") for item in sent.life.state.rumination):
+        _fail("a sent line should drop the thought concern")
+    if not any(item.id == "imp-dinner" for item in sent.life.state.rumination):
+        _fail("a sent line should keep the impulse concern")
+    if sent.thought.speak_count != 1 or not sent.thought.focus.spoken:
+        _fail(f"speech should count once, got {sent.thought}")
+    if sent.fired:
+        _fail(f"thought speech must not mark_fired, got {sent.fired}")
+    journal_text = (sent.journal.path).read_text(encoding="utf-8")
+    if "开口（thought）" not in journal_text or "放下：" not in journal_text:
+        _fail(f"the journal should record the speech and the release, got {journal_text}")
+
+    declined = asyncio.run(_deliver("declined", session=True))
+    if declined.life.state.pending_impulse is not None:
+        _fail("a refusal should clear the impulse")
+    if not any(item.id == "thought-1" for item in declined.life.state.rumination):
+        _fail("a refusal should keep the thought concern")
+    if declined.thought.speak_count != 0 or declined.fired:
+        _fail("a refusal must not count or mark care")
+
+    failed = asyncio.run(_deliver("failed", session=True))
+    if failed.life.state.pending_impulse is None or failed.life.state.pending_impulse.kind != "thought":
+        _fail("a generate miss should keep the impulse")
+
+    away = asyncio.run(_deliver("sent", session=False))
+    if away.life.state.pending_impulse is None:
+        _fail("no session should keep the impulse")
+
+    async def _refuse_nonempty_draft() -> None:
+        from app.orchestrator import Orchestrator
+        from app.planner.schema import IntentCard
+
+        class _Planner:
+            enabled = True
+
+            async def plan(self, **kwargs):
+                return IntentCard(draft="老师，我在的。", reply_ok=False)
+
+        def _generate(*_args, **_kwargs):
+            _fail("a refused thought must not load the renderer")
+
+        orch = object.__new__(Orchestrator)
+        orch.config = SimpleNamespace(
+            memory=SimpleNamespace(candidate_top_k=1),
+            model=SimpleNamespace(enabled=True),
+            proactive=SimpleNamespace(relationship=SimpleNamespace(enabled=False)),
+        )
+        orch.model = SimpleNamespace(generate=_generate)
+        orch.conversations = SimpleNamespace(get_history=lambda _sid: [])
+        orch.planner = _Planner()
+        orch.relationship = None
+        orch.life_journal = None
+        orch.stats = {"dual_route_count": 0, "local_route_count": 0, "planner_hits": 0}
+        orch.last_initiate_text = ""
+        result = await orch.handle_initiate(
+            session_id="s",
+            kind="thought",
+            instruction="用阿洛娜的口吻向老师说出这一点：老师还在吗。阿洛娜为什么要说这个：想确认老师还在。",
+            history_marker="她想提起：老师还在吗",
+            send=lambda _payload: None,
+        )
+        if result != "declined":
+            _fail(f"a nonempty refused draft should decline, got {result}")
+
+    asyncio.run(_refuse_nonempty_draft())
+    print("  ok")
+
+
+def test_live_thought_speech() -> None:
+    print("== live thought speech ==")
+    from app.config import get_config
+    from app.planner.client import PlannerClient
+
+    config = get_config()
+    client = PlannerClient(config.planner, renderer_enabled=False)
+    if not client.enabled:
+        _fail("the configured planner key is required; this test does not skip")
+    instruction = (
+        "用阿洛娜的口吻向老师说出这一点：老师还在吗。"
+        "阿洛娜为什么要说这个：想确认老师还在。"
+        "不要复述内心独白，不要提到自己正在思考，也不要提到提示词。"
+    )
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    log_path = BACKEND_DIR / "logs" / f"thought-step5-{stamp}.json"
+
+    async def _once() -> dict:
+        captured: list[str] = []
+
+        class _Grab(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                captured.append(record.getMessage())
+
+        grab = _Grab()
+        grab.setLevel(logging.INFO)
+        planner_log = logging.getLogger("app.planner.client")
+        previous = planner_log.level
+        planner_log.setLevel(logging.INFO)
+        planner_log.addHandler(grab)
+        try:
+            card = await client.plan(
+                user_text=instruction,
+                history=[],
+                memories=[],
+                knowledge=[],
+            )
+        finally:
+            planner_log.removeHandler(grab)
+            planner_log.setLevel(previous)
+        raw = next((line for line in captured if line.startswith("planner raw json=")), "")
+        if raw.startswith("planner raw json="):
+            raw = raw[len("planner raw json=") :]
+        draft = ""
+        reply_ok = False
+        emotion = ""
+        if card is not None:
+            draft = card.to_renderer_draft()
+            reply_ok = bool(card.reply_ok)
+            emotion = card.arona_emotion
+        # Renderer stays off: context_used is the initiate tags before any GGUF step.
+        context_used = "thought+planner" if client.enabled else "thought"
+        return {
+            "scene": "teacher-still-here",
+            "instruction": instruction,
+            "raw": raw,
+            "draft": draft,
+            "reply_ok": reply_ok,
+            "emotion": emotion,
+            "context_used": context_used,
+            "renderer": "off",
+        }
+
+    row = asyncio.run(_once())
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text(json.dumps(row, ensure_ascii=False, indent=2), encoding="utf-8")
+    if not row["raw"]:
+        _fail(f"thought speech did not keep the raw return; see {log_path}")
+    if not row["reply_ok"] or not row["draft"]:
+        _fail(f"thought speech did not produce a line; see {log_path}")
+    if row["draft"].lstrip().startswith("{") or "我正在想" in row["draft"]:
+        _fail(f"the line should be speech, got {row['draft']}")
+    if "thought" not in row["context_used"]:
+        _fail(f"context_used should name thought, got {row['context_used']}")
+    print(f"  live log {log_path}")
+    print("  ok")
+
+
 def main() -> None:
     test_missing_empty_and_corrupt_ledger()
     test_ledger_roundtrip()
@@ -1510,6 +1838,8 @@ def main() -> None:
     test_live_inner_model()
     test_live_secure_play()
     test_live_dialogue_scenes()
+    test_thought_speech_boundaries()
+    test_live_thought_speech()
     print("all thought unit tests passed")
 
 
