@@ -1824,6 +1824,207 @@ def test_live_thought_speech() -> None:
     print("  ok")
 
 
+def _thought_cfg() -> SimpleNamespace:
+    return SimpleNamespace(
+        tick_sec=60,
+        revisit_after_sec=1200,
+        refractory_sec=180,
+        spontaneous_online_min_sec=99999,
+        spontaneous_online_max_sec=99999,
+        spontaneous_away_min_sec=99999,
+        spontaneous_away_max_sec=99999,
+    )
+
+
+def _hop_state(now: datetime, ledger: ThoughtLedger) -> SimpleNamespace:
+    return SimpleNamespace(
+        config=SimpleNamespace(life=SimpleNamespace(thought=_thought_cfg())),
+        life=SimpleNamespace(
+            state=InnerState(),
+            store=SimpleNamespace(save=lambda _state: None),
+        ),
+        thought=ledger,
+        hub=SimpleNamespace(all_sessions=lambda: [], any_busy=lambda: False),
+        scheduler=None,
+        listen_uncommitted=False,
+        thought_in_flight=False,
+    )
+
+
+def test_second_hop() -> None:
+    print("== second hop only when she is unsure or missing a section ==")
+    from app.life.thought.prompt import SECOND_HOP_NOTE, THOUGHT_SYSTEM, second_hop_system
+
+    if "这是同一次思考的再想" in THOUGHT_SYSTEM:
+        _fail("the first hop prompt should stay unchanged")
+    if SECOND_HOP_NOTE not in second_hop_system() or "need 必须是空数组" not in second_hop_system():
+        _fail("the second hop should add the rethink sentence")
+    now = _now()
+
+    def _payload(
+        *,
+        focus: str = "想问一句",
+        keep: str = "open",
+        speak: bool = False,
+        about: str = "",
+        why: str = "",
+        confidence: str = "high",
+        need: list[str] | None = None,
+        marker: str = "",
+    ) -> str:
+        return json.dumps(
+            {
+                "focus": focus,
+                "thought": marker or "先放心里。",
+                "keep": keep,
+                "confidence": confidence,
+                "need": need or [],
+                "urge": {"speak": speak, "about": about, "why": why, "wait": "now"},
+            },
+            ensure_ascii=False,
+        )
+
+    async def _once(
+        replies: list[str],
+        ctx: SourceContext,
+        *,
+        seen: list[str] | None = None,
+    ) -> SimpleNamespace:
+        ledger = ThoughtLedger(
+            pending_triggers=[PendingTrigger(kind="climate", not_before=now)]
+        )
+        state = _hop_state(now, ledger)
+        cursor = {"n": 0}
+
+        async def _complete(text: str) -> str:
+            cursor["n"] += 1
+            if seen is not None:
+                seen.append(text)
+            if cursor["n"] > len(replies):
+                _fail(f"thought called the model {cursor['n']} times")
+            return replies[cursor["n"] - 1]
+
+        await thought_tick_once(state, now, complete=_complete, source_context=ctx)
+        if state.thought_in_flight:
+            _fail("in_flight should clear after the second look")
+        state.calls = cursor["n"]
+        return state
+
+    quiet = asyncio.run(
+        _once(
+            [_payload(speak=False, confidence="low")],
+            SourceContext(climate="steady"),
+        )
+    )
+    if quiet.calls != 1 or quiet.life.state.pending_impulse is not None:
+        _fail(f"low confidence without speech or need should stop, got {quiet.calls}")
+
+    changed = asyncio.run(
+        _once(
+            [
+                _payload(speak=True, about="老师还在吗", why="想确认老师还在", confidence="low", focus="第一次想问"),
+                _payload(speak=False, keep="open", focus="先放在心里"),
+            ],
+            SourceContext(climate="steady"),
+        )
+    )
+    if changed.calls != 2:
+        _fail(f"an unsure speech should look twice, got {changed.calls}")
+    if changed.life.state.pending_impulse is not None:
+        _fail("a second decision not to speak should stay private")
+    if not any(item.content == "先放在心里" for item in changed.life.state.rumination):
+        _fail(f"the concern should follow the second keep, got {changed.life.state.rumination}")
+    if any(item.content == "第一次想问" for item in changed.life.state.rumination):
+        _fail("the first focus should not remain after the second result")
+
+    remembered: list[str] = []
+    memory = asyncio.run(
+        _once(
+            [
+                _payload(speak=False, confidence="high", need=["memory"], marker="FIRST_JSON_MARK"),
+                _payload(speak=False, keep="drop", need=["memory", "screen"]),
+            ],
+            SourceContext(climate="steady", reused_memories=("补上的档案",)),
+            seen=remembered,
+        )
+    )
+    if memory.calls != 2:
+        _fail(f"a memory need should look twice and then stop, got {memory.calls}")
+    second_text = remembered[1]
+    if "【老师的档案】" not in second_text or "补上的档案" not in second_text:
+        _fail(f"the second look should gain the memory section, got {second_text}")
+    if "【上一次结果】" not in second_text or "FIRST_JSON_MARK" not in second_text:
+        _fail(f"the second look should keep the first JSON, got {second_text}")
+    if any(item.id.startswith("thought-") for item in memory.life.state.rumination):
+        _fail("the second keep=drop should clear the concern")
+
+    sure = asyncio.run(
+        _once(
+            [_payload(speak=False, confidence="high")],
+            SourceContext(climate="steady"),
+        )
+    )
+    if sure.calls != 1:
+        _fail(f"a sure silence should call once, got {sure.calls}")
+
+    for climate in ("cling_risk", "fragile"):
+        spoken = asyncio.run(
+            _once(
+                [_payload(speak=True, about="老师还在吗", why="想确认老师还在", confidence="high", focus="老师还在吗")],
+                SourceContext(climate=climate),
+            )
+        )
+        impulse = spoken.life.state.pending_impulse
+        if spoken.calls != 1 or impulse is None or impulse.hint != "老师还在吗":
+            _fail(f"{climate} must not add a hop or rewrite the about, got {spoken.calls} {impulse}")
+
+    kept = asyncio.run(
+        _once(
+            [
+                _payload(
+                    speak=True,
+                    about="老师还在吗",
+                    why="想确认老师还在",
+                    confidence="low",
+                    focus="老师还在吗",
+                ),
+                "not-json",
+            ],
+            SourceContext(climate="steady"),
+        )
+    )
+    kept_impulse = kept.life.state.pending_impulse
+    if kept.calls != 2 or kept_impulse is None or kept_impulse.hint != "老师还在吗":
+        _fail(f"a failed second look should keep the first urge, got {kept.calls} {kept_impulse}")
+    if "想确认老师还在" not in kept_impulse.instruction:
+        _fail("a failed second look should keep why")
+    if not any(item.content == "老师还在吗" for item in kept.life.state.rumination):
+        _fail("a failed second look should commit the first focus")
+
+    asked: list[str] = []
+
+    def _knowledge(text: str) -> tuple[str, ...]:
+        asked.append(text)
+        return ("常识甲",)
+
+    lore_seen: list[str] = []
+    lore = asyncio.run(
+        _once(
+            [
+                _payload(speak=False, confidence="high", need=["knowledge"], focus="基沃托斯的学生"),
+                _payload(speak=False, keep="drop"),
+            ],
+            SourceContext(climate="steady", knowledge=_knowledge),
+            seen=lore_seen,
+        )
+    )
+    if lore.calls != 2 or asked != ["基沃托斯的学生"]:
+        _fail(f"knowledge should search the first focus once, got {lore.calls} {asked}")
+    if "常识甲" not in lore_seen[1]:
+        _fail(f"the second look should include the knowledge section, got {lore_seen[1]}")
+    print("  ok")
+
+
 def main() -> None:
     test_missing_empty_and_corrupt_ledger()
     test_ledger_roundtrip()
@@ -1835,6 +2036,7 @@ def main() -> None:
     test_sources_for_each_trigger()
     test_commit_boundaries()
     test_failed_call_writes_nothing()
+    test_second_hop()
     test_live_inner_model()
     test_live_secure_play()
     test_live_dialogue_scenes()

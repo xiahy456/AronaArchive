@@ -12,16 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Thought beat. After the gate allows, one inner call writes private state."""
+"""Thought beat. After the gate allows, one private result is written, with at most one second look."""
 
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ..policy import SIMMER_SEC
 from ..state import InnerState
@@ -29,8 +30,9 @@ from .client import ThoughtClient
 from .commit import commit_inner
 from .context import gather_context
 from .gate import ThoughtClocks, ThoughtDecision, ThoughtGateFacts, decide_thought
-from .schema import parse_inner
-from .sources import select_sources
+from .prompt import second_hop_system
+from .schema import InnerThought, parse_inner
+from .sources import SourceContext, fill_need, select_sources
 from .speech import maybe_offer_thought
 from .store import PendingTrigger, ThoughtLedger
 
@@ -157,11 +159,22 @@ async def _think(
             logger.info("thought model skipped reason=disabled_or_no_key")
             return
         caller = ThoughtClient(planner).complete
-    raw = await caller(sources.text)
+    raw = await _invoke(caller, sources.text)
     parsed = parse_inner(raw)
     if parsed is None:
         logger.info("thought parse failed")
         return
+    if _needs_second_hop(parsed):
+        second_raw = await _invoke(
+            caller,
+            _second_user(sources.text, raw or "", parsed, ctx, now),
+            system=second_hop_system(),
+        )
+        second = parse_inner(second_raw)
+        if second is None:
+            logger.info("thought second hop failed; keeping the first")
+        else:
+            parsed = second
     next_inner = commit_inner(
         now=now,
         inner=inner,
@@ -186,6 +199,50 @@ async def _think(
         now=now,
         motive_pending=motive_pending,
     )
+
+
+def _needs_second_hop(parsed: InnerThought) -> bool:
+    """One more look when she is unsure about speaking, or she named a missing section."""
+    if parsed.confidence == "low" and parsed.speak:
+        return True
+    return bool(parsed.need)
+
+
+def _second_user(
+    text: str,
+    raw: str,
+    parsed: InnerThought,
+    ctx: SourceContext | None,
+    now: datetime,
+) -> str:
+    """Original material, sections she asked for, then the first JSON unchanged."""
+    hop_ctx = ctx
+    focus = (parsed.focus or "").strip()
+    if hop_ctx is not None and focus:
+        hop_ctx = replace(hop_ctx, focus_text=focus)
+    filled = fill_need(text, parsed.need, hop_ctx, now=now)
+    previous = (raw or "").strip()
+    if not previous:
+        return filled
+    if not filled:
+        return f"【上一次结果】\n{previous}"
+    return f"{filled}\n\n【上一次结果】\n{previous}"
+
+
+async def _invoke(caller: Any, user_text: str, *, system: str | None = None) -> Any:
+    if system is not None and _accepts_system(caller):
+        return await caller(user_text, system=system)
+    return await caller(user_text)
+
+
+def _accepts_system(caller: Any) -> bool:
+    try:
+        params = inspect.signature(caller).parameters
+    except (TypeError, ValueError):
+        return False
+    if "system" in params:
+        return True
+    return any(item.kind == inspect.Parameter.VAR_KEYWORD for item in params.values())
 
 
 def _gap_sec(state: "AppState", *, online: bool, last_thought_at: datetime | None, cfg: object) -> float:

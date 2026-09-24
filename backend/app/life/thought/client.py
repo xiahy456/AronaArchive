@@ -39,7 +39,7 @@ class ThoughtClient:
         key = (self.config.api_key or "").strip()
         return bool(self.config.enabled and key and key != "YOUR_DEEPSEEK_API_KEY")
 
-    async def complete(self, user_text: str) -> str | None:
+    async def complete(self, user_text: str, *, system: str | None = None) -> str | None:
         """Return the raw model text, or None on timeout or transport failure."""
         if not self.enabled:
             logger.info("thought model skipped reason=disabled_or_no_key")
@@ -48,7 +48,7 @@ class ThoughtClient:
         payload: dict[str, Any] = {
             "model": self.config.model,
             "messages": [
-                {"role": "system", "content": THOUGHT_SYSTEM},
+                {"role": "system", "content": system or THOUGHT_SYSTEM},
                 {"role": "user", "content": user_text},
             ],
             "temperature": self.config.temperature,
