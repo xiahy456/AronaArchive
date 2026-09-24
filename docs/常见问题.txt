@@ -1,3 +1,11 @@
 1. 
 问题：客户端启动后长时间没有出现启动动画，启动动画最后一帧不消失，阿洛娜卡住不动，没有上线欢迎的语音和文字。
 解决：重启电脑后再启动客户端。
+
+2.
+问题：语音合成遇到英文时就没有播放。
+解决：使用命令行工具（powershell、bash）在tts\gpt-sovits-minimal 目录里执行：
+```bash
+$env:NLTK_ALLOW_PROXIED_URLOPEN = "1"
+.\runtime\python.exe -c "import nltk; nltk.download('cmudict', download_dir=r'.\runtime\nltk_data'); nltk.download('averaged_perceptron_tagger', download_dir=r'.\runtime\nltk_data')"
+```
