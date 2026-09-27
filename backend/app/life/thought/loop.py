@@ -312,7 +312,7 @@ async def greet_on_connect(
             thought_tick_once(state, at, complete=complete),
             timeout=max(0.1, limit),
         )
-    except TimeoutError:
+    except asyncio.TimeoutError:
         decision = None
     engine = getattr(state, "life", None)
     if engine is not None and engine.state.pending_impulse is not None:

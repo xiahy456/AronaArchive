@@ -5,11 +5,11 @@
 </p>
 
 <p align="center">
-  <strong>A non-conversational desktop AI based on Arona from <em>Blue Archive</em></strong>
+  <strong>A self-running digital character AI based on Arona from <em>Blue Archive</em></strong>
 </p>
 
 <p align="center">
-  Through Arona's own independent loop, the system is built as a presence that exists on its own, rather than one that only answers turn by turn. The user enters her logical world as an event.
+  Through the system-maintained independent loop, the system is built as a presence that exists on its own, rather than one that only answers turn by turn. The user enters her logical world as an event.
 </p>
 
 <p align="center">
@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <em>Version: 1.13.1</em>
+  <em>Version: 2.0.0</em>
 </p>
 
 <p align="center">
@@ -30,7 +30,7 @@
 
 **AronaAI** is a non-conversational desktop AI modeled after Arona from the game *Blue Archive*. In lore she is the OS administrator of the Shittim Chest: cheerful, enthusiastic, and always ready to help Sensei (the user).
 
-The project wires a life loop, relationship climate, **Planner → AronaLM Renderer**, proactive impulses, memory and world-lore, voice interaction, screen operation, and Spine 2D character animation into one desktop pipeline, so Arona stays on your screen instead of inside a chat box.
+The project wires a life loop, inner thoughts, relationship climate, dual-model pipeline, proactive impulses, memory and world-lore, voice interaction, screen operation, and Spine 2D character animation into one desktop pipeline, so Arona stays on your screen instead of inside a chat box.
 
 <p align="center">
   <img src="assets/running_example_2.png" alt="Running Example" width="600"/>
@@ -67,10 +67,9 @@ See [`docs/architecture.md`](docs/architecture.md) for the full directory tree.
 
 ### 🤖 AI Engine
 
-- **Life loop**: Arona keeps a self-running realtime state; Sensei's actions enter her current thoughts and behavior
+- **Life loop and inner thoughts**: Arona keeps a self-running realtime state; Sensei's actions enter her current thoughts and behavior; the wall clock and facts decide whether she thinks at all and what she thinks about; a single structured model call writes out the thought result, and she chooses whether to speak or to recurse into further thinking
 - **Relationship climate**: three scalars — trust / dependence / tension — form a vector. User actions are classified by rules, then a lookup table updates the climate; climate zones decide whether she speaks, how she holds herself, or stays silent
 - **Dual-model pipeline**: Planner intent planning → Renderer (AronaLM-Renderer-V2.x)
-- **Proactive impulses**: thoughts that arise in the loop, and thoughts that enter her thinking, first become impulses; she then decides for herself whether to put them into words or action
 - **Screen vision and computer use**: when she needs information she reads the screen, and she completes tasks by operating the computer
 - **Continuous dictation**: ASR fragments go into a buffer first and are submitted after silence; the system decides when to reply
 - **Memory and knowledge are separate**: long-term user facts go to SQLite + FTS5 + Chroma; Arona's short-term memory goes to a JSON sliding window; world-lore goes Markdown corpus → local BGE + Chroma RAG; they are never mixed, and each is injected into the prompt on demand
