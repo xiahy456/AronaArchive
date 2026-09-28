@@ -30,6 +30,7 @@ TYPE_TRANSCRIPT = "transcript"
 TYPE_INTERRUPT = "interrupt"
 TYPE_COMPUTER_USE_OBSERVATION = "computer_use_observation"
 TYPE_GLANCE_FRAME = "glance_frame"
+TYPE_GLANCE_REFUSED = "glance_refused"
 
 # Server -> client
 TYPE_CONNECTED = "connected"

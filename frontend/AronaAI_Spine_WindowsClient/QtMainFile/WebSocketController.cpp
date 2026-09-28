@@ -256,6 +256,14 @@ void WebSocketController::sendGlanceFrame(const QString& requestId, const QStrin
     sendMessage(message);
 }
 
+void WebSocketController::sendGlanceRefused(const QString& requestId)
+{
+    QJsonObject message;
+    message["type"] = QStringLiteral("glance_refused");
+    message["request_id"] = requestId;
+    sendMessage(message);
+}
+
 void WebSocketController::clearSession()
 {
     QJsonObject message;

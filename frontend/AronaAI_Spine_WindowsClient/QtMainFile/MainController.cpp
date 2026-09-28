@@ -448,11 +448,19 @@ void MainController::setImageInputEnabled(bool enabled)
     FINE_DEBUG_OUTPUT(QString("[Main Controller] Image input toggled to: %1")
         .arg(enabled ? "true" : "false"));
     emit imageInputChanged(enabled);
+    if (!enabled && m_webSocketController) {
+        m_webSocketController->sendGlanceRefused(QString());
+    }
 }
 
 void MainController::onGlanceRequested(const QString& requestId)
 {
     if (!m_webSocketController || requestId.isEmpty()) {
+        return;
+    }
+    if (!isImageInputEnabled()) {
+        m_webSocketController->sendGlanceRefused(requestId);
+        FINE_DEBUG_OUTPUT("[Main Controller] Glance refused because image input is off");
         return;
     }
     QList<QWidget*> exclude;
@@ -762,6 +770,9 @@ void MainController::onWebSocketConnected(const QString& sessionId)
     FINE_DEBUG_OUTPUT(QString("[Startup] WebSocket connected, TTS models reloaded: %1/2")
         .arg(m_ttsModelsLoaded));
     emit backendConnected();
+    if (!isImageInputEnabled() && m_webSocketController) {
+        m_webSocketController->sendGlanceRefused(QString());
+    }
 }
 
 void MainController::onWebSocketChatResponse(const QString& content, const QString& contextUsed, double latency, const QString& emotion)

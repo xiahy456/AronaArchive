@@ -172,6 +172,17 @@ class LifeJournal:
             except OSError:
                 logger.exception("life journal save failed path=%s", self.path)
 
+    def drop_kind(self, kind: str) -> None:
+        """Remove every entry of this kind. The glance interval stamp stays."""
+        kept = [item for item in self.entries if item.kind != kind]
+        if len(kept) == len(self.entries):
+            return
+        self.entries = kept
+        try:
+            self.save()
+        except OSError:
+            logger.exception("life journal save failed path=%s", self.path)
+
     def note_teacher_opened(self, user_text: str = "") -> None:
         """Log that the teacher spoke. The utterance itself is discarded."""
         del user_text

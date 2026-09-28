@@ -107,6 +107,60 @@ def maybe_request_glance(state: Any, now: datetime | None = None) -> None:
     loop.create_task(_send_glance(state, request_id), name="life-glance")
 
 
+def forget_glances(state: Any) -> None:
+    """Delete stored glance sources. Leaves the interval stamp and inner thoughts."""
+    seen: set[int] = set()
+    holders = (
+        getattr(state, "journal", None),
+        getattr(state, "life_journal", None),
+        getattr(getattr(state, "orchestrator", None), "life_journal", None),
+    )
+    for journal in holders:
+        if journal is None or id(journal) in seen:
+            continue
+        seen.add(id(journal))
+        drop = getattr(journal, "drop_kind", None)
+        if callable(drop):
+            drop("glance")
+    from .thought.store import ThoughtLedger
+
+    ledger = getattr(state, "thought", None)
+    if not isinstance(ledger, ThoughtLedger):
+        return
+    kept = [item for item in ledger.pending_triggers if item.kind != "glance"]
+    had_glance = len(kept) != len(ledger.pending_triggers) or bool(
+        (ledger.last_glance_seen or "").strip()
+    )
+    ledger.pending_triggers = kept
+    ledger.last_glance_seen = ""
+    if not had_glance:
+        return
+    store = getattr(state, "thought_store", None)
+    if store is None:
+        return
+    try:
+        store.save(ledger)
+    except Exception:
+        logger.exception("glance forget save failed")
+
+
+def apply_glance_refusal(state: Any, request_id: str) -> bool:
+    """Cancel a refused glance and delete stored glance sources.
+
+    An empty request id is a toggle or startup clear. A non-empty id must match
+    the in-flight request, so a late refusal cannot wipe a newer glance.
+    """
+    pending = str(getattr(state, "glance_request_id", "") or "")
+    request_id = (request_id or "").strip()
+    if request_id and request_id != pending:
+        logger.info("glance refusal ignored reason=stale request_id=%s", request_id)
+        return False
+    state.glance_request_id = ""
+    forget_glances(state)
+    logger.info("glance refusal cleared request_id=%s", request_id)
+    return True
+
+
 async def _send_glance(state: Any, request_id: str) -> None:
     hub = getattr(state, "hub", None)
     if hub is None:

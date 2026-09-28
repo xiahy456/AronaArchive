@@ -114,6 +114,7 @@ public:
     void sendInterrupt();
     void sendComputerUseObservation(const QJsonObject& observation);
     void sendGlanceFrame(const QString& requestId, const QString& imageBase64);
+    void sendGlanceRefused(const QString& requestId);
 
     // 清空会话
     void clearSession();

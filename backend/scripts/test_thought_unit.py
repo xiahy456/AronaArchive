@@ -3194,6 +3194,133 @@ def test_aftertaste_holds_speech_after_a_fresh_line() -> None:
     print("  ok")
 
 
+def test_glance_refusal_forgets_sources() -> None:
+    print("== glance refusal drops the screen and keeps other notes ==")
+    from app.life.glance import apply_glance_refusal
+    from app.life.journal import JournalEntry
+    from app.life.thought.context import gather_context
+    from app.life.thought.sources import select_sources
+    from app.ws_handler import websocket_endpoint
+
+    source = inspect.getsource(websocket_endpoint)
+    branch = source.split("TYPE_GLANCE_REFUSED", 1)
+    if len(branch) != 2:
+        _fail("glance_refused must be a websocket message")
+    handler = branch[1].split("elif msg_type", 1)[0]
+    if "apply_glance_refusal" not in handler or "describe_glance" in handler:
+        _fail("a refusal must cancel the glance instead of describing a frame")
+
+    now = datetime(2026, 9, 10, 16, 0, 0)
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        journal = LifeJournal(root / "life_journal.json")
+        journal.last_glance_at = now
+        journal.entries = [
+            JournalEntry(at=now, kind="shift", summary="在教室发呆"),
+            JournalEntry(at=now, kind="glance", summary="记事本开着"),
+        ]
+        journal.save()
+        store = ThoughtStore(root / "thought.json")
+        ledger = ThoughtLedger(
+            last_glance_seen="记事本开着",
+            pending_triggers=[
+                PendingTrigger(kind="glance", not_before=now, detail="记事本开着"),
+                PendingTrigger(kind="aftertaste", not_before=now),
+            ],
+        )
+        store.save(ledger)
+        state = SimpleNamespace(
+            glance_request_id="req-1",
+            journal=journal,
+            life_journal=journal,
+            thought=ledger,
+            thought_store=store,
+            hub=SimpleNamespace(all_sessions=lambda: []),
+            life=SimpleNamespace(state=InnerState()),
+            orchestrator=None,
+            scheduler=None,
+            arona_memory=None,
+            welcome=None,
+        )
+        glance = PendingTrigger(kind="glance", not_before=now, detail="记事本开着")
+        before = gather_context(state, now, glance)
+        if before.glance_text != "记事本开着" or "记事本开着" not in before.journal:
+            _fail(f"a stored glance should be readable before refusal, got {before}")
+        shown = select_sources(glance, now, InnerState(), ledger, before)
+        if "【瞥见】" not in shown.text or "记事本开着" not in shown.text:
+            _fail(f"glance material should name the screen, got {shown.text}")
+
+        if apply_glance_refusal(state, "other"):
+            _fail("a stale refusal must be ignored")
+        if state.glance_request_id != "req-1" or ledger.last_glance_seen != "记事本开着":
+            _fail("a stale refusal must leave the in-flight glance alone")
+        if not any(item.kind == "glance" for item in journal.entries):
+            _fail("a stale refusal must keep the glance journal")
+
+        if not apply_glance_refusal(state, "req-1"):
+            _fail("a matching refusal should clear")
+        if state.glance_request_id:
+            _fail("a matching refusal should cancel the request")
+        if any(item.kind == "glance" for item in journal.entries):
+            _fail("a matching refusal should drop glance journal rows")
+        if [item.summary for item in journal.entries] != ["在教室发呆"]:
+            _fail(f"other journal rows should stay, got {journal.entries}")
+        if journal.last_glance_at != now:
+            _fail("the glance interval should stay so the next request waits")
+        if any(item.kind == "glance" for item in ledger.pending_triggers):
+            _fail("glance triggers should be dropped")
+        if [item.kind for item in ledger.pending_triggers] != ["aftertaste"]:
+            _fail(f"other triggers should stay, got {ledger.pending_triggers}")
+        if ledger.last_glance_seen:
+            _fail("last_glance_seen should be cleared")
+        saved_journal = LifeJournal(root / "life_journal.json")
+        saved_ledger = ThoughtStore(root / "thought.json").load()
+        if any(item.kind == "glance" for item in saved_journal.entries) or saved_journal.last_glance_at != now:
+            _fail("the journal should save the drop and keep the interval")
+        if saved_ledger.last_glance_seen or any(item.kind == "glance" for item in saved_ledger.pending_triggers):
+            _fail("the ledger should save the dropped glance")
+
+        journal.append("glance", "记事本开着", now)
+        ledger.last_glance_seen = "记事本开着"
+        ledger.pending_triggers.append(
+            PendingTrigger(kind="glance", not_before=now, detail="记事本开着")
+        )
+        state.glance_request_id = "req-2"
+        if not apply_glance_refusal(state, ""):
+            _fail("an empty refusal should clear stored glances")
+        if state.glance_request_id or ledger.last_glance_seen:
+            _fail("an empty refusal should cancel the request and the summary")
+        if any(item.kind == "glance" for item in journal.entries):
+            _fail("an empty refusal should drop glance journal rows")
+        if [item.kind for item in ledger.pending_triggers] != ["aftertaste"]:
+            _fail("an empty refusal should keep the other trigger")
+
+        after = gather_context(state, now, PendingTrigger(kind="arrived"))
+        if after.glance_text or any("记事本" in row for row in after.journal):
+            _fail(f"cleared glance must leave the context, got {after}")
+        arrived = select_sources(
+            PendingTrigger(kind="arrived"),
+            now,
+            InnerState(),
+            ledger,
+            after,
+        )
+        if "记事本" in arrived.text or "【瞥见】" in arrived.text:
+            _fail(f"arrived material should not mention the cleared glance, got {arrived.text}")
+        if "在教室发呆" not in arrived.text:
+            _fail(f"other journal lines should remain, got {arrived.text}")
+        empty = select_sources(
+            PendingTrigger(kind="glance"),
+            now,
+            InnerState(),
+            ledger,
+            after,
+        )
+        if not empty.cancelled or empty.text or "【瞥见】" in empty.text:
+            _fail(f"a cleared glance should cancel the beat, got {empty}")
+    print("  ok")
+
+
 def main() -> None:
     test_missing_empty_and_corrupt_ledger()
     test_ledger_roundtrip()
@@ -3207,6 +3334,7 @@ def main() -> None:
     test_failed_call_writes_nothing()
     test_second_hop()
     test_event_triggers()
+    test_glance_refusal_forgets_sources()
     test_aftertaste_restarts_from_the_latest_turn()
     test_aftertaste_holds_speech_after_a_fresh_line()
     test_aftertaste_includes_finished_talk()

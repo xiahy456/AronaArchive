@@ -74,6 +74,7 @@ from .life import (
     schedule_presence,
     world_event,
 )
+from .life.glance import apply_glance_refusal
 from .life.hands import begin_hands, end_hands, teacher_turn_aborts_hands
 from .logging_utils import begin_trace, format_interactive_log, preview, reset_trace
 from .orchestrator import Orchestrator
@@ -101,6 +102,7 @@ from .protocol import (
     TYPE_CONNECTED,
     TYPE_GET_STATS,
     TYPE_GLANCE_FRAME,
+    TYPE_GLANCE_REFUSED,
     TYPE_INTERRUPT,
     TYPE_INTERACT,
     TYPE_LISTEN_STATE,
@@ -1160,6 +1162,15 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
                     _schedule_commit()
                 elif msg_type == TYPE_GLANCE_FRAME:
                     asyncio.create_task(_accept_glance(data))
+                elif msg_type == TYPE_GLANCE_REFUSED:
+                    request_id = str(data.get("request_id") or "")
+                    accepted = apply_glance_refusal(state, request_id)
+                    logger.info(
+                        "WS glance_refused session=%s request_id=%s accepted=%s",
+                        session_id,
+                        request_id,
+                        accepted,
+                    )
                 elif msg_type == TYPE_INTERRUPT:
                     logger.info("WS interrupt session=%s", session_id)
                     if teacher_turn_aborts_hands(inflight_kind):
