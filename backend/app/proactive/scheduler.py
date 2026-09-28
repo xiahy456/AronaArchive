@@ -550,7 +550,12 @@ class ProactiveScheduler:
                     text=f"老师已经安静很久。今天阿洛娜已经因为自己的想法开口{count}次",
                 )
             )
-        if (last_user_act or "") == "depart":
+        if (
+            (last_user_act or "") == "depart"
+            and elapsed is not None
+            and after_sec > 0
+            and elapsed < after_sec
+        ):
             facts.append(SituationFact(kind="thought", text="老师刚刚道别"))
         band = (climate or "").strip()
         if band:

@@ -2631,8 +2631,39 @@ def test_situation_facts_do_not_enqueue() -> None:
             _fail(f"an open dinner window should stay visible, got {blob}")
         if "先别提" not in blob or "交报告" not in blob:
             _fail(f"a muted goal should remain and say so, got {blob}")
-        if "老师刚刚道别" not in blob or "开口5次" not in blob:
-            _fail(f"depart and the speak count should stay visible, got {blob}")
+        if "老师已经安静很久" not in blob or "开口5次" not in blob:
+            _fail(f"a long quiet should stay visible with the speak count, got {blob}")
+        if "老师刚刚道别" in blob:
+            _fail(f"a goodbye past the quiet window should not stay fresh, got {blob}")
+        fresh = "\n".join(
+            fact.text
+            for fact in scheduler.situation_facts(
+                now,
+                last_user_act="depart",
+                climate="cling_risk",
+                goals=goals,
+                quiet_sec=30,
+                speak_count=5,
+            )
+        )
+        if "老师刚刚道别" not in fresh:
+            _fail(f"a goodbye inside the quiet window should stay fresh, got {fresh}")
+        if "老师已经安静很久" in fresh:
+            _fail(f"a fresh goodbye should not also be a long quiet, got {fresh}")
+        scheduler.state.last_user_at = ""
+        unknown = "\n".join(
+            fact.text
+            for fact in scheduler.situation_facts(
+                now,
+                last_user_act="depart",
+                climate="cling_risk",
+                goals=goals,
+                quiet_sec=None,
+                speak_count=5,
+            )
+        )
+        if "老师刚刚道别" in unknown or "老师已经安静很久" in unknown:
+            _fail(f"an undated goodbye should not be called fresh or long, got {unknown}")
         if "当前气候是cling_risk" not in blob:
             _fail(f"climate should be a fact, got {blob}")
         rendered = select_sources(
