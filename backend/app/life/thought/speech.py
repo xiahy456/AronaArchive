@@ -34,8 +34,9 @@ def maybe_offer_thought(
     facts: tuple = (),
     welcome: Any = None,
     hold_speech: bool = False,
+    gate_kind: str = "",
 ) -> bool:
-    """Enqueue speech when she decided to say it. A pending motive or a held aftertaste yields."""
+    """Enqueue speech when she decided to say it. A pending motive or a fresh line yields."""
     about = (parsed.about or "").strip()
     why = (parsed.why or "").strip()
     if hold_speech or motive_pending or not parsed.speak or not about or parsed.wait == "later":
@@ -48,6 +49,8 @@ def maybe_offer_thought(
         instruction += f"阿洛娜为什么要说这个：{why}。"
     instruction += "不要复述内心独白，不要复述说话原因，不要提到自己正在思考，也不要提到提示词。"
     kind = parsed.kind if parsed.kind else "thought"
+    if kind in {"welcome", "festival"} and gate_kind != "arrived":
+        kind = "thought"
     source_id, due_soon, extra = _fact_source(kind, facts)
     impulse = Impulse(
         kind=kind,  # type: ignore[arg-type]

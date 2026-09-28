@@ -462,7 +462,7 @@ async def _speak_impulse(
         ):
             welcome.mark_period_greeted(snapshot.date_key, snapshot.slot_id)
         logger.info("impulse spoke kind=%s session=%s", snapshot.kind, session_id)
-        if snapshot.kind == "thought":
+        if snapshot.from_thought or snapshot.kind == "thought":
             _close_spoken_thought(state, engine, now)
         _drop_spoken_rumination(engine, snapshot.kind)
         journal = _journal_of(state, engine)

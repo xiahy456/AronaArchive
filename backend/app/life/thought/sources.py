@@ -296,7 +296,7 @@ def _talk(kind: str, ctx: SourceContext, seen: dict[str, bool]) -> list[str]:
         turns = ctx.ended_turns
     elif kind == "left":
         turns = ctx.turns[-1:]
-    elif kind == "spontaneous":
+    elif kind in {"spontaneous", "memory"}:
         turns = ctx.turns[-TALK_TURNS:]
     else:
         return []

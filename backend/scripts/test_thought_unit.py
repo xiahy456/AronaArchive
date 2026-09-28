@@ -3044,9 +3044,10 @@ def test_arrival_greeting_falls_back_only_on_failure() -> None:
         if declined.life.state.pending_impulse is not None or declined.welcome._period_greeted:
             _fail("speak false must not welcome and must not fall back")
 
-        again = _world(afternoon + timedelta(minutes=3))
+        later = afternoon + timedelta(minutes=3)
+        again = _world(later)
         again.welcome.mark_period_greeted("2026-09-23", "afternoon")
-        asyncio.run(_greet(again, afternoon, _payload("welcome", True, "又见面了")))
+        asyncio.run(_greet(again, later, _payload("welcome", True, "又见面了")))
         if again.life.state.pending_impulse is None or again.life.state.pending_impulse.kind != "welcome":
             _fail("already greeting must not block her from speaking again")
         silent = _world(afternoon + timedelta(minutes=4))
@@ -3321,6 +3322,147 @@ def test_glance_refusal_forgets_sources() -> None:
     print("  ok")
 
 
+def test_memory_holds_speech_after_a_fresh_line() -> None:
+    print("== a fresh line keeps a memory thought unspoken ==")
+    from app.life.thought.triggers import note_memory
+
+    now = _now()
+    payload = json.dumps(
+        {
+            "focus": "每天都来找我",
+            "thought": "这句话我想收着。",
+            "keep": "open",
+            "confidence": "high",
+            "urge": {
+                "speak": True,
+                "about": "老师你回来了",
+                "why": "想让他知道我在",
+                "wait": "now",
+                "kind": "welcome",
+            },
+        },
+        ensure_ascii=False,
+    )
+
+    async def _tick(state) -> None:
+        async def _complete(_text: str) -> str:
+            return payload
+
+        await thought_tick_once(
+            state,
+            now,
+            complete=_complete,
+            source_context=SourceContext(seconds_since_arona=12),
+        )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        state = _event_state(Path(tmp), now)
+        if not note_memory(state, "goal_daily_visit_arona", now=now):
+            _fail("a new memory should enqueue")
+        asyncio.run(_tick(state))
+        if not any(item.content == "每天都来找我" for item in state.life.state.rumination):
+            _fail("a fresh line should still keep the memory thought")
+        if state.life.state.pending_impulse is not None:
+            _fail(f"a fresh line must not speak the memory, got {state.life.state.pending_impulse}")
+    print("  ok")
+
+
+def test_memory_sees_recent_talk_and_not_a_welcome() -> None:
+    print("== memory keeps recent talk, and welcome stays a thought ==")
+    now = _now()
+    text = select_sources(
+        PendingTrigger(kind="memory", memory_key="goal_daily"),
+        now,
+        InnerState(),
+        ThoughtLedger(),
+        SourceContext(turns=(("上午好", "您终于回来啦"),)),
+    ).text
+    if "【最近的话】" not in text or "您终于回来啦" not in text:
+        _fail(f"memory should show the greeting already said, got {text}")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        memory = LifeEngine.from_path(root / "memory.json", LifeSettings())
+        arrived = LifeEngine.from_path(root / "arrived.json", LifeSettings())
+        urged = _urge()
+        urged.kind = "welcome"
+        urged.about = "老师你回来了"
+        if not maybe_offer_thought(memory, urged, now=now, gate_kind="memory"):
+            _fail("a memory welcome should still enqueue as a thought")
+        if memory.state.pending_impulse is None or memory.state.pending_impulse.kind != "thought":
+            _fail(f"memory must not become a welcome, got {memory.state.pending_impulse}")
+        if not maybe_offer_thought(arrived, urged, now=now, gate_kind="arrived"):
+            _fail("an arrival welcome should enqueue")
+        if arrived.state.pending_impulse is None or arrived.state.pending_impulse.kind != "welcome":
+            _fail(f"arrival should keep welcome, got {arrived.state.pending_impulse}")
+    print("  ok")
+
+
+def test_thought_speech_marks_any_from_thought() -> None:
+    print("== a spoken follow-up marks the thought as said ==")
+    now = _now()
+
+    async def _deliver() -> SimpleNamespace:
+        root = Path(tempfile.mkdtemp())
+        engine = LifeEngine.from_path(root / "life.json", LifeSettings())
+        engine.state.rumination = [
+            Rumination(id="thought-1", content="老师终于回来了", created_at=now)
+        ]
+        engine.state.pending_impulse = Impulse(
+            kind="mood_followup",
+            created_at=now,
+            hint="老师终于回来了",
+            instruction="说这一点",
+            allow_speak=True,
+            from_thought=True,
+        )
+        engine.store.save(engine.state)
+        ledger = ThoughtLedger(
+            focus=ThoughtFocus(id="thought-1", text="老师终于回来了", since=now, spoken=False)
+        )
+        store = ThoughtStore(root / "thought.json")
+        store.save(ledger)
+
+        async def _send(_payload: dict) -> None:
+            return None
+
+        class _Hub:
+            def get(self, _sid):
+                return _send
+
+            def is_busy(self, _sid):
+                return False
+
+            def set_busy(self, _sid, _busy):
+                return None
+
+            def idle_sessions(self):
+                return [("s", _send)]
+
+        class _Orch:
+            async def handle_initiate(self, **_kwargs):
+                return "sent"
+
+        app = SimpleNamespace(
+            life=engine,
+            hub=_Hub(),
+            orchestrator=_Orch(),
+            scheduler=None,
+            journal=None,
+            thought=ledger,
+            thought_store=store,
+        )
+        decision = decide(engine.state, world_event("impulse_due", at=now), settings=LifeSettings())
+        await deliver_impulse(app, decision, now=now)
+        return app
+
+    sent = asyncio.run(_deliver())
+    if sent.thought.focus is None or not sent.thought.focus.spoken:
+        _fail(f"a from-thought line should mark the focus spoken, got {sent.thought.focus}")
+    if any(item.id.startswith("thought-") for item in sent.life.state.rumination):
+        _fail("a from-thought line should drop the thought concern")
+    print("  ok")
+
+
 def main() -> None:
     test_missing_empty_and_corrupt_ledger()
     test_ledger_roundtrip()
@@ -3337,6 +3479,9 @@ def main() -> None:
     test_glance_refusal_forgets_sources()
     test_aftertaste_restarts_from_the_latest_turn()
     test_aftertaste_holds_speech_after_a_fresh_line()
+    test_memory_holds_speech_after_a_fresh_line()
+    test_memory_sees_recent_talk_and_not_a_welcome()
+    test_thought_speech_marks_any_from_thought()
     test_aftertaste_includes_finished_talk()
     test_dialogue_log_persists()
     test_rest_consolidate()

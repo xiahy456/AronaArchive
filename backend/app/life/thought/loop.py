@@ -209,15 +209,14 @@ async def _think(
         motive_pending=motive_pending,
         facts=tuple(getattr(offered_ctx, "situation", ()) or ()),
         welcome=getattr(state, "welcome", None),
-        hold_speech=_hold_aftertaste(state, now, decision, offered_ctx, live_spoke),
+        hold_speech=_hold_fresh_speech(state, now, offered_ctx, live_spoke),
+        gate_kind=decision.kind,
     )
     return "committed"
 
 
-def _hold_aftertaste(state: "AppState", now: datetime, decision: ThoughtDecision, ctx: Any, live_spoke: Any) -> bool:
-    """An aftertaste that lands on a line she just said stays unspoken."""
-    if decision.kind != "aftertaste":
-        return False
+def _hold_fresh_speech(state: "AppState", now: datetime, ctx: Any, live_spoke: Any) -> bool:
+    """A thought that lands on a line she just said stays unspoken."""
     cfg = getattr(getattr(getattr(state, "config", None), "life", None), "thought", None)
     floor = float(getattr(cfg, "aftertaste_min_sec", 30) or 30)
     since = getattr(ctx, "seconds_since_arona", None)
