@@ -4,10 +4,10 @@
     "initializing": "【什亭之匣】正在初始化..."
   },
   "application_data": {
-    "application_name": "阿洛娜AI",
-    "main_widget_name": "阿洛娜AI-主界面",
-    "settings_widget_name": "阿洛娜AI-设置界面",
-    "user_input_widget_name": "阿洛娜AI-用户输入界面",
+    "application_name": "阿洛娜档案",
+    "main_widget_name": "阿洛娜档案-主界面",
+    "settings_widget_name": "阿洛娜档案-设置界面",
+    "user_input_widget_name": "阿洛娜档案-用户输入界面",
     "system_tray": "系统托盘",
     "system_tray_not_support": "您的系统不支持系统托盘",
     "showOrHide_main_widget": "显示/隐藏主界面",
@@ -47,7 +47,7 @@
     "frame_rate": "帧率",
     "widget_zoom": "界面缩放",
     "voiceInput_shortCut": "语音快捷键",
-    "arona_ai_mode": "阿洛娜AI模式",
+    "arona_ai_mode": "运行模式",
     "arona_ai_mode_0": "日程模式",
     "arona_ai_mode_1": "档案模式",
     "origin": "原作",

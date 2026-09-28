@@ -47,7 +47,7 @@ tts\gpt-sovits\SoVITS_weights_v2\ALuoNa_cn_e16_s256.pth
 
 只开语音、不开后端时：进入 `tts\gpt-sovits` 双击 `go-apiv2.bat`。
 
-仓库里如果还没有 `tts\gpt-sovits\go-apiv2.bat`（例如只下了客户端安装包），从 [Releases](https://github.com/xiahy456/AronaAI/releases) 再下 `AronaAI_GPTSoVITS_v*_x64.zip`，解压到仓库根（和 `start-all.ps1` 放在一起）。
+仓库里如果还没有 `tts\gpt-sovits\go-apiv2.bat`（例如只下了客户端安装包），从 [Releases](https://github.com/xiahy456/AronaArchive/releases) 再下 `AronaArchive_GPTSoVITS_v*_x64.zip`，解压到仓库根（和 `start-all.ps1` 放在一起）。
 
 ---
 

@@ -1,8 +1,8 @@
 # 模型 / Models
 
-本目录存放 AronaAI 运行与微调所需的**本地模型权重**（已在 `.gitignore` 中忽略，需自行下载放置）。
+本目录存放 AronaArchive 运行与微调所需的**本地模型权重**（已在 `.gitignore` 中忽略，需自行下载放置）。
 
-This directory holds local model weights for AronaAI runtime and finetuning (gitignored — download and place them yourself).
+This directory holds local model weights for AronaArchive runtime and finetuning (gitignored — download and place them yourself).
 
 ---
 
@@ -90,4 +90,4 @@ models/AronaLM-Renderer-V2.4/AronaLM-Renderer-V2.4.Q4_K_M.gguf
 
 启用知识 / 记忆向量检索时再补上 `bge-small-zh-v1.5/`；启用语音合成时把 GPT-SoVITS 权重放到 `tts/gpt-sovits/`，步骤见 [`tts/README.md`](../tts/README.md)。
 
-Windows 便携后端（`AronaAI_Backend_v*_x64.zip`）把上述路径放到**解压目录内的 `models/`**，不再使用仓库里的 `../models/`。包内 `config.yaml` 已改成 `models/bge-small-zh-v1.5` 与 `models/AronaLM-Renderer-V2.4/...`。GGUF 默认不打进 zip，需自行下载后放入。
+Windows 便携后端（`AronaArchive_Backend_v*_x64.zip`）把上述路径放到**解压目录内的 `models/`**，不再使用仓库里的 `../models/`。包内 `config.yaml` 已改成 `models/bge-small-zh-v1.5` 与 `models/AronaLM-Renderer-V2.4/...`。GGUF 默认不打进 zip，需自行下载后放入。

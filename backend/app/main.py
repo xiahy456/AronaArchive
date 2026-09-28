@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""AronaAI backend entrypoint."""
+"""AronaArchive backend entrypoint."""
 
 from __future__ import annotations
 
@@ -175,7 +175,7 @@ def create_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         log_path = configure_logging()
-        logger.info("Starting AronaAI backend")
+        logger.info("Starting AronaArchive backend")
         logger.info("Logging to %s", log_path)
         if config.model.enabled:
             model.load(config)
@@ -229,9 +229,9 @@ def create_app() -> FastAPI:
             except asyncio.CancelledError:
                 pass
         await extractor.stop()
-        logger.info("AronaAI backend stopped")
+        logger.info("AronaArchive backend stopped")
 
-    app = FastAPI(title="AronaAI Backend", lifespan=lifespan)
+    app = FastAPI(title="AronaArchive Backend", lifespan=lifespan)
 
     @app.get("/health")
     async def health() -> dict[str, str]:

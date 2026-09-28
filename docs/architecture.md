@@ -27,7 +27,7 @@ arona-ai/
 │   ├── scripts/                # 联调 / 灌库 / 测试脚本
 │   ├── pack/                   # Windows 便携包模板（启动脚本 / README）
 │   ├── dist/                   # 打包输出（gitignore）
-│   │   └── AronaAI_Backend/    # Release 可执行目录
+│   │   └── AronaArchive_Backend/    # Release 可执行目录
 │   ├── data/                   # 记忆库、知识语料与向量库
 │   │   ├── memory/             # memory.db + chroma + relationship.json + proactive.json + life.json
 │   │   └── knowledge/          # 语料 corpus + chroma
@@ -37,8 +37,8 @@ arona-ai/
 │   └── README.md
 │
 ├── frontend/                   # 桌面客户端
-│   └── AronaAI_Spine_WindowsClient/  # Windows 桌面客户端（Qt/C++）
-│       ├── AronaAI_Spine_WindowsClient.sln  # 工程入口
+│   └── AronaArchive_WindowsClient/  # Windows 桌面客户端（Qt/C++）
+│       ├── AronaArchive_WindowsClient.sln  # 工程入口
 │       ├── QtMainFile/         # 主界面、控制器、WebSocket 通信
 │       │   └── main.cpp        # 程序入口
 │       ├── QtUtils/            # 工具类（录音、语音识别、动画等）
@@ -48,8 +48,8 @@ arona-ai/
 │       ├── Config/             # 配置文件（资源路径为相对路径）
 │       │   └── config.example.json  # 客户端配置模板
 │       ├── dist/               # 编译后的可执行目录
-│       │   ├── AronaAI_Client/          # 便携版（保留密钥）
-│       │   └── AronaAI_Client_Release/  # 发布版（清除密钥）
+│       │   ├── AronaArchive_Client/          # 便携版（保留密钥）
+│       │   └── AronaArchive_Client_Release/  # 发布版（清除密钥）
 │       ├── Dict/               # 词典文件
 │       └── README.md
 │

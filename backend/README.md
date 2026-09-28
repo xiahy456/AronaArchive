@@ -1,4 +1,4 @@
-# AronaAI Backend
+# AronaArchive Backend
 
 非交互式桌面AI 的本地后端：FastAPI WebSocket + AronaLM（llama-cpp）+ 关系气候决策 + SQLite 记忆 + DeepSeek 异步抽取 + 向量知识 RAG。
 
@@ -32,7 +32,7 @@
 
 ## 快速开始
 
-终端用户请从 [Releases](https://github.com/xiahy456/AronaAI/releases) 下载 `AronaAI_Backend_v*_x64.zip`，解压后按包内 `README.txt` 配置并双击 `AronaAI_Backend.bat`。不需要 conda / Python。维护者打包见下文「便携发布包」。
+终端用户请从 [Releases](https://github.com/xiahy456/AronaArchive/releases) 下载 `AronaArchive_Backend_v*_x64.zip`，解压后按包内 `README.txt` 配置并双击 `AronaArchive_Backend.bat`。不需要 conda / Python。维护者打包见下文「便携发布包」。
 
 ### 从源码启动
 
@@ -89,10 +89,10 @@ uvicorn app.main:app --host 127.0.0.1 --port 20456
 
 产物：
 
-- 目录：`backend/dist/AronaAI_Backend/`（已 gitignore）
-- zip：`release/AronaAI_Backend_v<version>_x64.zip`
+- 目录：`backend/dist/AronaArchive_Backend/`（已 gitignore）
+- zip：`release/AronaArchive_Backend_v<version>_x64.zip`
 
-zip **不含** GGUF、**不含** 本机 `config.yaml` 里的真实 Key。用户解压后编辑包内 `config.yaml`，按 `models/README.txt` 放置 BGE / Renderer。启动：`AronaAI_Backend.bat`。
+zip **不含** GGUF、**不含** 本机 `config.yaml` 里的真实 Key。用户解压后编辑包内 `config.yaml`，按 `models/README.txt` 放置 BGE / Renderer。启动：`AronaArchive_Backend.bat`。
 
 ## 联调脚本
 
@@ -364,7 +364,7 @@ WebSocket 连接并发送 `connected` 后，若 `proactive.welcome.enabled` 为�
 - **不**调用 Orchestrator / Planner / 记忆抽取，**不**写入 session history
 - 回一条轻量 `chat_response`：`刚才没听清，请再说一次～`，`emotion=curious`，`context_used=asr_filter`
 
-**前端根因修复**（需重编客户端）：`[TencentSpeechRecognizer.cpp](../frontend/AronaAI_Spine_WindowsClient/QtUtils/TencentSpeechRecognizer.cpp)` 空结果改走 `errorOccurred`；`[MainController.cpp](../frontend/AronaAI_Spine_WindowsClient/QtMainFile/MainController.cpp)` 对同类脏串不再 `sendChatMessage`。
+**前端根因修复**（需重编客户端）：`[TencentSpeechRecognizer.cpp](../frontend/AronaArchive_WindowsClient/QtUtils/TencentSpeechRecognizer.cpp)` 空结果改走 `errorOccurred`；`[MainController.cpp](../frontend/AronaArchive_WindowsClient/QtMainFile/MainController.cpp)` 对同类脏串不再 `sendChatMessage`。
 
 ## 世界观知识 RAG
 

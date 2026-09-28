@@ -16,7 +16,7 @@ if not exist "%CD%\python\python.exe" (
   exit /b 1
 )
 
-echo Starting AronaAI backend ...
+echo Starting AronaArchive backend ...
 echo Config:    %CD%\config.yaml
 echo Health:    http://127.0.0.1:20456/health
 echo WebSocket: ws://127.0.0.1:20456/ws

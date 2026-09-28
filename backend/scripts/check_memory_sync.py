@@ -1,4 +1,4 @@
-"""Compare AronaAI memory SQLite rows against the Chroma vector collection.
+"""Compare AronaArchive memory SQLite rows against the Chroma vector collection.
 
 Reports keys only in one store, plus content / metadata / missing-embedding drift.
 Does not load the BGE encoder.

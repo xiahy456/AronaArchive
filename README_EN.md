@@ -1,7 +1,7 @@
-# AronaAI
+# AronaArchive
 
 <p align="center">
-  <img src="assets/logo.png" alt="AronaAI Logo" width="200"/>
+  <img src="assets/logo.png" alt="AronaArchive Logo" width="200"/>
 </p>
 
 <p align="center">
@@ -28,7 +28,7 @@
 
 ## 📖 Introduction
 
-**AronaAI** is a non-conversational desktop AI modeled after Arona from the game *Blue Archive*. In lore she is the OS administrator of the Shittim Chest: cheerful, enthusiastic, and always ready to help Sensei (the user).
+**AronaArchive** is a non-conversational desktop AI modeled after Arona from the game *Blue Archive*. In lore she is the OS administrator of the Shittim Chest: cheerful, enthusiastic, and always ready to help Sensei (the user).
 
 The project wires a life loop, inner thoughts, relationship climate, dual-model pipeline, proactive impulses, memory and world-lore, voice interaction, screen operation, and Spine 2D character animation into one desktop pipeline, so Arona stays on your screen instead of inside a chat box.
 
@@ -45,7 +45,7 @@ The project wires a life loop, inner thoughts, relationship climate, dual-model 
 ## 🏗️ Project Architecture
 
 ```
-arona-ai/
+AronaArchive/
 ├── backend/                              # Python backend (FastAPI + WebSocket)
 ├── frontend/                             # Desktop client (Qt/C++ + Spine)
 ├── tts/                                  # TTS backend (official / minimal)
@@ -96,9 +96,9 @@ See [`docs/architecture.md`](docs/architecture.md) for the full directory tree.
 
 ### Backend
 
-Download the packaged portable backend from the [Releases](https://github.com/xiahy456/AronaAI/releases) page. The bundle includes a Python runtime; you do **not** need conda or Python installed on the machine.
+Download the packaged portable backend from the [Releases](https://github.com/xiahy456/AronaArchive/releases) page. The bundle includes a Python runtime; you do **not** need conda or Python installed on the machine.
 
-1. Open the Releases page and download the latest **portable zip** (`AronaAI_Backend_v*_x64.zip`)
+1. Open the Releases page and download the latest **portable zip** (`AronaArchive_Backend_v*_x64.zip`)
 
 2. After extracting, edit `config.yaml` in the directory and fill in at least these keys:
 
@@ -111,7 +111,7 @@ Download the packaged portable backend from the [Releases](https://github.com/xi
 
    - When Renderer is enabled: `models/AronaLM-Renderer-V2.4/AronaLM-Renderer-V2.4.Q4_K_M.gguf`
 
-4. Double-click `AronaAI_Backend.bat` to start. Set the desktop client's `websocket_url` to `ws://127.0.0.1:20456/ws` (this is already the default).
+4. Double-click `AronaArchive_Backend.bat` to start. Set the desktop client's `websocket_url` to `ws://127.0.0.1:20456/ws` (this is already the default).
 
 > **System requirements**: Windows 10 / 11 x64. If it fails to start, run the bundled `vc_redist.x64.exe` first. Renderer GPU layers need an NVIDIA GPU and a reasonably recent driver. Do not extract a new version over a directory you are already using (unless you do not need to keep memory); runtime data lives in `data/memory/` and `logs/`.
 
@@ -119,9 +119,9 @@ Full field docs and running from source (conda env `shittim-chest` / `python -m 
 
 ### Client
 
-Download the packaged client from the [Releases](https://github.com/xiahy456/AronaAI/releases) page.
+Download the packaged client from the [Releases](https://github.com/xiahy456/AronaArchive/releases) page.
 
-1. Open the Releases page and download the latest **installer** (`AronaAI_WindowsClient_v*_x64_Setup.exe`) or **portable zip** (`AronaAI_WindowsClient_v*_x64.zip`)
+1. Open the Releases page and download the latest **installer** (`AronaArchive_WindowsClient_v*_x64_Setup.exe`) or **portable zip** (`AronaArchive_WindowsClient_v*_x64.zip`)
 2. After installing or extracting, edit `Config/config.json` in the program directory and fill in at least these keys:
 
 ```json
@@ -140,7 +140,7 @@ Download the packaged client from the [Releases](https://github.com/xiahy456/Aro
 }
 ```
 
-For a remote setup, change `websocket_url` / `tts.host` to the corresponding IPs. Full field docs and building from source are in [`frontend/AronaAI_Spine_WindowsClient/README.md`](frontend/AronaAI_Spine_WindowsClient/README.md).
+For a remote setup, change `websocket_url` / `tts.host` to the corresponding IPs. Full field docs and building from source are in [`frontend/AronaArchive_WindowsClient/README.md`](frontend/AronaArchive_WindowsClient/README.md).
 
 > **Note**: Upload [`docs/hot_word.txt`](docs/hot_word.txt) as a hot-word list in Tencent Cloud ASR and set it as the default hot-word list.
 
@@ -161,7 +161,7 @@ tts/gpt-sovits/
     └── ALuoNa_cn_e16_s256.pth
 ```
 
-3. Extract `AronaAI_GPTSoVITS_v*_x64.zip` from Releases to the repo root.
+3. Extract `AronaArchive_GPTSoVITS_v*_x64.zip` from Releases to the repo root.
 4. From the repo root, run `.\start-all.ps1`.
 
 ---
@@ -171,7 +171,7 @@ tts/gpt-sovits/
 | Module | Docs |
 |------|------|
 | **Backend** | [`backend/README.md`](backend/README.md) |
-| **Desktop client** | [`frontend/AronaAI_Spine_WindowsClient/README.md`](frontend/AronaAI_Spine_WindowsClient/README.md) |
+| **Desktop client** | [`frontend/AronaArchive_WindowsClient/README.md`](frontend/AronaArchive_WindowsClient/README.md) |
 | **TTS** | [`tts/README.md`](tts/README.md) · [`tts/gpt-sovits/DEPLOY.md`](tts/gpt-sovits/DEPLOY.md) · [`tts/gpt-sovits-minimal/DEPLOY.md`](tts/gpt-sovits-minimal/DEPLOY.md) |
 | **Models** | [`models/README.md`](models/README.md) |
 | **AronaLM fine-tune** (for developers) | [`llm/aronaLM/finetune/README.md`](llm/aronaLM/finetune/README.md) |

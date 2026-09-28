@@ -1,4 +1,4 @@
-"""Minimal WebSocket smoke test against local AronaAI backend."""
+"""Minimal WebSocket smoke test against local AronaArchive backend."""
 
 from __future__ import annotations
 
@@ -77,7 +77,7 @@ async def run(url: str, message: str) -> int:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="AronaAI WS smoke test")
+    parser = argparse.ArgumentParser(description="AronaArchive WS smoke test")
     parser.add_argument("--url", default="ws://127.0.0.1:20456/ws")
     parser.add_argument("--message", default="老师好，阿洛娜~")
     args = parser.parse_args()

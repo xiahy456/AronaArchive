@@ -1,7 +1,7 @@
-# 阿洛娜AI
+# 阿洛娜档案
 
 <p align="center">
-  <img src="assets/logo.png" alt="AronaAI Logo" width="200"/>
+  <img src="assets/logo.png" alt="AronaArchive Logo" width="200"/>
 </p>
 
 <p align="center">
@@ -28,7 +28,7 @@
 
 ## 📖 项目简介
 
-**阿洛娜AI** 是一个以游戏《蔚蓝档案》（Blue Archive）中角色「阿洛娜」为原型打造的非对话式桌面AI。在设定上，她是「什亭之匣」的操作系统管理员，性格开朗、热情，乐于帮助老师（用户）解决问题。
+**阿洛娜档案** 是一个以游戏《蔚蓝档案》（Blue Archive）中角色「阿洛娜」为原型打造的非对话式桌面AI。在设定上，她是「什亭之匣」的操作系统管理员，性格开朗、热情，乐于帮助老师（用户）解决问题。
 
 本项目把生命循环、内心思考、关系气候、双模型链路、主动冲动、记忆与世界观、语音交互、屏幕操作与 Spine 2D 角色动画接到同一条桌面链路里，让阿洛娜待在屏幕上，而不是停在聊天框里。
 
@@ -45,7 +45,7 @@
 ## 🏗️ 项目架构
 
 ```
-arona-ai/
+AronaArchive/
 ├── backend/                              # Python 后端（FastAPI + WebSocket）
 ├── frontend/                             # 桌面客户端（Qt/C++ + Spine）
 ├── tts/                                  # 语音合成后端（官方 / minimal）
@@ -96,9 +96,9 @@ arona-ai/
 
 ### 后端
 
-从 [Releases 页面](https://github.com/xiahy456/AronaAI/releases) 下载已打包的后端便携目录。包内自带 Python 运行时，**不需要**本机安装 conda 或 Python。
+从 [Releases 页面](https://github.com/xiahy456/AronaArchive/releases) 下载已打包的后端便携目录。包内自带 Python 运行时，**不需要**本机安装 conda 或 Python。
 
-1. 打开 Releases 页面，下载最新版 **便携 zip**（`AronaAI_Backend_v*_x64.zip`）
+1. 打开 Releases 页面，下载最新版 **便携 zip**（`AronaArchive_Backend_v*_x64.zip`）
 
 2. 解压后，编辑目录下的 `config.yaml`，至少填写以下关键项：
 
@@ -112,7 +112,7 @@ arona-ai/
 
    - 启用 Renderer 时：`models/AronaLM-Renderer-V2.4/AronaLM-Renderer-V2.4.Q4_K_M.gguf`
 
-4. 双击 `AronaAI_Backend.bat` 启动。桌面客户端 `websocket_url` 填 `ws://127.0.0.1:20456/ws`（已是默认值）。
+4. 双击 `AronaArchive_Backend.bat` 启动。桌面客户端 `websocket_url` 填 `ws://127.0.0.1:20456/ws`（已是默认值）。
 
 > **系统要求**：Windows 10 / 11 x64。若无法启动，先运行包内 `vc_redist.x64.exe`。启用 Renderer 的 GPU 层需要 NVIDIA 显卡与较新驱动。不要把新版本直接覆盖正在用的目录（除非不需要保留记忆）；运行时数据在 `data/memory/` 与 `logs/`。
 
@@ -120,9 +120,9 @@ arona-ai/
 
 ### 客户端
 
-从 [Releases 页面](https://github.com/xiahy456/AronaAI/releases) 下载已打包的客户端。
+从 [Releases 页面](https://github.com/xiahy456/AronaArchive/releases) 下载已打包的客户端。
 
-1. 打开 Releases 页面，下载最新版 **安装包**（`AronaAI_WindowsClient_v*_x64_Setup.exe`）或 **便携 zip**（`AronaAI_WindowsClient_v*_x64.zip`）
+1. 打开 Releases 页面，下载最新版 **安装包**（`AronaArchive_WindowsClient_v*_x64_Setup.exe`）或 **便携 zip**（`AronaArchive_WindowsClient_v*_x64.zip`）
 2. 安装或解压后，编辑程序目录下的 `Config/config.json`，至少填写以下关键项：
 
 ```json
@@ -141,7 +141,7 @@ arona-ai/
 }
 ```
 
-异机部署时把 `websocket_url` / `tts.host` 改成对应 IP。完整字段与从源码构建见 [`frontend/AronaAI_Spine_WindowsClient/README.md`](frontend/AronaAI_Spine_WindowsClient/README.md)。
+异机部署时把 `websocket_url` / `tts.host` 改成对应 IP。完整字段与从源码构建见 [`frontend/AronaArchive_WindowsClient/README.md`](frontend/AronaArchive_WindowsClient/README.md)。
 
 > **注意**：请在腾讯语音识别热词表中上传 [`docs/hot_word.txt`](docs/hot_word.txt)，并将其设置为默认热词。
 
@@ -162,7 +162,7 @@ tts/gpt-sovits/
     └── ALuoNa_cn_e16_s256.pth
 ```
 
-3. 从 Releases 解压 `AronaAI_GPTSoVITS_v*_x64.zip` 到仓库根。
+3. 从 Releases 解压 `AronaArchive_GPTSoVITS_v*_x64.zip` 到仓库根。
 4. 仓库根运行 `.\start-all.ps1`。
 
 ---
@@ -172,7 +172,7 @@ tts/gpt-sovits/
 | 模块 | 文档 |
 |------|------|
 | **后端** | [`backend/README.md`](backend/README.md) |
-| **桌面客户端** | [`frontend/AronaAI_Spine_WindowsClient/README.md`](frontend/AronaAI_Spine_WindowsClient/README.md) |
+| **桌面客户端** | [`frontend/AronaArchive_WindowsClient/README.md`](frontend/AronaArchive_WindowsClient/README.md) |
 | **语音合成** | [`tts/README.md`](tts/README.md) · [`tts/gpt-sovits/DEPLOY.md`](tts/gpt-sovits/DEPLOY.md) · [`tts/gpt-sovits-minimal/DEPLOY.md`](tts/gpt-sovits-minimal/DEPLOY.md) |
 | **模型** | [`models/README.md`](models/README.md) |
 | **AronaLM 微调**（如果您是开发者，请参考该文档） | [`llm/aronaLM/finetune/README.md`](llm/aronaLM/finetune/README.md) |

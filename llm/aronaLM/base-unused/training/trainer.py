@@ -144,7 +144,7 @@ class Trainer:
 
 # 训练入口主函数
 def main():
-    print("====    AronaAI模型训练    ====")
+    print("====    AronaArchive模型训练    ====")
     # 创建模型
     model = AronaLM()
     print(f"模型参数量: {sum(p.numel() for p in model.parameters()):,}")

@@ -55,7 +55,7 @@
 # logs
 /logs/
 backend/logs/
-/frontend/AronaAI_Spine_WindowsClient/logs/*.log
+/frontend/AronaArchive_WindowsClient/logs/*.log
 
 # pycache
 **/__pycache__/
@@ -109,10 +109,10 @@ bin/
 *.exe
 *.out
 *.app
-/frontend/AronaAI_Spine_WindowsClient/Config/
-/frontend/AronaAI_Spine_WindowsClient/dist/
+/frontend/AronaArchive_WindowsClient/Config/
+/frontend/AronaArchive_WindowsClient/dist/
 /release/
-/frontend/AronaAI_Spine_WindowsClient/AronaAI.iss
+/frontend/AronaArchive_WindowsClient/AronaArchive.iss
 
 # backend runtime data; keep knowledge corpus / WRITING.md tracked
 backend/data/**

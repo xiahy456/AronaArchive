@@ -114,7 +114,7 @@ private slots:
 	void onGptSOVITSSettingsButtonClicked();     // GPT-SOVITS设置按钮被按了
 	void onDebugOutputButtonClicked();     // 调试输出按钮被按了
 	void onAboutDeveloperButtonClicked();     // 关于开发者按钮被按了
-	void onAronaAIModeSwitchButtonClicked();	// AronaAI模式切换按钮被按了
+	void onAronaAIModeSwitchButtonClicked();	// 运行模式切换按钮被按了
 	void receiveDebugMessage(const QString& message);	// 接收到调试信息
 
 private:

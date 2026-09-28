@@ -1,14 +1,14 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Pack the AronaAI backend into a portable Windows x64 directory and zip.
+  Pack the AronaArchive backend into a portable Windows x64 directory and zip.
 
 .DESCRIPTION
   Copies a minimal conda/venv runtime (python.exe + site-packages + native DLLs),
   backend app source, sanitized config, knowledge corpus, and launch scripts into:
 
-    backend\dist\AronaAI_Backend\
-    release\AronaAI_Backend_v<version>_x64.zip
+    backend\dist\AronaArchive_Backend\
+    release\AronaArchive_Backend_v<version>_x64.zip
 
   Never copies backend/config.yaml (may contain real API keys). The packaged
   config.yaml is generated from config.example.yaml with in-package model paths.
@@ -34,7 +34,7 @@
   Build the dist folder only.
 
 .PARAMETER DistDir
-  Output directory. Default: backend\dist\AronaAI_Backend
+  Output directory. Default: backend\dist\AronaArchive_Backend
 
 .EXAMPLE
   .\pack-backend.ps1
@@ -55,11 +55,11 @@ $ErrorActionPreference = "Stop"
 $Root = $PSScriptRoot
 $BackendDir = Join-Path $Root "backend"
 $PackDir = Join-Path $BackendDir "pack"
-$IssPath = Join-Path $Root "frontend\AronaAI_Spine_WindowsClient\AronaAI.iss"
+$IssPath = Join-Path $Root "frontend\AronaArchive_WindowsClient\AronaArchive.iss"
 $BlockedEnvNames = @("shittim-chest")
 
 if (-not $DistDir) {
-    $DistDir = Join-Path $BackendDir "dist\AronaAI_Backend"
+    $DistDir = Join-Path $BackendDir "dist\AronaArchive_Backend"
 }
 
 function Write-Step([string]$Message) {
@@ -167,7 +167,7 @@ function Copy-Tree {
 Assert-Path $BackendDir "backend directory"
 Assert-Path (Join-Path $BackendDir "app\main.py") "backend entry"
 Assert-Path (Join-Path $BackendDir "config.example.yaml") "config.example.yaml"
-Assert-Path (Join-Path $PackDir "AronaAI_Backend.bat") "pack template bat"
+Assert-Path (Join-Path $PackDir "AronaArchive_Backend.bat") "pack template bat"
 Assert-Path (Join-Path $PackDir "README.txt") "pack README"
 
 $PackVersion = Get-BackendPackVersion -Path $IssPath
@@ -221,12 +221,14 @@ Copy-Item -LiteralPath (Join-Path $BackendDir "config.example.yaml") -Destinatio
 
 $readme = (Get-Content -LiteralPath (Join-Path $PackDir "README.txt") -Raw -Encoding UTF8).Replace("{{VERSION}}", $PackVersion)
 Set-Content -LiteralPath (Join-Path $DistDir "README.txt") -Value $readme -Encoding UTF8
-Copy-Item -LiteralPath (Join-Path $PackDir "AronaAI_Backend.bat") -Destination (Join-Path $DistDir "AronaAI_Backend.bat")
+Copy-Item -LiteralPath (Join-Path $PackDir "AronaArchive_Backend.bat") -Destination (Join-Path $DistDir "AronaArchive_Backend.bat")
 Copy-Item -LiteralPath (Join-Path $PackDir "models-README.txt") -Destination (Join-Path $DistDir "models\README.txt")
 
 $vcCandidates = @(
-    (Join-Path $Root "frontend\AronaAI_Spine_WindowsClient\dist\AronaAI_Client_Release\vc_redist.x64.exe"),
-    (Join-Path $Root "frontend\AronaAI_Spine_WindowsClient\dist\AronaAI_Client\vc_redist.x64.exe")
+    (Join-Path $Root "frontend\AronaArchive_WindowsClient\dist\AronaArchive_Client_Release\vc_redist.x64.exe"),
+    (Join-Path $Root "frontend\AronaArchive_WindowsClient\dist\AronaArchive_Client\vc_redist.x64.exe"),
+    (Join-Path $Root "frontend\AronaArchive_WindowsClient\dist\AronaAI_Client_Release\vc_redist.x64.exe"),
+    (Join-Path $Root "frontend\AronaArchive_WindowsClient\dist\AronaAI_Client\vc_redist.x64.exe")
 )
 $vc = $vcCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
 if ($vc) {
@@ -290,7 +292,7 @@ if n <= 0:
 }
 
 $ArtifactDir = Join-Path $Root "release"
-$ZipPath = Join-Path $ArtifactDir "AronaAI_Backend_v${PackVersion}_x64.zip"
+$ZipPath = Join-Path $ArtifactDir "AronaArchive_Backend_v${PackVersion}_x64.zip"
 if (-not $SkipZip) {
     Write-Step "Zipping portable package"
     New-Item -ItemType Directory -Force -Path $ArtifactDir | Out-Null

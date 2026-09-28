@@ -1,7 +1,7 @@
 ﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-  Start AronaAI backend, GPT-SoVITS, and the desktop client; stay running until stopped.
+  Start AronaArchive backend, GPT-SoVITS, and the desktop client; stay running until stopped.
 
 .DESCRIPTION
   1) Start backend and GPT-SoVITS at the same time
@@ -26,7 +26,7 @@
   Wait timeout in seconds for both backend services to become ready. Default: 600
 
 .PARAMETER FrontendExe
-  Optional path to AronaAI_WindowsClient.exe. If omitted, auto-detect.
+  Optional path to AronaArchive_WindowsClient.exe. If omitted, auto-detect.
 
 .PARAMETER TtsStallSec
   Passed to GPT-SoVITS watchdog (stall seconds). Default: 60
@@ -145,8 +145,15 @@ function Resolve-Frontend {
         return @{ Exe = (Resolve-Path $Explicit).Path; WorkDir = $dir }
     }
 
-    $workDir = Join-Path $Root "frontend\AronaAI_Spine_WindowsClient\dist\AronaAI_Client"
+    $clientRoot = Join-Path $Root "frontend\AronaArchive_WindowsClient"
+    $workDirCandidates = @(
+        (Join-Path $clientRoot "dist\AronaArchive_Client"),
+        (Join-Path $clientRoot "dist\AronaAI_Client")
+    )
+    $workDir = $workDirCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+    if (-not $workDir) { $workDir = $workDirCandidates[0] }
     $candidates = @(
+        (Join-Path $workDir "AronaArchive_WindowsClient.exe"),
         (Join-Path $workDir "AronaAI_WindowsClient.exe"),
         (Join-Path $workDir "AronaAI_Spine_WindowsClient.exe")
     )
@@ -292,8 +299,10 @@ function Find-ClientConfigJson {
     if ($script:FrontendInfo -and $script:FrontendInfo.WorkDir) {
         $paths += Join-Path $script:FrontendInfo.WorkDir "Config\config.json"
     }
-    $paths += Join-Path $Root "frontend\AronaAI_Spine_WindowsClient\dist\AronaAI_Client\Config\config.json"
-    $paths += Join-Path $Root "frontend\AronaAI_Spine_WindowsClient\Config\config.json"
+    $clientRoot = Join-Path $Root "frontend\AronaArchive_WindowsClient"
+    $paths += Join-Path $clientRoot "dist\AronaArchive_Client\Config\config.json"
+    $paths += Join-Path $clientRoot "dist\AronaAI_Client\Config\config.json"
+    $paths += Join-Path $clientRoot "Config\config.json"
     foreach ($p in $paths) {
         if ($p -and (Test-Path -LiteralPath $p)) { return $p }
     }
@@ -532,7 +541,7 @@ function Stop-ListenersOnPort {
 
 function Stop-LeftoverFrontend {
     $protected = Get-ProtectedPids
-    $names = @("AronaAI_WindowsClient.exe", "AronaAI_Spine_WindowsClient.exe")
+    $names = @("AronaArchive_WindowsClient.exe", "AronaAI_WindowsClient.exe", "AronaAI_Spine_WindowsClient.exe")
     $candidates = @()
     try {
         $candidates = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
@@ -821,7 +830,7 @@ function Start-BackendService {
     [void](Stop-ListenersOnPort -Port $script:ResolvedBackendPort -Label "Backend")
     Write-Step "Starting backend ..."
     $script:BackendProc = Start-ServiceWindow `
-        -Title "AronaAI Backend" `
+        -Title "AronaArchive Backend" `
         -WorkDir $script:BackendDir `
         -ExePath $script:Conda `
         -Arguments @("run", "-n", $CondaEnv, "--no-capture-output", "python", "-m", "app.main") `
@@ -1110,7 +1119,7 @@ $script:GptLog = Join-Path $LogDir "gpt-sovits.log"
 $script:GptWatchdogLog = Join-Path $LogDir "gpt-sovits-watchdog.log"
 $ttsLabel = Get-ServiceDisplayName "gpt"
 
-Write-Step "AronaAI start-all"
+Write-Step "AronaArchive start-all"
 Write-Host "  Root:        $Root"
 Write-Host ("  Conda:       {0}" -f $(if ($SkipBackend) { "(skipped)" } else { $script:Conda }))
 Write-Host ("  CondaEnv:    {0}" -f $(if ($SkipBackend) { "(skipped)" } else { $CondaEnv }))

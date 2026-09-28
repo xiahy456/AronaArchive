@@ -137,7 +137,7 @@
    <property name="styleSheet">
     <string notr="true">QWidget {
      background-color: white;
-	border-image: url(D:/Code/projects/Arona/arona-ai/frontend/AronaAI_Spine_WindowsClient/Assets/ProgramAssets/TopInformationWidget.png);
+	border-image: url(D:/Code/projects/Arona/arona-ai/frontend/AronaArchive_WindowsClient/Assets/ProgramAssets/TopInformationWidget.png);
      border: none;
      border-bottom-left-radius: 6px;
      border-bottom-right-radius: 6px;
@@ -191,7 +191,7 @@
     <string notr="true">color: rgb(44, 69, 99);</string>
    </property>
    <property name="text">
-    <string>阿洛娜AI-设置界面</string>
+    <string>阿洛娜档案-设置界面</string>
    </property>
   </widget>
   <widget class="QStackedWidget" name="stackedWidget">
@@ -330,7 +330,7 @@ background-color: transparent;
        </rect>
       </property>
       <property name="text">
-       <string>阿洛娜AI模式</string>
+       <string>运行模式</string>
       </property>
      </widget>
      <widget class="ParallelogramWidget" name="basicSettings_aronaAIModeSwitchBGWidget" native="true">
@@ -437,7 +437,7 @@ background-color: transparent;
      </property>
      <property name="styleSheet">
       <string notr="true">QWidget{
-border-image: url(&quot;D:/Code/projects/Arona/arona-ai/frontend/AronaAI_Spine_WindowsClient/Assets/ProgramAssets/BALogo.png&quot;);
+border-image: url(&quot;D:/Code/projects/Arona/arona-ai/frontend/AronaArchive_WindowsClient/Assets/ProgramAssets/BALogo.png&quot;);
 border: none;
 }</string>
      </property>
@@ -452,7 +452,7 @@ border: none;
       </rect>
      </property>
      <property name="text">
-      <string>阿洛娜AI开发者</string>
+      <string>阿洛娜档案开发者</string>
      </property>
     </widget>
     <widget class="QWidget" name="aboutDeveloper_developerWidget" native="true">

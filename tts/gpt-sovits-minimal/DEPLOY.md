@@ -1,6 +1,6 @@
 # GPT-SoVITS Minimal Inference 目录与部署
 
-本目录是 AronaAI 的 **加速 TTS 后端**（[GPT-SoVITS_minimal_inference](https://github.com/GPT-SoVITS-Devel/GPT-SoVITS_minimal_inference) 的 PyTorch `api_server.py`）。与官方 [`../gpt-sovits/`](../gpt-sovits/DEPLOY.md) **二选一**运行，不要同卡双开。
+本目录是 AronaArchive 的 **加速 TTS 后端**（[GPT-SoVITS_minimal_inference](https://github.com/GPT-SoVITS-Devel/GPT-SoVITS_minimal_inference) 的 PyTorch `api_server.py`）。与官方 [`../gpt-sovits/`](../gpt-sovits/DEPLOY.md) **二选一**运行，不要同卡双开。
 
 仓库 `.gitignore` **不提交**上游源码、`runtime/` 与虚拟环境。clone 后这里通常只有本文件、启动脚本、`launch_api.py`、`pack-runtime.ps1` 和 `config/voices.json`。**不要改** clone 进来的上游文件；阿洛娜侧的补丁只放在 `launch_api.py` / `watch-api.ps1`。
 
@@ -164,7 +164,7 @@ python api_server.py --host 127.0.0.1 --port 8000 --voices_config config/voices.
 2. 改客户端 `tts.backend` 为 `official` 或 `minimal`。
 3. 重新 `start gpt` 或再跑 `start-all.ps1`。
 
-同卡双开会抢 Renderer 显存，不支持。要比对延迟时，先停一套再开另一套。RTT 用 [`frontend/AronaAI_Spine_WindowsClient/scripts/test_tts_interval.py`](../../frontend/AronaAI_Spine_WindowsClient/scripts/test_tts_interval.py)；首包 vs 生成完毕用 [`frontend/AronaAI_Spine_WindowsClient/scripts/test_tts_first_packet.py`](../../frontend/AronaAI_Spine_WindowsClient/scripts/test_tts_first_packet.py)。
+同卡双开会抢 Renderer 显存，不支持。要比对延迟时，先停一套再开另一套。RTT 用 [`frontend/AronaArchive_WindowsClient/scripts/test_tts_interval.py`](../../frontend/AronaArchive_WindowsClient/scripts/test_tts_interval.py)；首包 vs 生成完毕用 [`frontend/AronaArchive_WindowsClient/scripts/test_tts_first_packet.py`](../../frontend/AronaArchive_WindowsClient/scripts/test_tts_first_packet.py)。
 
 ---
 

@@ -5,14 +5,14 @@
 
 .DESCRIPTION
   在项目根目录调用：
-    1) frontend\AronaAI_Spine_WindowsClient\pack_keep_secrets.ps1
-       → dist\AronaAI_Client（明文密钥，本机自用）
-    2) frontend\AronaAI_Spine_WindowsClient\pack_sanitize_secrets.ps1
-       → dist\AronaAI_Client_Release（脱敏，对外分发）
-    3) 将 AronaAI_Client_Release 打成 zip
-       → release\AronaAI_WindowsClient_v<version>_x64.zip
-    4) Inno Setup ISCC 编译 AronaAI.iss
-       → release\AronaAI_WindowsClient_v<version>_x64_Setup.exe（基于脱敏发布包）
+    1) frontend\AronaArchive_WindowsClient\pack_keep_secrets.ps1
+       → dist\AronaArchive_Client（明文密钥，本机自用）
+    2) frontend\AronaArchive_WindowsClient\pack_sanitize_secrets.ps1
+       → dist\AronaArchive_Client_Release（脱敏，对外分发）
+    3) 将 AronaArchive_Client_Release 打成 zip
+       → release\AronaArchive_WindowsClient_v<version>_x64.zip
+    4) Inno Setup ISCC 编译 AronaArchive.iss
+       → release\AronaArchive_WindowsClient_v<version>_x64_Setup.exe（基于脱敏发布包）
 
   任一脚本失败则立即退出。
 
@@ -45,7 +45,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$ClientRoot = Join-Path $PSScriptRoot "frontend\AronaAI_Spine_WindowsClient"
+$ClientRoot = Join-Path $PSScriptRoot "frontend\AronaArchive_WindowsClient"
 $KeepScript = Join-Path $ClientRoot "pack_keep_secrets.ps1"
 $SanitizeScript = Join-Path $ClientRoot "pack_sanitize_secrets.ps1"
 
@@ -86,11 +86,11 @@ function Get-ClientPackVersion {
 Invoke-PackScript -ScriptPath $KeepScript -Arguments $packArgs -Label "Pack KEEP secrets"
 Invoke-PackScript -ScriptPath $SanitizeScript -Arguments $packArgs -Label "Pack SANITIZE secrets"
 
-$IssPath = Join-Path $ClientRoot "AronaAI.iss"
-$ReleaseDir = Join-Path $ClientRoot "dist\AronaAI_Client_Release"
+$IssPath = Join-Path $ClientRoot "AronaArchive.iss"
+$ReleaseDir = Join-Path $ClientRoot "dist\AronaArchive_Client_Release"
 $ArtifactDir = Join-Path $PSScriptRoot "release"
 $PackVersion = Get-ClientPackVersion -IssPath $IssPath
-$ZipPath = Join-Path $ArtifactDir "AronaAI_WindowsClient_v${PackVersion}_x64.zip"
+$ZipPath = Join-Path $ArtifactDir "AronaArchive_WindowsClient_v${PackVersion}_x64.zip"
 
 if ((-not $SkipZip) -or (-not $SkipInstaller)) {
     New-Item -ItemType Directory -Force -Path $ArtifactDir | Out-Null
@@ -122,7 +122,7 @@ if (-not $SkipInstaller) {
     Write-Host ("[{0}] Compile Inno Setup installer" -f (Get-Date -Format "HH:mm:ss")) -ForegroundColor Cyan
     Push-Location $ClientRoot
     try {
-        & $InnoISCC "/O$ArtifactDir" ".\AronaAI.iss"
+        & $InnoISCC "/O$ArtifactDir" ".\AronaArchive.iss"
         if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
         }

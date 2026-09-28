@@ -305,15 +305,15 @@
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">
     <IncludePath>$(IncludePath)</IncludePath>
-    <TargetName>AronaAI_WindowsClient</TargetName>
+    <TargetName>AronaArchive_WindowsClient</TargetName>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x64'">
     <IncludePath>$(IncludePath)</IncludePath>
-    <TargetName>AronaAI_WindowsClient</TargetName>
+    <TargetName>AronaArchive_WindowsClient</TargetName>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>D:\Code\projects\Arona\arona-ai\frontend\AronaAI_Spine_WindowsClient\QHotkey;D:\Code\projects\Arona\arona-ai\frontend\AronaAI_Spine_WindowsClient\QtMainFile;D:\Code\projects\Arona\arona-ai\frontend\AronaAI_Spine_WindowsClient\spine-cpp\include;D:\Code\projects\Arona\arona-ai\frontend\AronaAI_Spine_WindowsClient\QtUtils;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\Code\projects\Arona\arona-ai\frontend\AronaArchive_WindowsClient\QHotkey;D:\Code\projects\Arona\arona-ai\frontend\AronaArchive_WindowsClient\QtMainFile;D:\Code\projects\Arona\arona-ai\frontend\AronaArchive_WindowsClient\spine-cpp\include;D:\Code\projects\Arona\arona-ai\frontend\AronaArchive_WindowsClient\QtUtils;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
@@ -322,7 +322,7 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>D:\Code\projects\Arona\arona-ai\frontend\AronaAI_Spine_WindowsClient\QHotkey;D:\Code\projects\Arona\arona-ai\frontend\AronaAI_Spine_WindowsClient\QtMainFile;D:\Code\projects\Arona\arona-ai\frontend\AronaAI_Spine_WindowsClient\spine-cpp\include;D:\Code\projects\Arona\arona-ai\frontend\AronaAI_Spine_WindowsClient\QtUtils;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\Code\projects\Arona\arona-ai\frontend\AronaArchive_WindowsClient\QHotkey;D:\Code\projects\Arona\arona-ai\frontend\AronaArchive_WindowsClient\QtMainFile;D:\Code\projects\Arona\arona-ai\frontend\AronaArchive_WindowsClient\spine-cpp\include;D:\Code\projects\Arona\arona-ai\frontend\AronaArchive_WindowsClient\QtUtils;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>

@@ -20,7 +20,7 @@
   Absolute env prefix that already contains python.exe.
 
 .PARAMETER Zip
-  Also write release/AronaAI_GPTSoVITS_minimal_runtime_x64.zip
+  Also write release/AronaArchive_GPTSoVITS_minimal_runtime_x64.zip
   (archive root is runtime/). Extract into tts/gpt-sovits-minimal/.
 
 .EXAMPLE
@@ -174,7 +174,7 @@ Write-Host "Packed runtime: $DestPy" -ForegroundColor Green
 if ($Zip) {
     $releaseDir = Join-Path $RepoRoot "release"
     New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
-    $zipPath = Join-Path $releaseDir "AronaAI_GPTSoVITS_minimal_runtime_x64.zip"
+    $zipPath = Join-Path $releaseDir "AronaArchive_GPTSoVITS_minimal_runtime_x64.zip"
     if (Test-Path -LiteralPath $zipPath) {
         Remove-Item -LiteralPath $zipPath -Force
     }

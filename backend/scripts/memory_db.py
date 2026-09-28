@@ -1,4 +1,4 @@
-"""Interactive SQL / CRUD helper for AronaAI memory.db."""
+"""Interactive SQL / CRUD helper for AronaArchive memory.db."""
 
 from __future__ import annotations
 
@@ -256,7 +256,7 @@ def cmd_retrieve(db_path: Path, query: str, top_k: int) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Debug / manage AronaAI memory.db (SQL REPL + CRUD)",
+        description="Debug / manage AronaArchive memory.db (SQL REPL + CRUD)",
     )
     parser.add_argument(
         "--db",

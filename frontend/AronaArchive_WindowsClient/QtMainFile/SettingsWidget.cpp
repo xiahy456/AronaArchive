@@ -108,8 +108,8 @@ SettingsWidget::SettingsWidget(QWidget *parent)
     WIDGET_CHILD_SETTING_LABEL(ui.basicSettings_shortCutLabel, "voiceInput_shortCut", 2);
     WIDGET_CHILD_SETTING_INPUT_STRING(ui.basicSettings_shortCutLineEdit, "short_cut_key", "switch_audio_input", 2);
 
-	// 阿洛娜AI模式
-    ui.basicSettings_aronaAIModeWidget->move(STEP_POSITION_POINT(230, 20, 40, 3));  // 阿洛娜AI设置控件基准位置
+	// 运行模式
+    ui.basicSettings_aronaAIModeWidget->move(STEP_POSITION_POINT(230, 20, 40, 3));  // 运行模式设置控件基准位置
 	ui.basicSettings_aronaAIModeWidget->resize(400 * WIDGET_ZOOM, 120 * WIDGET_ZOOM);
     ui.basicSettings_aronaAIModeWidget->setStyleSheet("color: rgb(44, 69, 99);");
 
@@ -194,7 +194,7 @@ SettingsWidget::SettingsWidget(QWidget *parent)
 	connect(ui.gptSOVITSSettingsButton, &QPushButton::clicked, this, &SettingsWidget::onGptSOVITSSettingsButtonClicked);    // GPT-SOVITS设置按钮
 	connect(ui.debugOutputButton, &QPushButton::clicked, this, &SettingsWidget::onDebugOutputButtonClicked);    // 调试输出按钮
 	connect(ui.aboutDeveloperButton, &QPushButton::clicked, this, &SettingsWidget::onAboutDeveloperButtonClicked);    // 关于开发者按钮
-	connect(ui.basicSettings_aronaAIModeSwitchButton, &QPushButton::clicked, this, &SettingsWidget::onAronaAIModeSwitchButtonClicked);    // AronaAI模式切换按钮
+	connect(ui.basicSettings_aronaAIModeSwitchButton, &QPushButton::clicked, this, &SettingsWidget::onAronaAIModeSwitchButtonClicked);    // 运行模式切换按钮
     connect(DebugManager::instance(), &DebugManager::debugMessageReceived, this, &SettingsWidget::receiveDebugMessage); // 接收调试输出
     
     // 重放缓存的消息

@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Package AronaAI_Spine_WindowsClient into a portable release folder.
+  Package AronaArchive_WindowsClient into a portable release folder.
 
 .DESCRIPTION
   Copies the Release exe, runs windeployqt for Qt runtime DLLs/plugins,
@@ -17,13 +17,13 @@
 
 .PARAMETER DistDir
   Output package directory. If omitted:
-    -KeepSecrets  → <script_dir>\dist\AronaAI_Client
-    (default)     → <script_dir>\dist\AronaAI_Client_Release
+    -KeepSecrets  → <script_dir>\dist\AronaArchive_Client
+    (default)     → <script_dir>\dist\AronaArchive_Client_Release
 
 .PARAMETER ExePath
-  Path to Release exe. Default: <script_dir>\x64\Release\AronaAI_WindowsClient.exe
-  (falls back to AronaAI_Spine_WindowsClient.exe if the new name is not built yet).
-  The packaged copy is always named AronaAI_WindowsClient.exe.
+  Path to Release exe. Default: <script_dir>\x64\Release\AronaArchive_WindowsClient.exe
+  (falls back to AronaAI_WindowsClient.exe or AronaAI_Spine_WindowsClient.exe if the new name is not built yet).
+  The packaged copy is always named AronaArchive_WindowsClient.exe.
 
 .PARAMETER KeepSecrets
   If set, keep tencent_speech_recognizer secrets from the source config.
@@ -37,8 +37,8 @@
 
 .NOTES
   推荐入口（两种密钥策略，输出到不同目录）：
-    .\pack_keep_secrets.ps1      → dist\AronaAI_Client
-    .\pack_sanitize_secrets.ps1  → dist\AronaAI_Client_Release
+    .\pack_keep_secrets.ps1      → dist\AronaArchive_Client
+    .\pack_sanitize_secrets.ps1  → dist\AronaArchive_Client_Release
 #>
 [CmdletBinding()]
 param(
@@ -52,15 +52,16 @@ $ErrorActionPreference = "Stop"
 $Root = $PSScriptRoot
 if (-not $DistDir) {
     if ($KeepSecrets) {
-        $DistDir = Join-Path $Root "dist\AronaAI_Client"
+        $DistDir = Join-Path $Root "dist\AronaArchive_Client"
     }
     else {
-        $DistDir = Join-Path $Root "dist\AronaAI_Client_Release"
+        $DistDir = Join-Path $Root "dist\AronaArchive_Client_Release"
     }
 }
-$DistExeName = "AronaAI_WindowsClient.exe"
+$DistExeName = "AronaArchive_WindowsClient.exe"
 if (-not $ExePath) {
     $candidates = @(
+        (Join-Path $Root "x64\Release\AronaArchive_WindowsClient.exe"),
         (Join-Path $Root "x64\Release\AronaAI_WindowsClient.exe"),
         (Join-Path $Root "x64\Release\AronaAI_Spine_WindowsClient.exe")
     )
@@ -145,7 +146,7 @@ if (Test-Path -LiteralPath $DistDir) {
 Cannot clean package directory (files locked):
   $DistDir
 
-Close AronaAI_WindowsClient.exe (and any explorer preview locking DLLs), then retry.
+Close AronaArchive_WindowsClient.exe (and any explorer preview locking DLLs), then retry.
 Original error: $($_.Exception.Message)
 "@
     }

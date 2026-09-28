@@ -1,6 +1,6 @@
 # GPT-SoVITS 目录与部署
 
-本目录是 AronaAI 的 **官方 TTS 服务端**。桌面客户端在 `tts.backend` 为 `official`（缺省）时通过 HTTP 调用 `api_v2.py`（默认 `127.0.0.1:9880`）合成阿洛娜语音；后端对话服务不经过这里。
+本目录是 AronaArchive 的 **官方 TTS 服务端**。桌面客户端在 `tts.backend` 为 `official`（缺省）时通过 HTTP 调用 `api_v2.py`（默认 `127.0.0.1:9880`）合成阿洛娜语音；后端对话服务不经过这里。
 
 可选加速后端见 [`../gpt-sovits-minimal/DEPLOY.md`](../gpt-sovits-minimal/DEPLOY.md)。`start-all.ps1` 根据客户端 `tts.backend` **只启动一套**，不要同卡同时跑官方与 minimal。
 
@@ -14,7 +14,7 @@
 
 ## 主要目录树
 
-AronaAI 实际用到的是 **v2 推理 API**，不必展开训练 / WebUI / UVR5 全树。完整上游结构以官方 README 为准。
+AronaArchive 实际用到的是 **v2 推理 API**，不必展开训练 / WebUI / UVR5 全树。完整上游结构以官方 README 为准。
 
 ```
 gpt-sovits/
@@ -121,7 +121,7 @@ python api_v2.py
 
 ### 4. 对接桌面客户端
 
-复制 `frontend/AronaAI_Spine_WindowsClient/Config/config.example.json` 为 `config.json`，至少核对 `tts`：
+复制 `frontend/AronaArchive_WindowsClient/Config/config.example.json` 为 `config.json`，至少核对 `tts`：
 
 | 字段 | 本项目推荐值 |
 |------|----------------|
@@ -138,7 +138,7 @@ python api_v2.py
 | `reload_weights_on_start` | 默认 `false`。为 `true` 时客户端启动会再切 GPT/SoVITS 权重 |
 | `request_timeout_ms` | `45000`（超时仍显示字幕，不卡 UI） |
 
-客户端启动时默认**不再**请求 `/set_gpt_weights`、`/set_sovits_weights`（权重已由 `tts_infer.yaml` 加载），而是 `GET /set_refer_audio` 再 POST 一句极短 `/tts` 预热 prompt cache，随后对话才 POST `/tts`。需要热切权重时把 `reload_weights_on_start` 设为 `true`。完整字段见 [`frontend/AronaAI_Spine_WindowsClient/README.md`](../../frontend/AronaAI_Spine_WindowsClient/README.md)。
+客户端启动时默认**不再**请求 `/set_gpt_weights`、`/set_sovits_weights`（权重已由 `tts_infer.yaml` 加载），而是 `GET /set_refer_audio` 再 POST 一句极短 `/tts` 预热 prompt cache，随后对话才 POST `/tts`。需要热切权重时把 `reload_weights_on_start` 设为 `true`。完整字段见 [`frontend/AronaArchive_WindowsClient/README.md`](../../frontend/AronaArchive_WindowsClient/README.md)。
 
 ---
 
@@ -167,7 +167,7 @@ python api_v2.py
 
 ### Docker（可选）
 
-上游提供 `docker-compose.yaml`，映射 `9880` 及 WebUI 端口。镜像更新慢，标签需自己核对 [Docker Hub](https://hub.docker.com/r/breakstring/gpt-sovits)。Windows Docker Desktop 请加大 `shm_size`（compose 默认 16G）。AronaAI 日常路径仍是本机 `go-apiv2` / `start-all.ps1`，不必为桌面端单独上容器。
+上游提供 `docker-compose.yaml`，映射 `9880` 及 WebUI 端口。镜像更新慢，标签需自己核对 [Docker Hub](https://hub.docker.com/r/breakstring/gpt-sovits)。Windows Docker Desktop 请加大 `shm_size`（compose 默认 16G）。AronaArchive 日常路径仍是本机 `go-apiv2` / `start-all.ps1`，不必为桌面端单独上容器。
 
 ---
 

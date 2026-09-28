@@ -1,4 +1,4 @@
-AronaAI 后端 {{VERSION}}（Windows x64 便携包）
+AronaArchive 后端 {{VERSION}}（Windows x64 便携包）
 
 本目录自带 Python 运行时，不需要安装 conda 或全局 Python。
 
@@ -28,7 +28,7 @@ AronaAI 后端 {{VERSION}}（Windows x64 便携包）
      models/AronaLM-Renderer-V2.4/AronaLM-Renderer-V2.4.Q4_K_M.gguf
    - 在 config.yaml 将 model.enabled 设为 true
 
-4. 双击 AronaAI_Backend.bat
+4. 双击 AronaArchive_Backend.bat
 5. 健康检查：http://127.0.0.1:20456/health
 6. 桌面客户端 websocket_url 填：
      ws://127.0.0.1:20456/ws
@@ -44,4 +44,4 @@ AronaAI 后端 {{VERSION}}（Windows x64 便携包）
   logs/
 
 本 zip 不含 GGUF，也不含真实 API Key。
-项目主页：https://github.com/xiahy456/AronaAI
+项目主页：https://github.com/xiahy456/AronaArchive

@@ -1,8 +1,8 @@
-# AronaAI Windows 桌面客户端
+# AronaArchive Windows 桌面客户端
 
 基于 Qt/C++ + Spine 2D 的 Windows 桌面客户端，经 WebSocket 对接后端，可接 GPT-SoVITS TTS 与腾讯云 ASR。
 
-日常使用请从仓库 [Releases](https://github.com/xiahy456/AronaAI/releases) 下载安装包或便携 zip，配置见下文。需要自行编译时，按本节构建。
+日常使用请从仓库 [Releases](https://github.com/xiahy456/AronaArchive/releases) 下载安装包或便携 zip，配置见下文。需要自行编译时，按本节构建。
 
 ## 客户端构建
 
@@ -11,7 +11,7 @@ Windows 客户端使用 Visual Studio 2026 和 Qt 构建：
 1. 安装 [Qt 6.x](https://www.qt.io/download)（推荐 6.5.3）和 [Visual Studio 2026](https://visualstudio.microsoft.com/)，并在 VS 2026 中安装 `Qt VS Tools` 扩展
 2. 确保你拥有 v143 (Visual Studio 2022) 平台工具集，在该项目中需要使用此平台工具集
 3. 确保你拥有 Qt 6.5.3 的 `msvc2019_64`，该项目中需要使用此 Qt 版本（Qt Version 可在 `Qt VS Tools` 的设置中配置）
-4. 打开本目录下的 `AronaAI_Spine_WindowsClient.sln`
+4. 打开本目录下的 `AronaArchive_WindowsClient.sln`
 5. 配置 Qt 版本和编译选项
 6. 编译运行
 

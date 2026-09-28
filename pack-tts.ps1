@@ -10,7 +10,7 @@
   压缩包根目录是 tts/，解压到仓库根即可。
 
     .\pack-tts.ps1
-    → release\AronaAI_GPTSoVITS_v<version>_x64.zip
+    → release\AronaArchive_GPTSoVITS_v<version>_x64.zip
 
 .PARAMETER SkipZip
   只组装临时目录，不写 zip。
@@ -26,7 +26,7 @@ param(
 $ErrorActionPreference = "Stop"
 $Root = $PSScriptRoot
 $TtsRoot = Join-Path $Root "tts"
-$IssPath = Join-Path $Root "frontend\AronaAI_Spine_WindowsClient\AronaAI.iss"
+$IssPath = Join-Path $Root "frontend\AronaArchive_WindowsClient\AronaArchive.iss"
 $ArtifactDir = Join-Path $Root "release"
 $StageRoot = Join-Path $ArtifactDir ".tts-pack-stage"
 
@@ -73,7 +73,7 @@ if (-not (Test-Path -LiteralPath $TtsRoot)) {
 }
 
 $PackVersion = Get-PackVersion -Path $IssPath
-$ZipPath = Join-Path $ArtifactDir "AronaAI_GPTSoVITS_v${PackVersion}_x64.zip"
+$ZipPath = Join-Path $ArtifactDir "AronaArchive_GPTSoVITS_v${PackVersion}_x64.zip"
 
 Write-Step "Staging Arona GPT-SoVITS overlay (scripts + ref audio; no runtime)"
 if (Test-Path -LiteralPath $StageRoot) {
