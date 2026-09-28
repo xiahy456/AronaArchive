@@ -8,14 +8,25 @@ import json
 import sys
 
 
-async def run(url: str, message: str) -> int:
+async def run(url: str, message: str, token: str) -> int:
     try:
+        import inspect
+
         import websockets
     except ImportError:
         print("Please install websockets: pip install websockets", file=sys.stderr)
         return 1
 
-    async with websockets.connect(url) as ws:
+    connect_kwargs: dict[str, object] = {}
+    if token:
+        headers = {"Authorization": f"Bearer {token}"}
+        params = inspect.signature(websockets.connect).parameters
+        if "additional_headers" in params:
+            connect_kwargs["additional_headers"] = headers
+        else:
+            connect_kwargs["extra_headers"] = headers
+
+    async with websockets.connect(url, **connect_kwargs) as ws:
         hello = json.loads(await ws.recv())
         print("<<", hello)
         if hello.get("type") != "connected":
@@ -80,8 +91,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="AronaArchive WS smoke test")
     parser.add_argument("--url", default="ws://127.0.0.1:20456/ws")
     parser.add_argument("--message", default="老师好，阿洛娜~")
+    parser.add_argument(
+        "--token",
+        default="",
+        help="Bearer token when server.token is set",
+    )
     args = parser.parse_args()
-    raise SystemExit(asyncio.run(run(args.url, args.message)))
+    raise SystemExit(asyncio.run(run(args.url, args.message, args.token)))
 
 
 if __name__ == "__main__":

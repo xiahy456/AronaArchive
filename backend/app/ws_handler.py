@@ -123,6 +123,7 @@ from .turntaking import (
     looks_incomplete,
 )
 from .turntaking.speaker import normalize_speaker
+from .ws_auth import reject_unauthorized
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +163,8 @@ class AppState:
 
 
 async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
+    if await reject_unauthorized(websocket, state.config.server.token):
+        return
     await websocket.accept()
     session_id = str(uuid.uuid4())
     client = getattr(websocket, "client", None)

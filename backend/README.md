@@ -72,6 +72,14 @@ uvicorn app.main:app --host 127.0.0.1 --port 20456
 
 默认 WebSocket：`ws://127.0.0.1:20456/ws`（与 Qt 客户端一致）。健康检查：`http://127.0.0.1:20456/health`。
 
+### 公网
+
+进程保持 `server.host: 127.0.0.1`。设 `server.public: true`，并填写 `server.token`（`python -c "import secrets; print(secrets.token_urlsafe(32))"`）。令牌为空或仍是 `YOUR_ACCESS_TOKEN` 时，`public: true` 或非回环 `host` 会拒绝启动。本机且 `public: false` 时不校验令牌。
+
+防火墙只开放 443。Caddy 将 `wss://你的域名/ws` 反代到 `127.0.0.1:20456`（默认会转发 `Authorization`）。客户端 `websocket_url` 用该 `wss://` 地址，`aronalm.access_token` 填同一个令牌。不要把令牌放进 URL。
+
+没有域名时填写 `server.ssl_certfile` 与 `server.ssl_keyfile`，用 `python -m app.main` 启动。客户端用 `aronalm.tls_ca_file` 钉住对应 CA。有域名时用 Caddy。
+
 ## 便携发布包（Windows x64）
 
 给 GitHub Release 打的是解压即用的目录，**不是** PyInstaller 单文件。相对路径仍相对包根解析（`ARONA_BACKEND_DIR` 可覆盖）。
@@ -98,6 +106,8 @@ zip **不含** GGUF、**不含** 本机 `config.yaml` 里的真实 Key。用户�
 
 ```bash
 python scripts/smoke_ws.py
+python scripts/smoke_ws.py --token <server.token>   # 后端设置了 server.token 时
+python scripts/test_ws_auth_unit.py                 # 访问令牌：启动闸门与握手（不加载 GGUF）
 python scripts/smoke_crisis_path.py        # 危机通路联调（真实 Planner；临时记忆库）
 # 或对已启动的后端：python scripts/smoke_crisis_path.py --url ws://127.0.0.1:20456/ws
 python scripts/test_input_filter.py        # ASR / 空串脏文本过滤断言
@@ -409,11 +419,15 @@ python scripts/ingest_knowledge.py --rebuild
 ### `server`
 
 
-| 配置项       | 默认          | 说明                       |
-| --------- | ----------- | ------------------------ |
-| `host`    | `127.0.0.1` | HTTP / WebSocket 监听地址    |
-| `port`    | `20456`     | 监听端口                     |
-| `ws_path` | `/ws`       | WebSocket 路径，需与 Qt 客户端一致 |
+| 配置项             | 默认          | 说明                                                                 |
+| --------------- | ----------- | ------------------------------------------------------------------ |
+| `host`          | `127.0.0.1` | HTTP / WebSocket 监听地址。公网部署保持回环，由 HTTPS 反代对外                     |
+| `port`          | `20456`     | 监听端口                                                               |
+| `ws_path`       | `/ws`       | WebSocket 路径，需与 Qt 客户端一致                                           |
+| `public`        | `false`     | 为 `true` 时表示前面有反代或准备对公网服务，必须设置 `token`                            |
+| `token`         | 空           | 访问令牌。客户端放在 `Authorization: Bearer`。空或 `YOUR_ACCESS_TOKEN` 表示不启用 |
+| `ssl_certfile`  | 空           | 无域名时由本进程直接提供 `wss` 的证书。与 `ssl_keyfile` 成对填写                      |
+| `ssl_keyfile`   | 空           | 与 `ssl_certfile` 成对的私钥                                              |
 
 
 

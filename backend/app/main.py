@@ -25,7 +25,7 @@ from datetime import datetime
 
 from fastapi import FastAPI, WebSocket
 
-from .config import get_config
+from .config import AppConfig, get_config
 from .conversation import ConversationManager
 from .embeddings import LocalBgeEncoder, bge_missing_reason
 from .knowledge import KnowledgeRetriever
@@ -43,6 +43,7 @@ from .orchestrator import Orchestrator
 from .planner import PlannerClient
 from .proactive import ConnectionHub, ProactiveScheduler, WelcomeState, run_proactive_loop
 from .relationship import RelationshipEngine, RelationshipSettings
+from .ws_auth import startup_token_error
 from .ws_handler import AppState, websocket_endpoint
 
 
@@ -72,6 +73,12 @@ logger = logging.getLogger(__name__)
 
 def create_app() -> FastAPI:
     config = get_config()
+    token_error = startup_token_error(
+        config.server.host, config.server.public, config.server.token
+    )
+    if token_error:
+        logger.error("%s", token_error)
+        raise SystemExit(1)
     model = get_model_loader()
     conversations = ConversationManager(
         max_history_turns=config.conversation.max_history_turns,
@@ -255,13 +262,27 @@ def main() -> None:
     config = get_config()
     _configure_stdio_utf8()
     configure_logging()
+    ssl_certfile, ssl_keyfile = _ssl_files(config)
     uvicorn.run(
         app,
         host=config.server.host,
         port=config.server.port,
         reload=False,
         log_level="info",
+        ssl_certfile=ssl_certfile,
+        ssl_keyfile=ssl_keyfile,
     )
+
+
+def _ssl_files(config: AppConfig) -> tuple[str | None, str | None]:
+    cert = (config.server.ssl_certfile or "").strip()
+    key = (config.server.ssl_keyfile or "").strip()
+    if not cert and not key:
+        return None, None
+    if not cert or not key:
+        logger.error("server.ssl_certfile 与 server.ssl_keyfile 需要同时填写")
+        raise SystemExit(1)
+    return str(config.resolve_path(cert)), str(config.resolve_path(key))
 
 
 if __name__ == "__main__":

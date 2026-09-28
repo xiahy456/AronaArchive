@@ -4,6 +4,13 @@ server:
   host: "127.0.0.1"
   port: 20456
   ws_path: "/ws"
+  # public 为 true 时必须设置 token（Caddy 反代时 host 仍保持 127.0.0.1）
+  # host 不是本机回环地址时同样必须设置 token，否则进程拒绝启动
+  public: false
+  token: ""
+  # 没有域名、由本进程直接提供 wss 时填写证书；前面有 HTTPS 反代时留空
+  ssl_certfile: ""
+  ssl_keyfile: ""
 
 model:
   # enable 是否启用Arona-Renderer渲染修正

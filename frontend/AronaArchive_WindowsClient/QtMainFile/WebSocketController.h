@@ -234,6 +234,10 @@ private:
     void startConnectTimeout();
     void stopConnectTimeout();
 
+    // 带访问令牌打开套接字；不把令牌写进日志
+    void openSocket();
+    void applyTlsCa();
+
     // 首次连接失败后进入可重连的断开状态
     void handleConnectAttemptFailed();
 
@@ -247,6 +251,8 @@ private:
     QTimer* m_connectTimeoutTimer;
 
     QString m_serverUrl;
+    QString m_accessToken;
+    QString m_tlsCaFile;
     ConnectionState m_currentState;
 
     // 配置参数

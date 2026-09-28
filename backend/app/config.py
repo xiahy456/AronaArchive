@@ -47,6 +47,12 @@ class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 20456
     ws_path: str = "/ws"
+    # True when a reverse proxy publishes this process. Requires token
+    # even if host stays on loopback.
+    public: bool = False
+    token: str = ""
+    ssl_certfile: str = ""
+    ssl_keyfile: str = ""
 
 
 class ModelConfig(BaseModel):

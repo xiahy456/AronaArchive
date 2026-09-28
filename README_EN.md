@@ -140,7 +140,7 @@ Download the packaged client from the [Releases](https://github.com/xiahy456/Aro
 }
 ```
 
-For a remote setup, change `websocket_url` / `tts.host` to the corresponding IPs. Full field docs and building from source are in [`frontend/AronaArchive_WindowsClient/README.md`](frontend/AronaArchive_WindowsClient/README.md).
+Keep `tts.host` at `127.0.0.1` when speech synthesis stays on this PC. To put the backend on a public server, do not expose port `20456`; use HTTPS and an access token as described in the Chinese README section 「公网部署后端」. Full field docs and building from source are in [`frontend/AronaArchive_WindowsClient/README.md`](frontend/AronaArchive_WindowsClient/README.md).
 
 > **Note**: Upload [`docs/hot_word.txt`](docs/hot_word.txt) as a hot-word list in Tencent Cloud ASR and set it as the default hot-word list.
 

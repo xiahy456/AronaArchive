@@ -29,6 +29,8 @@
   },
   "aronalm": {
     "websocket_url": "ws://127.0.0.1:20456/ws",
+    "access_token": "",
+    "tls_ca_file": "",
     "heartbeat_interval": 30000,
     "heartbeat_timeout": 10000,
     "reconnect_interval": 3000,

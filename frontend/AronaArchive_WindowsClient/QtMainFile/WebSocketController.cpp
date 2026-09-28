@@ -17,8 +17,14 @@
 #include "WebSocketController.h"
 #include <QDebug>
 #include <QJsonArray>
+#include <QJsonObject>
 #include <QDateTime>
 #include <QAbstractSocket>
+#include <QNetworkRequest>
+#include <QSslCertificate>
+#include <QSslConfiguration>
+#include <QSslError>
+#include <QSslSocket>
 
 WebSocketController::WebSocketController(QObject* parent)
     : QObject(parent)
@@ -29,6 +35,8 @@ WebSocketController::WebSocketController(QObject* parent)
     , m_connectTimeoutTimer(new QTimer(this))
     , m_currentState(ConnectionState::Disconnected)
     , m_serverUrl(GET_STRING_FROM_JSON(_global_config, "aronalm", "websocket_url")) // websocket地址
+    , m_accessToken()
+    , m_tlsCaFile()
     , m_heartbeatInterval(GET_INT_FROM_JSON(_global_config, "aronalm", "heartbeat_interval"))   // 心跳间隔
     , m_heartbeatTimeout(GET_INT_FROM_JSON(_global_config, "aronalm", "heartbeat_timeout")) // 心跳超时
     , m_reconnectInterval(GET_INT_FROM_JSON(_global_config, "aronalm", "reconnect_interval"))   // 重连间隔
@@ -38,6 +46,10 @@ WebSocketController::WebSocketController(QObject* parent)
     , m_pongReceived(false)
     , m_cacheMessages(true)
 {
+    const QJsonObject arona = _global_config->getJson("aronalm").m_jsonObj;
+    m_accessToken = arona.value("access_token").toString().trimmed();
+    m_tlsCaFile = arona.value("tls_ca_file").toString().trimmed();
+
     // 连接WebSocket信号
     connect(m_webSocket, &QWebSocket::connected, this, [this]() {
         onConnected();
@@ -57,6 +69,15 @@ WebSocketController::WebSocketController(QObject* parent)
     connect(m_webSocket, QOverload<QAbstractSocket::SocketError>::of(&QWebSocket::error),
         this, &WebSocketController::onError);
 #endif
+
+    connect(m_webSocket, &QWebSocket::sslErrors, this,
+        [this](const QList<QSslError>& errors) {
+            for (const QSslError& err : errors) {
+                ERROR_DEBUG_OUTPUT("[WebSocketController]TLS error: " + err.errorString());
+            }
+        });
+
+    applyTlsCa();
 
     // 心跳计时器
     connect(m_heartbeatTimer, &QTimer::timeout,
@@ -109,7 +130,7 @@ void WebSocketController::connectToServer()
 
     FINE_DEBUG_OUTPUT("[WebSocketController]Connecting to: " + m_serverUrl);
     startConnectTimeout();
-    m_webSocket->open(QUrl(m_serverUrl));
+    openSocket();
 }
 
 void WebSocketController::disconnectFromServer()
@@ -125,6 +146,35 @@ void WebSocketController::disconnectFromServer()
 
     setState(ConnectionState::Disconnected);
     m_currentReconnectCount = 0;
+}
+
+void WebSocketController::openSocket()
+{
+    QNetworkRequest request{QUrl(m_serverUrl)};
+    if (!m_accessToken.isEmpty()) {
+        request.setRawHeader(
+            "Authorization",
+            QByteArray("Bearer ") + m_accessToken.toUtf8());
+    }
+    m_webSocket->open(request);
+}
+
+void WebSocketController::applyTlsCa()
+{
+    if (m_tlsCaFile.isEmpty()) {
+        return;
+    }
+    const QList<QSslCertificate> extra = QSslCertificate::fromPath(m_tlsCaFile);
+    if (extra.isEmpty()) {
+        ERROR_DEBUG_OUTPUT("[WebSocketController]TLS CA file unreadable: " + m_tlsCaFile);
+        return;
+    }
+    QSslConfiguration ssl = QSslConfiguration::defaultConfiguration();
+    QList<QSslCertificate> cas = ssl.caCertificates();
+    cas.append(extra);
+    ssl.setCaCertificates(cas);
+    ssl.setPeerVerifyMode(QSslSocket::VerifyPeer);
+    m_webSocket->setSslConfiguration(ssl);
 }
 
 WebSocketController::ConnectionState WebSocketController::state() const
@@ -534,7 +584,7 @@ void WebSocketController::onReconnectTimer()
 
     setState(ConnectionState::Reconnecting);
     startConnectTimeout();
-    m_webSocket->open(QUrl(m_serverUrl));
+    openSocket();
 }
 
 void WebSocketController::onPongReceived()

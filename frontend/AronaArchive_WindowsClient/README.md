@@ -33,7 +33,8 @@ cp Config/config.example.json Config/config.json
 ```json
 {
   "aronalm": {
-    "websocket_url": "ws://your.aronalm.ip:20456/ws" // AronaLM 后端 WebSocket 地址
+    "websocket_url": "ws://127.0.0.1:20456/ws", // 本机后端；公网用 wss://你的域名/ws
+    "access_token": "" // 与后端 server.token 相同；本机未设令牌时留空
   },
   "tts": {
     "host": "your.gpt.sovits.ip" // GPT-SoVITS 服务地址
@@ -49,7 +50,7 @@ cp Config/config.example.json Config/config.json
 
 > **注意**：
 > - 资源路径相对**程序工作目录**解析；在 Visual Studio 中调试时默认为项目根目录，请勿直接双击 `x64/Debug` 或 `x64/Release` 下的 exe（工作目录会不对）。
-> - 请将 AronaLM 后端服务、GPT-SoVITS 服务的地址、端口按实际情况填写。
+> - 本机后端保持 `ws://127.0.0.1:20456/ws`，`access_token` 留空。公网部署见仓库根目录 README「公网部署后端」：`websocket_url` 用 `wss://`，`access_token` 与服务器 `server.token` 相同，TTS 仍用 `127.0.0.1`。
 > - `tts.request_timeout_ms` 仅改配置即可生效（dist 客户端同理）；`TTSManager` / `MainController` 源码改动需重新编译客户端后才有超时、预热与合成/播放解耦逻辑。
 > - `tts.refs` 为表情到参考音频的扁平数组（`emotion` / `ref_audio_path` / `prompt_text`）。加音频或改某表情绑定只改该数组；路径相对官方 GPT-SoVITS 工作目录（`tts/gpt-sovits/`）。`backend=minimal` 时客户端自动加 `../gpt-sovits/` 前缀（相对 minimal 工作目录 `tts/gpt-sovits-minimal/`）。未列出的表情回退顶层 `ref_audio_path` / `prompt_text`。已有 `config.json` 需自行并入该数组，否则仍只用默认参考音频。
 > - 本项目使用**腾讯云语音识别**（ASR），腾讯云 ASR 的 SecretId 和 SecretKey 可以在腾讯云控制台的 API 密钥管理中获取。
@@ -76,7 +77,9 @@ cp Config/config.example.json Config/config.json
     "arona_ai_mode": 0, // 阿洛娜 AI 模式：0=日程模式，1=档案模式（待实现）
   },
   "aronalm": {
-    "websocket_url": "ws://your.aronalm.ip:20456/ws", // AronaLM 后端 WebSocket 地址
+    "websocket_url": "wss://your.domain/ws", // 本机用 ws://127.0.0.1:20456/ws；公网用 wss
+    "access_token": "", // 与后端 server.token 相同。放在 Authorization 头里，不要写进 URL
+    "tls_ca_file": "", // 可选。无域名、自签证书时填写 CA 文件路径；Let's Encrypt 留空
     "heartbeat_interval": 30000, // 心跳发送间隔（毫秒）
     "heartbeat_timeout": 10000, // 心跳超时时间（毫秒）
     "reconnect_interval": 3000, // 断线重连间隔（毫秒）

@@ -141,11 +141,47 @@ AronaArchive/
 }
 ```
 
-异机部署时把 `websocket_url` / `tts.host` 改成对应 IP。完整字段与从源码构建见 [`frontend/AronaArchive_WindowsClient/README.md`](frontend/AronaArchive_WindowsClient/README.md)。
+TTS 留在本机时 `tts.host` 保持 `127.0.0.1`。把后端放到公网服务器时，按下一节用 HTTPS 和访问令牌。完整字段与从源码构建见 [`frontend/AronaArchive_WindowsClient/README.md`](frontend/AronaArchive_WindowsClient/README.md)。
 
 > **注意**：请在腾讯语音识别热词表中上传 [`docs/hot_word.txt`](docs/hot_word.txt)，并将其设置为默认热词。
 
 3. 启动客户端，直接运行客户端可执行文件即可
+
+### 公网部署后端
+
+后端仍只监听 `127.0.0.1:20456`。防火墙只开放 `443`。客户端和 TTS 留在老师电脑上。
+
+1. 在服务器的 `config.yaml` 里设 `server.public: true`，并填写 `server.token`。令牌用下面的命令生成，不要用短口令，也不要写进 WebSocket 地址：
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+`server.token` 为空或仍是 `YOUR_ACCESS_TOKEN` 时，`public: true` 或非本机 `host` 会让进程拒绝启动。本机 `127.0.0.1` 且 `public: false` 时可以不设令牌。
+
+2. 用 Caddy 把 `wss://你的域名/ws` 反代到 `127.0.0.1:20456`，并原样转发 `Authorization`：
+
+```caddy
+your.domain {
+    reverse_proxy 127.0.0.1:20456
+}
+```
+
+3. 客户端 `Config/config.json`：
+
+```json
+{
+  "aronalm": {
+    "websocket_url": "wss://your.domain/ws",
+    "access_token": "与服务器 server.token 相同"
+  },
+  "tts": {
+    "host": "127.0.0.1"
+  }
+}
+```
+
+没有域名时，在 `config.yaml` 填写 `server.ssl_certfile` 与 `server.ssl_keyfile`，用 `python -m app.main` 启动，由进程直接提供 `wss`。客户端把签发该证书的 CA 路径填进 `aronalm.tls_ca_file`。有域名时优先用上面的 Caddy。
 
 ### 语音合成服务
 

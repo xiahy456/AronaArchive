@@ -32,8 +32,14 @@ AronaArchive 后端 {{VERSION}}（Windows x64 便携包）
 5. 健康检查：http://127.0.0.1:20456/health
 6. 桌面客户端 websocket_url 填：
      ws://127.0.0.1:20456/ws
-   （若客户端在另一台机器，改为 ws://<本机IP>:20456/ws，
-    并把 config.yaml 的 server.host 设为 0.0.0.0）
+   本机且 server.public 为 false、server.token 为空时，不需要访问令牌。
+
+   放到公网服务器时不要把 20456 暴露出去，也不要把 server.host 改成 0.0.0.0
+   后直接用 ws://<公网IP>。保持 host 为 127.0.0.1，设 public: true，
+   填写 server.token，再用 Caddy 把 wss://你的域名/ws 反代到
+   127.0.0.1:20456。客户端 websocket_url 用该 wss 地址，
+   access_token 填同一个令牌。防火墙只开放 443。
+   令牌生成：python -c "import secrets; print(secrets.token_urlsafe(32))"
 
 不要把新版本直接覆盖正在用的目录，除非你不需要保留记忆。运行时数据在：
 
