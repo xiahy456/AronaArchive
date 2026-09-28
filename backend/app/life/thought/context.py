@@ -53,12 +53,14 @@ def gather_context(
             if kind == "teacher_interrupt":
                 teacher_at = getattr(entry, "at", None)
     arona = getattr(state, "arona_memory", None)
-    notes: list[str] = []
+    notes: list[tuple[str, datetime | None]] = []
     if arona is not None:
         for note in getattr(arona, "notes", []) or []:
             text = str(getattr(note, "text", "") or "").strip()
-            if text:
-                notes.append(text)
+            if not text:
+                continue
+            at = getattr(note, "at", None)
+            notes.append((text, at if isinstance(at, datetime) else None))
     turns = _turns(state)
     since_teacher = None
     if isinstance(teacher_at, datetime):

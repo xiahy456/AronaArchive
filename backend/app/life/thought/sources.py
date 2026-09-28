@@ -100,7 +100,7 @@ class SourceContext:
     seconds_since_teacher: float | None = None
     seconds_since_arona: float | None = None
     journal: tuple[str, ...] = ()
-    notes: tuple[str, ...] = ()
+    notes: tuple[str | tuple[str, datetime | None], ...] = ()
     turns: tuple[tuple, ...] = ()
     ended_turns: tuple[tuple, ...] = ()
     reused_memories: tuple[str, ...] = ()
@@ -224,23 +224,47 @@ def _here(
 
 def _previous(ledger: ThoughtLedger, seen: dict[str, bool]) -> list[str]:
     focus = ledger.focus
-    text = (focus.text if focus is not None else "") or ledger.last_focus
+    from_focus = focus is not None and bool((focus.text or "").strip())
+    text = (focus.text if from_focus else "") or ledger.last_focus
     cleaned = _keep(text, seen)
     if not cleaned:
         return []
     spoken = focus is not None and focus.spoken
     mark = "已经说过" if spoken else "还没说过"
-    return [f"{cleaned}。{mark}"]
+    line = f"{cleaned}。{mark}"
+    at = focus.since if from_focus and focus is not None else None
+    if not from_focus:
+        at = ledger.last_thought_at
+    if isinstance(at, datetime):
+        line = f"[{format_full_datetime(at)}] {line}"
+    return [line]
 
 
 def _notes(kind: str, ctx: SourceContext, seen: dict[str, bool]) -> list[str]:
+    pairs = [_note_body(row) for row in ctx.notes]
     if kind in {"spontaneous", "consolidate"}:
-        rows = list(ctx.notes)
+        chosen = pairs
     elif kind == "glance":
-        rows = [note for note in ctx.notes if "老师" in note]
+        chosen = [pair for pair in pairs if "老师" in pair[0]]
     else:
         return []
-    return [line for line in (_keep(row, seen) for row in rows) if line]
+    rows: list[str] = []
+    for text, at in chosen:
+        line = _keep(text, seen)
+        if not line:
+            continue
+        if isinstance(at, datetime):
+            line = f"[{format_full_datetime(at)}] {line}"
+        rows.append(line)
+    return rows
+
+
+def _note_body(row: object) -> tuple[str, datetime | None]:
+    if isinstance(row, tuple):
+        text = str(row[0] if row else "")
+        at = row[1] if len(row) > 1 and isinstance(row[1], datetime) else None
+        return text, at
+    return str(row or ""), None
 
 
 def _today(

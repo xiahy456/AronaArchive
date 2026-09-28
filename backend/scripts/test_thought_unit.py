@@ -601,6 +601,43 @@ def test_sources_for_each_trigger() -> None:
         _fail(f"a teacher line should carry its time, got {timed.text}")
     if "[2026年9月10日 15:58:12] 阿洛娜: 嗯" not in timed.text:
         _fail(f"an Arona line should carry its own time, got {timed.text}")
+    held = select_sources(
+        PendingTrigger(kind="spontaneous"),
+        now,
+        InnerState(),
+        ThoughtLedger(
+            focus=ThoughtFocus(
+                id="thought-1",
+                text="那份文档",
+                since=datetime(2026, 9, 10, 15, 40, 0),
+                spoken=False,
+            )
+        ),
+        SourceContext(
+            notes=(
+                ("自己发呆", datetime(2026, 9, 10, 12, 1, 0)),
+                ("老师在改文档", datetime(2026, 9, 10, 15, 20, 0)),
+            )
+        ),
+    )
+    if "[2026年9月10日 15:40:00] 那份文档。还没说过" not in held.text:
+        _fail(f"a held focus should carry when it started, got {held.text}")
+    if "[2026年9月10日 12:01:00] 自己发呆" not in held.text:
+        _fail(f"a note should carry when it was written, got {held.text}")
+    if "[2026年9月10日 15:20:00] 老师在改文档" not in held.text:
+        _fail(f"each note should carry its own time, got {held.text}")
+    remembered_focus = select_sources(
+        PendingTrigger(kind="spontaneous"),
+        now,
+        InnerState(),
+        ThoughtLedger(
+            last_focus="那份文档",
+            last_thought_at=datetime(2026, 9, 10, 15, 40, 0),
+        ),
+        SourceContext(),
+    )
+    if "[2026年9月10日 15:40:00] 那份文档。还没说过" not in remembered_focus.text:
+        _fail(f"a dropped focus should use the last thought time, got {remembered_focus.text}")
 
     kivotos = select_sources(
         PendingTrigger(kind="spontaneous"),
