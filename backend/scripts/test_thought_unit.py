@@ -3029,6 +3029,103 @@ def test_arrival_greeting_falls_back_only_on_failure() -> None:
             )
 
 
+def test_aftertaste_restarts_from_the_latest_turn() -> None:
+    print("== a new turn replaces the waiting aftertaste ==")
+    from app.life.thought.triggers import note_finished_turn
+
+    now = _now()
+    with tempfile.TemporaryDirectory() as tmp:
+        state = _event_state(Path(tmp), now)
+        if not note_finished_turn(state, "先说一句", now=now):
+            _fail("the first turn should enqueue")
+        later = now + timedelta(seconds=10)
+        if not note_finished_turn(state, "再说一句", now=later):
+            _fail("the second turn should enqueue")
+        kinds = [item.kind for item in state.thought.pending_triggers]
+        if kinds != ["aftertaste"]:
+            _fail(f"only the latest aftertaste should wait, got {kinds}")
+        expect = later.replace(microsecond=0) + timedelta(seconds=30)
+        queued = state.thought.pending_triggers[0]
+        if queued.not_before != expect:
+            _fail(f"aftertaste should restart from the latest turn, got {queued.not_before}")
+    print("  ok")
+
+
+def test_aftertaste_holds_speech_after_a_fresh_line() -> None:
+    print("== a fresh line keeps the aftertaste unspoken ==")
+    from app.life.thought.triggers import note_finished_turn
+
+    now = _now()
+    payload = json.dumps(
+        {
+            "focus": "老师还在吗",
+            "thought": "想问一句。",
+            "keep": "open",
+            "confidence": "high",
+            "urge": {
+                "speak": True,
+                "about": "老师还在吗",
+                "why": "想确认老师还在",
+                "wait": "now",
+            },
+        },
+        ensure_ascii=False,
+    )
+
+    async def _tick(state, at: datetime, ctx: SourceContext) -> None:
+        async def _complete(_text: str) -> str:
+            return payload
+
+        await thought_tick_once(state, at, complete=_complete, source_context=ctx)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        fresh = _event_state(root / "fresh", now)
+        if not note_finished_turn(fresh, "你好", now=now):
+            _fail("a finished turn should enqueue")
+        due = now + timedelta(seconds=30)
+        asyncio.run(_tick(fresh, due, SourceContext(seconds_since_arona=0)))
+        if not any(item.content == "老师还在吗" for item in fresh.life.state.rumination):
+            _fail("a fresh line should still keep the thought")
+        if fresh.life.state.pending_impulse is not None:
+            _fail(f"a fresh line must not speak the aftertaste, got {fresh.life.state.pending_impulse}")
+
+        quiet = _event_state(root / "quiet", now)
+        if not note_finished_turn(quiet, "你好", now=now):
+            _fail("a finished turn should enqueue")
+        asyncio.run(_tick(quiet, due, SourceContext(seconds_since_arona=30)))
+        impulse = quiet.life.state.pending_impulse
+        if impulse is None or impulse.hint != "老师还在吗":
+            _fail(f"a quiet gap should still offer the aftertaste, got {impulse}")
+
+        overlapped = _event_state(root / "overlapped", now)
+        if not note_finished_turn(overlapped, "你好", now=now):
+            _fail("a finished turn should enqueue")
+
+        async def _speak_during(at: datetime) -> None:
+            async def _complete(_text: str) -> str:
+                nxt = overlapped.life.state.clone()
+                nxt.last_spoke_at = at
+                overlapped.life.state = nxt
+                return payload
+
+            await thought_tick_once(
+                overlapped,
+                at,
+                complete=_complete,
+                source_context=SourceContext(seconds_since_arona=30),
+            )
+
+        asyncio.run(_speak_during(due))
+        if overlapped.life.state.pending_impulse is not None:
+            _fail("speech during the thought must not also offer the aftertaste")
+        if overlapped.life.state.last_spoke_at != due:
+            _fail(f"a newer last_spoke_at should survive commit, got {overlapped.life.state.last_spoke_at}")
+        if not any(item.content == "老师还在吗" for item in overlapped.life.state.rumination):
+            _fail("speech during the thought should still keep the concern")
+    print("  ok")
+
+
 def main() -> None:
     test_missing_empty_and_corrupt_ledger()
     test_ledger_roundtrip()
@@ -3042,6 +3139,8 @@ def main() -> None:
     test_failed_call_writes_nothing()
     test_second_hop()
     test_event_triggers()
+    test_aftertaste_restarts_from_the_latest_turn()
+    test_aftertaste_holds_speech_after_a_fresh_line()
     test_aftertaste_includes_finished_talk()
     test_dialogue_log_persists()
     test_rest_consolidate()

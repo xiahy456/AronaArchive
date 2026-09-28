@@ -33,11 +33,12 @@ def maybe_offer_thought(
     motive_pending: bool = False,
     facts: tuple = (),
     welcome: Any = None,
+    hold_speech: bool = False,
 ) -> bool:
-    """Enqueue speech when she decided to say it. A pending motive yields."""
+    """Enqueue speech when she decided to say it. A pending motive or a held aftertaste yields."""
     about = (parsed.about or "").strip()
     why = (parsed.why or "").strip()
-    if motive_pending or not parsed.speak or not about or parsed.wait == "later":
+    if hold_speech or motive_pending or not parsed.speak or not about or parsed.wait == "later":
         return False
     created = now.replace(microsecond=0)
     if parsed.wait != "simmer":

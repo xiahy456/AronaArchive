@@ -178,6 +178,8 @@ async def _think(
             logger.info("thought second hop failed; keeping the first")
         else:
             parsed = second
+    engine = state.life
+    live_spoke = getattr(getattr(engine, "state", None), "last_spoke_at", None)
     next_inner = commit_inner(
         now=now,
         inner=inner,
@@ -187,7 +189,10 @@ async def _think(
         arona=getattr(state, "arona_memory", None),
         queued=trigger,
     )
-    engine = state.life
+    if isinstance(live_spoke, datetime) and (
+        next_inner.last_spoke_at is None or live_spoke > next_inner.last_spoke_at
+    ):
+        next_inner.last_spoke_at = live_spoke
     engine.state = next_inner
     store = getattr(engine, "store", None)
     if store is not None:
@@ -204,8 +209,21 @@ async def _think(
         motive_pending=motive_pending,
         facts=tuple(getattr(offered_ctx, "situation", ()) or ()),
         welcome=getattr(state, "welcome", None),
+        hold_speech=_hold_aftertaste(state, now, decision, offered_ctx, live_spoke),
     )
     return "committed"
+
+
+def _hold_aftertaste(state: "AppState", now: datetime, decision: ThoughtDecision, ctx: Any, live_spoke: Any) -> bool:
+    """An aftertaste that lands on a line she just said stays unspoken."""
+    if decision.kind != "aftertaste":
+        return False
+    cfg = getattr(getattr(getattr(state, "config", None), "life", None), "thought", None)
+    floor = float(getattr(cfg, "aftertaste_min_sec", 30) or 30)
+    since = getattr(ctx, "seconds_since_arona", None)
+    if since is not None and float(since) < floor:
+        return True
+    return isinstance(live_spoke, datetime) and live_spoke >= now.replace(microsecond=0)
 
 
 def _needs_second_hop(parsed: InnerThought) -> bool:

@@ -29,11 +29,14 @@ logger = logging.getLogger(__name__)
 
 
 def note_aftertaste(state: Any, *, now: datetime, crisis: bool = False) -> bool:
-    """Queue a delayed aftertaste. A crisis turn only stamps the time."""
+    """Queue one delayed aftertaste from this turn. A crisis turn only stamps the time."""
     ledger = _ledger(state)
     if ledger is None:
         return False
     stamp = now.replace(microsecond=0)
+    ledger.pending_triggers = [
+        item for item in ledger.pending_triggers if item.kind != "aftertaste"
+    ]
     accepted = ledger.enqueue(
         PendingTrigger(kind="aftertaste", not_before=stamp + timedelta(seconds=_delay_sec(state)))
     )
