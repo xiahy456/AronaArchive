@@ -547,7 +547,7 @@ class ProactiveScheduler:
             facts.append(
                 SituationFact(
                     kind="idle",
-                    text=f"老师已经安静很久。今天阿洛娜已经因为自己的想法开口{count}次",
+                    text=f"老师在屏幕前已经安静很久。今天阿洛娜已经因为自己的想法开口{count}次",
                 )
             )
         if (
@@ -556,7 +556,7 @@ class ProactiveScheduler:
             and after_sec > 0
             and elapsed < after_sec
         ):
-            facts.append(SituationFact(kind="thought", text="老师刚刚道别"))
+            facts.append(SituationFact(kind="thought", text="老师刚刚离开屏幕前"))
         band = (climate or "").strip()
         if band:
             facts.append(SituationFact(kind="thought", text=f"当前气候是{band}"))

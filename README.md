@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <em>版本：2.0.0</em>
+  <em>版本：2.0.0-preview</em>
 </p>
 
 <p align="center">
