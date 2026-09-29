@@ -25,7 +25,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 AbortCheck = Callable[[], bool]
-InitiateResult = Literal["sent", "declined", "failed"]
+InitiateResult = Literal["sent", "declined", "failed", "deferred"]
 
 # Proactive mouth markers stay in the initiate instruction, not in teacher history.
 PROACTIVE_HISTORY_MARKERS = frozenset(
@@ -46,6 +46,7 @@ def should_record_history_marker(marker: str) -> bool:
         return False
     return True
 
+from .channel import format_channels, resolve_outbound_method
 from .config import AppConfig
 from .conversation import ConversationManager
 from .image_input import ImagePayload
@@ -132,6 +133,8 @@ class Orchestrator:
         self.life_journal: Any = None
         self.arona_memory: Any = None
         self.last_initiate_text = ""
+        self.last_outbound_method = ""
+        self.napcat: Any = None
         self.stats: dict[str, Any] = {
             "chat_count": 0,
             "welcome_count": 0,
@@ -235,6 +238,73 @@ class Orchestrator:
         except Exception:
             logger.exception("life turn action callback failed action=%s", action)
 
+    def _qq_connected(self) -> bool:
+        link = getattr(self, "napcat", None)
+        return bool(link is not None and getattr(link, "connected", False))
+
+    def _channels_block(self, *, client_online: bool) -> str:
+        return format_channels(
+            client_online=client_online,
+            qq_connected=self._qq_connected(),
+        )
+
+    def _resolve_outbound(
+        self,
+        intent: IntentCard | None,
+        *,
+        inbound: str,
+        proactive: bool,
+        client_online: bool,
+    ) -> str:
+        raw = getattr(intent, "method", "") if intent is not None else ""
+        method = resolve_outbound_method(
+            raw,
+            inbound=inbound,
+            proactive=proactive,
+            client_online=client_online,
+        )
+        self.last_outbound_method = method
+        return method
+
+    async def _deliver_spoken(
+        self,
+        *,
+        text: str,
+        emotion: str,
+        method: str,
+        send: SendFn,
+        context_used: str,
+        latency: float,
+        on_life_action: LifeActionFn | None,
+        client_online: bool,
+        emit_emotion: bool,
+    ) -> bool:
+        """Push one spoken line. False leaves the assistant line unstored."""
+        spoken = (text or "").strip()
+        if method == "message":
+            link = getattr(self, "napcat", None)
+            if link is None or not getattr(link, "connected", False) or not spoken:
+                logger.info("outbound undelivered method=message reason=napcat_down")
+                return False
+            ok = await link.send_text(spoken)
+            if not ok:
+                logger.info("outbound undelivered method=message reason=send_failed")
+            return bool(ok)
+        if not client_online:
+            logger.info("outbound undelivered method=direct reason=client_offline")
+            return False
+        await send(
+            msg_chat_response(
+                text,
+                context_used=context_used,
+                latency=round(latency, 4),
+                emotion=emotion,
+            )
+        )
+        if emit_emotion:
+            self._emit_life_action(on_life_action, "speak", emotion)
+        return True
+
     async def handle_chat(
         self,
         *,
@@ -249,6 +319,8 @@ class Orchestrator:
         image: ImagePayload | None = None,
         interrupt_ctx: InnerState | None = None,
         on_life_action: LifeActionFn | None = None,
+        inbound_method: str = "direct",
+        client_online: bool = True,
     ) -> bool:
         def _aborted() -> bool:
             return abort_check is not None and abort_check()
@@ -282,6 +354,8 @@ class Orchestrator:
                 image=image,
                 interrupt_ctx=interrupt_ctx,
                 on_life_action=on_life_action,
+                inbound_method=inbound_method,
+                client_online=client_online,
             )
 
         self._note_teacher_journal(user_text)
@@ -310,7 +384,8 @@ class Orchestrator:
         if decision is not None:
             context_parts.append("climate")
         if decision is not None and decision.action in {"silence", "refuse"}:
-            self._emit_life_action(on_life_action, "continue_activity")
+            if inbound_method != "message":
+                self._emit_life_action(on_life_action, "continue_activity")
             await self._skip_generation(
                 session_id=session_id,
                 user_text=user_text,
@@ -318,6 +393,8 @@ class Orchestrator:
                 send=send,
                 latency=time.perf_counter() - start,
                 on_sent=_commit_relationship,
+                inbound_method=inbound_method,
+                client_online=client_online,
             )
             _committed()
             return True
@@ -459,6 +536,8 @@ class Orchestrator:
                 memory_block=memory_block,
                 life_block=self._life_block(interrupt_ctx),
                 day_block=self._day_block(),
+                teacher_method=inbound_method,
+                channels_block=self._channels_block(client_online=client_online),
             )
             logger.info(
                 "planner session=%s ok=%s latency=%.3fs",
@@ -494,7 +573,8 @@ class Orchestrator:
                 self._merge_decision_into_intent(intent, decision)
                 if not intent.reply_ok:
                     action = resolve_life_action(intent)
-                    self._emit_life_action(on_life_action, action, emotion)
+                    if inbound_method != "message":
+                        self._emit_life_action(on_life_action, action, emotion)
                     await self._skip_generation(
                         session_id=session_id,
                         user_text=user_text,
@@ -504,6 +584,8 @@ class Orchestrator:
                         latency=time.perf_counter() - start,
                         emotion=emotion,
                         on_sent=_commit_relationship,
+                        inbound_method=inbound_method,
+                        client_online=client_online,
                     )
                     _committed()
                     return True
@@ -519,6 +601,7 @@ class Orchestrator:
             extra_system=self._local_hint(decision),
             emotion=emotion,
             memory_block=memory_block,
+            inbound_method=inbound_method,
         )
         latency = time.perf_counter() - start
         if full is None:
@@ -539,31 +622,50 @@ class Orchestrator:
             logger.info("chat aborted before send session=%s", session_id)
             reset_trace()
             return False
-        await send(
-            msg_chat_response(
-                full,
-                context_used=context_used,
-                latency=round(latency, 4),
-                emotion=emotion,
-            )
+        method = self._resolve_outbound(
+            intent,
+            inbound=inbound_method,
+            proactive=False,
+            client_online=client_online,
         )
-        self._emit_life_action(on_life_action, "speak", emotion)
+        delivered = await self._deliver_spoken(
+            text=full,
+            emotion=emotion,
+            method=method,
+            send=send,
+            context_used=context_used,
+            latency=latency,
+            on_life_action=on_life_action,
+            client_online=client_online,
+            emit_emotion=True,
+        )
         _commit_relationship()
 
-        self.conversations.append(session_id, "user", user_text)
-        self.conversations.append(session_id, "assistant", full)
+        self.conversations.append(session_id, "user", user_text, method=inbound_method)
+        if delivered:
+            self.conversations.append(session_id, "assistant", full, method=method)
         _committed()
+
+        if not delivered:
+            logger.info(
+                "chat undelivered session=%s method=%s request=%r",
+                session_id,
+                method,
+                user_text,
+            )
+            return True
 
         await self._maybe_extract(session_id, user_text)
         self._note_arona_relationship(decision, "speak")
         self.stats["chat_count"] += 1
         total_latency = time.perf_counter() - start
         logger.info(
-            "chat done session=%s context=%s emotion=%s latency=%.3fs "
+            "chat done session=%s context=%s emotion=%s method=%s latency=%.3fs "
             "request=%r response=%r",
             session_id,
             context_used,
             emotion,
+            method,
             total_latency,
             user_text,
             full,
@@ -578,6 +680,7 @@ class Orchestrator:
             abort_check=abort_check,
             interrupt_ctx=interrupt_ctx,
             on_life_action=on_life_action,
+            client_online=client_online,
         )
         return True
 
@@ -595,6 +698,8 @@ class Orchestrator:
         image: ImagePayload | None = None,
         interrupt_ctx: InnerState | None = None,
         on_life_action: LifeActionFn | None = None,
+        inbound_method: str = "direct",
+        client_online: bool = True,
     ) -> bool:
         """Speak via crisis planner draft (no renderer); local Arona fallback."""
         history = self.conversations.get_history(session_id)
@@ -612,6 +717,8 @@ class Orchestrator:
                 memory_block=memory_block,
                 life_block=self._life_block(interrupt_ctx),
                 day_block=self._day_block(),
+                teacher_method=inbound_method,
+                channels_block=self._channels_block(client_online=client_online),
             )
             logger.info(
                 "crisis planner session=%s ok=%s latency=%.3fs",
@@ -640,28 +747,40 @@ class Orchestrator:
             return False
 
         latency = time.perf_counter() - start
-        await send(
-            msg_chat_response(
-                draft,
-                context_used=context_used,
-                latency=round(latency, 4),
-                emotion=emotion,
-            )
+        method = self._resolve_outbound(
+            intent,
+            inbound=inbound_method,
+            proactive=False,
+            client_online=client_online,
         )
-        self._emit_life_action(on_life_action, "speak", emotion)
+        delivered = await self._deliver_spoken(
+            text=draft,
+            emotion=emotion,
+            method=method,
+            send=send,
+            context_used=context_used,
+            latency=latency,
+            on_life_action=on_life_action,
+            client_online=client_online,
+            emit_emotion=True,
+        )
         self._commit_crisis_relationship()
-        self.conversations.append(session_id, "user", user_text)
-        self.conversations.append(session_id, "assistant", draft)
+        self.conversations.append(session_id, "user", user_text, method=inbound_method)
+        if delivered:
+            self.conversations.append(session_id, "assistant", draft, method=method)
         if on_committed is not None:
             on_committed()
         self.conversations.clear_extract_buffer(session_id)
-        self.stats["chat_count"] += 1
+        if delivered:
+            self.stats["chat_count"] += 1
         logger.info(
-            "chat crisis session=%s context=%s emotion=%s latency=%.3fs "
-            "request=%r response=%r",
+            "chat crisis session=%s context=%s emotion=%s method=%s delivered=%s "
+            "latency=%.3fs request=%r response=%r",
             session_id,
             context_used,
             emotion,
+            method,
+            delivered,
             time.perf_counter() - start,
             user_text,
             draft,
@@ -765,12 +884,14 @@ class Orchestrator:
         context_tags: list[str] | None = None,
         interrupt_ctx: InnerState | None = None,
         on_life_action: LifeActionFn | None = None,
+        client_online: bool = True,
     ) -> InitiateResult:
         """Generate a system-event line (welcome / idle / care / goal / continue / interact).
 
         sent: a line was pushed (including silent interact with empty content).
         declined: care Planner refused (no fallback).
         failed: generate miss; caller may retry.
+        deferred: the chosen channel could not take the line. The impulse stays.
         """
         self.last_initiate_text = ""
         user_text = instruction
@@ -857,6 +978,7 @@ class Orchestrator:
                 memory_block=memory_block,
                 life_block=self._life_block(interrupt_ctx),
                 day_block=self._day_block(),
+                channels_block=self._channels_block(client_online=client_online),
             )
             logger.info(
                 "initiate planner session=%s kind=%s ok=%s latency=%.3fs",
@@ -886,6 +1008,10 @@ class Orchestrator:
                 emotion = intent.arona_emotion
                 action = resolve_life_action(intent)
                 self._emit_life_action(on_life_action, action, emotion)
+                if not client_online:
+                    self.last_outbound_method = "direct"
+                    reset_trace()
+                    return "deferred"
                 latency = time.perf_counter() - start
                 context_used = "+".join([*context_parts, "silence"])
                 await send(
@@ -966,19 +1092,35 @@ class Orchestrator:
             reset_trace()
             return "failed"
 
-        await send(
-            msg_chat_response(
-                full,
-                context_used=context_used,
-                latency=round(latency, 4),
-                emotion=emotion,
-            )
+        method = self._resolve_outbound(
+            intent,
+            inbound="",
+            proactive=True,
+            client_online=client_online,
         )
-        if kind == "interact":
-            self._emit_life_action(on_life_action, "speak", emotion)
+        delivered = await self._deliver_spoken(
+            text=full,
+            emotion=emotion,
+            method=method,
+            send=send,
+            context_used=context_used,
+            latency=latency,
+            on_life_action=on_life_action,
+            client_online=client_online,
+            emit_emotion=kind == "interact",
+        )
+        if not delivered:
+            logger.info(
+                "initiate deferred session=%s kind=%s method=%s",
+                session_id,
+                kind,
+                method,
+            )
+            reset_trace()
+            return "deferred"
 
         self._record_initiate_user(session_id, history_marker)
-        self.conversations.append(session_id, "assistant", full)
+        self.conversations.append(session_id, "assistant", full, method=method)
         self.last_initiate_text = full
 
         if self.relationship is not None and self.config.proactive.relationship.enabled:
@@ -1036,6 +1178,7 @@ class Orchestrator:
         emotion: str = DEFAULT_EMOTION,
         kind: str | None = None,
         memory_block: str = "",
+        inbound_method: str = "direct",
     ) -> tuple[str | None, str]:
         """Build the spoken line: renderer GGUF, local GGUF fallback, or planner draft.
 
@@ -1093,6 +1236,7 @@ class Orchestrator:
                 knowledge=knowledge,
                 extra_system=extra_system,
                 memory_block=memory_block,
+                teacher_method=None if kind is not None else inbound_method,
             )
             mode = "local"
 
@@ -1184,6 +1328,7 @@ class Orchestrator:
         abort_check: AbortCheck | None = None,
         interrupt_ctx: InnerState | None = None,
         on_life_action: LifeActionFn | None = None,
+        client_online: bool = True,
     ) -> None:
         if intent is None or not intent.followup_ok:
             return
@@ -1217,6 +1362,7 @@ class Orchestrator:
             continue_previous=previous.strip(),
             interrupt_ctx=interrupt_ctx,
             on_life_action=on_life_action,
+            client_online=client_online,
         )
 
     def _climate_block(self, decision: Decision | None) -> str:
@@ -1269,23 +1415,26 @@ class Orchestrator:
         latency: float = 0.0,
         emotion: str = DEFAULT_EMOTION,
         on_sent: Callable[[], None] | None = None,
+        inbound_method: str = "direct",
+        client_online: bool = True,
     ) -> None:
         action = "silence" if reason == "reply_ok_false" else (
             decision.action if decision is not None else "silence"
         )
-        await send(
-            msg_chat_response(
-                "",
-                context_used=action,
-                latency=round(latency, 4),
-                emotion=emotion,
+        if inbound_method != "message" and client_online:
+            await send(
+                msg_chat_response(
+                    "",
+                    context_used=action,
+                    latency=round(latency, 4),
+                    emotion=emotion,
+                )
             )
-        )
         if on_sent is not None:
             on_sent()
         key = "silence_count" if action == "silence" else "refuse_count"
         self.stats[key] = int(self.stats.get(key, 0)) + 1
-        self.conversations.append(session_id, "user", user_text)
+        self.conversations.append(session_id, "user", user_text, method=inbound_method)
         if decision is not None:
             self._note_arona_relationship(decision, action)
         logger.info(
@@ -1303,10 +1452,16 @@ class Orchestrator:
         history = self.conversations.get_history(session_id)
         if len(history) >= 2:
             self.conversations.append_extract_buffer(
-                session_id, history[-2]["role"], history[-2]["content"]
+                session_id,
+                history[-2]["role"],
+                history[-2]["content"],
+                method=str(history[-2].get("method") or ""),
             )
             self.conversations.append_extract_buffer(
-                session_id, history[-1]["role"], history[-1]["content"]
+                session_id,
+                history[-1]["role"],
+                history[-1]["content"],
+                method=str(history[-1].get("method") or ""),
             )
 
         ext = self.config.memory.extractor

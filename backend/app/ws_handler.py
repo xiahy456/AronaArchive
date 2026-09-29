@@ -123,9 +123,29 @@ from .turntaking import (
     looks_incomplete,
 )
 from .turntaking.speaker import normalize_speaker
+from .channel import QQ_SESSION_ID
 from .ws_auth import reject_unauthorized
 
 logger = logging.getLogger(__name__)
+
+
+def _mark_generation(state: AppState, session_id: str, kind: str | None) -> None:
+    if kind:
+        state.generation_kind = kind
+        state.generation_owner = session_id
+        return
+    if state.generation_owner == session_id:
+        state.generation_kind = ""
+        state.generation_owner = ""
+        inbox = state.qq_inbox
+        if inbox is not None:
+            inbox.on_generation_idle()
+
+
+def _qq_busy(state: AppState) -> bool:
+    if state.generation_kind == "qq":
+        return True
+    return state.hub.is_busy(QQ_SESSION_ID)
 
 
 class AppState:
@@ -149,6 +169,11 @@ class AppState:
         self.presence = PresenceGate()
         self._listen_pending: set[str] = set()
         self.hub.set_on_all_idle(lambda: schedule_presence(self))
+        self.generation_kind = ""
+        self.generation_owner = ""
+        self.generation_interrupts: dict[str, Any] = {}
+        self.napcat = None
+        self.qq_inbox = None
 
     def note_listen_pending(self, session_id: str, pending: bool) -> None:
         """Track a listen buffer that still holds an uncommitted utterance."""
@@ -305,6 +330,7 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
     ) -> None:
         nonlocal inflight_kind
         inflight_kind = "chat"
+        _mark_generation(state, session_id, "chat")
         outbound = send_fn or send
         state.hub.set_busy(session_id, True)
         if state.scheduler is not None:
@@ -349,6 +375,7 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
                 pass
         finally:
             inflight_kind = None
+            _mark_generation(state, session_id, None)
             if release_busy:
                 state.hub.set_busy(session_id, False)
 
@@ -481,6 +508,7 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
     ) -> None:
         nonlocal inflight_kind, cu_run_id
         inflight_kind = "computer_use"
+        _mark_generation(state, session_id, "computer_use")
         state.hub.set_busy(session_id, True)
         begin_hands(state)
         if state.scheduler is not None:
@@ -581,6 +609,7 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
         finally:
             end_hands(state, stopped=generation_id != cu_generation)
             inflight_kind = None
+            _mark_generation(state, session_id, None)
             cu_run_id = None
             _drain_cu_observations()
             state.hub.set_busy(session_id, False)
@@ -674,6 +703,11 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
                     "Error while interrupting chat task session=%s", session_id
                 )
 
+    async def _interrupt_for_qq() -> None:
+        await _interrupt_generation(restore_inflight=False)
+
+    state.generation_interrupts[session_id] = _interrupt_for_qq
+
     async def _commit_turn(*, force: bool = False) -> None:
         nonlocal commit_task, chat_task, inflight_user, wait_extended, generation_id
         commit_task = None
@@ -687,6 +721,15 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
                     "listen commit skipped session=%s reason=unusable text=%r",
                     session_id,
                     drained,
+                )
+                return
+            if _qq_busy(state):
+                if image is not None:
+                    turn_buffer.latest_image = image
+                turn_buffer.prepend(drained)
+                logger.info(
+                    "listen commit deferred session=%s reason=qq_busy",
+                    session_id,
                 )
                 return
             wait_extended = False
@@ -750,6 +793,7 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
     async def _run_welcome() -> None:
         nonlocal inflight_kind
         inflight_kind = "welcome"
+        _mark_generation(state, session_id, "welcome")
         try:
             slot, first = resolve_welcome_context(state.welcome)
             logger.info(
@@ -847,10 +891,12 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
             logger.exception("welcome error session=%s", session_id)
         finally:
             inflight_kind = None
+            _mark_generation(state, session_id, None)
 
     async def _run_interact(action: str, duration_ms: int) -> None:
         nonlocal inflight_kind
         inflight_kind = "interact"
+        _mark_generation(state, session_id, "interact")
         state.hub.set_busy(session_id, True)
         if state.scheduler is not None:
             state.scheduler.note_user_activity()
@@ -875,6 +921,7 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
                 pass
         finally:
             inflight_kind = None
+            _mark_generation(state, session_id, None)
             state.hub.set_busy(session_id, False)
 
     thought_cfg = getattr(getattr(state.config, "life", None), "thought", None)
@@ -884,6 +931,7 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
         async def _run_arrival_thought() -> None:
             nonlocal inflight_kind
             inflight_kind = "welcome"
+            _mark_generation(state, session_id, "welcome")
             try:
                 await greet_on_connect(state, session_id=session_id)
             except asyncio.CancelledError:
@@ -893,6 +941,7 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
                 logger.exception("welcome error session=%s", session_id)
             finally:
                 inflight_kind = None
+                _mark_generation(state, session_id, None)
 
         chat_task = asyncio.create_task(_run_arrival_thought())
     elif state.config.proactive.welcome.enabled:
@@ -940,13 +989,16 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
                         )
                     )
                 elif msg_type == TYPE_CHAT:
+                    qq_busy = _qq_busy(state)
                     busy = (
                         (chat_task is not None and not chat_task.done())
                         or state.hub.is_busy(session_id)
+                        or qq_busy
                     )
                     if busy:
-                        if inflight_kind == "interact" or teacher_turn_aborts_hands(
-                            inflight_kind
+                        if (not qq_busy) and (
+                            inflight_kind == "interact"
+                            or teacher_turn_aborts_hands(inflight_kind)
                         ):
                             logger.info(
                                 "WS chat preempts %s session=%s",
@@ -1215,6 +1267,7 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
                 pass
             except Exception:
                 logger.exception("Error while cancelling chat task session=%s", session_id)
+        state.generation_interrupts.pop(session_id, None)
         state.hub.unregister(session_id)
         state.note_listen_pending(session_id, False)
         state.conversations.drop(session_id)

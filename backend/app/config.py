@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 def resolve_backend_dir() -> Path:
@@ -41,6 +41,27 @@ def resolve_backend_dir() -> Path:
 
 
 BACKEND_DIR = resolve_backend_dir()
+
+
+class NapcatConfig(BaseModel):
+    user_qq_id: str = ""
+    napcat_ws_path: str = "/arona"
+    napcat_token: str = ""
+
+    @field_validator("user_qq_id", "napcat_token", mode="before")
+    @classmethod
+    def _as_text(cls, value: object) -> str:
+        if value is None:
+            return ""
+        return str(value).strip()
+
+    @field_validator("napcat_ws_path", mode="before")
+    @classmethod
+    def _ws_path(cls, value: object) -> str:
+        text = str(value or "").strip() or "/arona"
+        if not text.startswith("/"):
+            text = "/" + text
+        return text
 
 
 class ServerConfig(BaseModel):
@@ -316,6 +337,7 @@ class AppConfig(BaseModel):
     life: LifeConfig = Field(default_factory=LifeConfig)
     interact: InteractConfig = Field(default_factory=InteractConfig)
     computer_use: ComputerUseConfig = Field(default_factory=ComputerUseConfig)
+    napcat: NapcatConfig = Field(default_factory=NapcatConfig)
     token_budget: TokenBudgetConfig = Field(default_factory=TokenBudgetConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
 

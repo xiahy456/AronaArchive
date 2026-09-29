@@ -23,6 +23,7 @@ from typing import Any
 
 import httpx
 
+from ..channel import method_label
 from ..config import PlannerConfig
 from .rules import ACTION_IGNORE, ACTION_REPLY, ACTION_WAIT
 
@@ -82,6 +83,7 @@ class LlmTurnRouter:
         last_arona: str,
         silence_ms: int,
         seconds_since_arona: float | None,
+        last_method: str = "",
     ) -> str | None:
         if not self.enabled:
             return None
@@ -89,13 +91,14 @@ class LlmTurnRouter:
         timeout = float(getattr(self.config, "router_timeout_sec", 3.0) or 3.0)
         max_tokens = int(getattr(self.config, "router_max_tokens", 64) or 64)
         last = (last_arona or "").strip() or "（无）"
+        shown = last if last == "（无）" else f"[{method_label(last_method)}] {last}"
         gap = (
             f"{seconds_since_arona:.1f}s"
             if seconds_since_arona is not None
             else "未知"
         )
         user_payload = (
-            f"【阿洛娜上一句】{last}\n"
+            f"【阿洛娜上一句】{shown}\n"
             f"【距阿洛娜开口】{gap}\n"
             f"【静音】{int(silence_ms)}ms\n"
             f"【老师本段】{(user_text or '').strip()}\n"

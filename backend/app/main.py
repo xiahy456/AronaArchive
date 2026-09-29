@@ -43,6 +43,7 @@ from .orchestrator import Orchestrator
 from .planner import PlannerClient
 from .proactive import ConnectionHub, ProactiveScheduler, WelcomeState, run_proactive_loop
 from .relationship import RelationshipEngine, RelationshipSettings
+from .napcat import NapcatLink, QqInbox, napcat_endpoint
 from .ws_auth import startup_token_error
 from .ws_handler import AppState, websocket_endpoint
 
@@ -76,8 +77,14 @@ def create_app() -> FastAPI:
     token_error = startup_token_error(
         config.server.host, config.server.public, config.server.token
     )
-    if token_error:
-        logger.error("%s", token_error)
+    napcat_error = startup_token_error(
+        config.server.host,
+        config.server.public,
+        config.napcat.napcat_token,
+        setting="napcat.napcat_token",
+    )
+    if token_error or napcat_error:
+        logger.error("%s", token_error or napcat_error)
         raise SystemExit(1)
     model = get_model_loader()
     conversations = ConversationManager(
@@ -165,6 +172,12 @@ def create_app() -> FastAPI:
     state.thought = thought
     state.thought_store = thought_store
     state.glance_request_id = ""
+    state.napcat = NapcatLink(config.napcat.user_qq_id)
+    orchestrator.napcat = state.napcat
+    state.qq_inbox = QqInbox(state)
+    state.generation_kind = ""
+    state.generation_owner = ""
+    state.generation_interrupts = {}
     expire_stale_care(state)
     from .life.thought.triggers import note_climate_enter, note_memory
 
@@ -245,10 +258,18 @@ def create_app() -> FastAPI:
         return {"status": "ok"}
 
     ws_path = config.server.ws_path or "/ws"
+    napcat_path = config.napcat.napcat_ws_path or "/arona"
+    if napcat_path == ws_path:
+        logger.error("napcat_ws_path must differ from server.ws_path")
+        raise SystemExit(1)
 
     @app.websocket(ws_path)
     async def ws_route(websocket: WebSocket) -> None:
         await websocket_endpoint(websocket, state)
+
+    @app.websocket(napcat_path)
+    async def napcat_route(websocket: WebSocket) -> None:
+        await napcat_endpoint(websocket, state)
 
     return app
 

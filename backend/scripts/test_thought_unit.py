@@ -597,9 +597,9 @@ def test_sources_for_each_trigger() -> None:
             )
         ),
     )
-    if "[2026年9月10日 15:58:01] 老师: 只有一轮" not in timed.text:
+    if "[2026年9月10日 15:58:01 面对面交流] 老师: 只有一轮" not in timed.text:
         _fail(f"a teacher line should carry its time, got {timed.text}")
-    if "[2026年9月10日 15:58:12] 阿洛娜: 嗯" not in timed.text:
+    if "[2026年9月10日 15:58:12 面对面交流] 阿洛娜: 嗯" not in timed.text:
         _fail(f"an Arona line should carry its own time, got {timed.text}")
     held = select_sources(
         PendingTrigger(kind="spontaneous"),

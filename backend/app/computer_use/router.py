@@ -22,6 +22,7 @@ from typing import Any
 import httpx
 
 from ..config import ComputerUseConfig, PlannerConfig
+from ..channel import method_label
 from ..life.thought.schema import is_thought_history_marker
 from ..logging_utils import format_llm_exchange
 from .schema import extract_json_object
@@ -105,9 +106,9 @@ def format_route_history(
         if role == "user":
             if is_thought_history_marker(content):
                 continue
-            lines.append(f"老师：{content}")
+            lines.append(f"[{method_label(item.get('method'))}] 老师：{content}")
         elif role == "assistant":
-            lines.append(f"阿洛娜：{content}")
+            lines.append(f"[{method_label(item.get('method'))}] 阿洛娜：{content}")
         else:
             lines.append(content)
     return "\n".join(lines) or "（无）"

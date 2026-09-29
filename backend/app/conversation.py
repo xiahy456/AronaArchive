@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from .channel import method_label
 from .life.thought.schema import is_thought_history_marker
 
 logger = logging.getLogger(__name__)
@@ -42,7 +43,8 @@ def _format_transcript(messages: list[dict[str, str]]) -> str:
     lines: list[str] = []
     for msg in messages:
         role = "老师" if msg["role"] == "user" else "阿洛娜"
-        lines.append(f"{role}: {msg['content']}")
+        label = method_label(msg.get("method"))
+        lines.append(f"[{label}] {role}: {msg['content']}")
     return "\n".join(lines)
 
 
@@ -58,9 +60,10 @@ class DialogueEntry:
     action: str = ""
     time: str = ""
     session_id: str = ""
+    method: str = ""
 
     def to_dict(self) -> dict[str, str]:
-        return {
+        payload = {
             "role": self.role,
             "kind": self.kind,
             "content": self.content,
@@ -68,9 +71,17 @@ class DialogueEntry:
             "time": self.time,
             "session_id": self.session_id,
         }
+        if self.method:
+            payload["method"] = self.method
+        return payload
 
     def history_line(self) -> dict[str, str]:
-        return {"role": self.role, "content": self.content, "time": self.time}
+        return {
+            "role": self.role,
+            "content": self.content,
+            "time": self.time,
+            "method": self.method,
+        }
 
 
 def _entry_from_dict(raw: object) -> DialogueEntry | None:
@@ -90,6 +101,7 @@ def _entry_from_dict(raw: object) -> DialogueEntry | None:
         action=str(raw.get("action") or "").strip(),
         time=str(raw.get("time") or "").strip(),
         session_id=str(raw.get("session_id") or "").strip(),
+        method=str(raw.get("method") or "").strip(),
     )
 
 
@@ -180,6 +192,7 @@ class ConversationManager:
         at: datetime | None = None,
         kind: str = "",
         action: str = "",
+        method: str = "direct",
     ) -> None:
         text = (content or "").strip()
         if not text or is_thought_history_marker(text) or text in _PROACTIVE_MARKERS:
@@ -195,6 +208,7 @@ class ConversationManager:
             stored_role = "event"
         elif not stored_kind:
             stored_kind = "speech"
+        stored_method = method if method in {"direct", "message"} else "direct"
         assert self._store is not None
         self._store.append(
             DialogueEntry(
@@ -204,6 +218,7 @@ class ConversationManager:
                 action=stored_action,
                 time=_stamp(at),
                 session_id=session_id or "",
+                method=stored_method,
             )
         )
         if stored_role == "user":
@@ -212,9 +227,15 @@ class ConversationManager:
     def turn_count(self, session_id: str) -> int:
         return self._turn_counts.get(session_id, 0)
 
-    def append_extract_buffer(self, session_id: str, role: str, content: str) -> None:
+    def append_extract_buffer(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        method: str = "",
+    ) -> None:
         buffer = self._extract_buffers.setdefault(session_id, [])
-        buffer.append({"role": role, "content": content})
+        buffer.append({"role": role, "content": content, "method": method})
 
     def extract_buffer_turn_count(self, session_id: str) -> int:
         buffer = self._extract_buffers.get(session_id) or []

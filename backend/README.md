@@ -410,6 +410,7 @@ python scripts/ingest_knowledge.py --rebuild
 | `listen`       | 连续听写的静音提交与接话窗口                                  |
 | `life`         | 生命循环：内状态、自己的一天、阿洛娜侧记忆、低频瞥屏、电脑操作作为可打断活动 |
 | `proactive`    | 上线欢迎、关系气候、空闲搭话、照料、goal 回访、节日、同轮补充               |
+| `napcat`       | QQ 私聊：老师 QQ 号、反向 WebSocket 路径与令牌                     |
 | `token_budget` | 注入 prompt 的 memory / knowledge / history 预算     |
 | `logging`      | 日志目录、文件名、级别与滚动                                  |
 
@@ -428,6 +429,18 @@ python scripts/ingest_knowledge.py --rebuild
 | `token`         | 空           | 访问令牌。客户端放在 `Authorization: Bearer`。空或 `YOUR_ACCESS_TOKEN` 表示不启用 |
 | `ssl_certfile`  | 空           | 无域名时由本进程直接提供 `wss` 的证书。与 `ssl_keyfile` 成对填写                      |
 | `ssl_keyfile`   | 空           | 与 `ssl_certfile` 成对的私钥                                              |
+
+
+
+
+### `napcat`
+
+
+| 配置项              | 默认       | 说明                                                                                          |
+| ---------------- | -------- | ------------------------------------------------------------------------------------------- |
+| `user_qq_id`     | 空        | 老师的 QQ 号，只向这个号发私聊。空则挂上反向 WebSocket，但不收不发                                              |
+| `napcat_ws_path` | `/arona` | Napcat 作为 WebSocket 客户端连入的路径，与桌面客户端共用 `server.port`                                       |
+| `napcat_token`   | 空        | Napcat websocket client 的 `token`，请求头为 `Authorization: Bearer`。与 `server.token` 分开。空令牌的放行规则与 `server.token` 相同 |
 
 
 

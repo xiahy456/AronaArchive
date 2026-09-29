@@ -205,3 +205,11 @@ logging:
   level: "INFO"
   max_bytes: 10485760
   backup_count: 5
+
+napcat:
+  # 老师的 QQ 号。空则只挂反向 WebSocket，不收不发私聊
+  user_qq_id: ""
+  # Napcat 作为客户端连入的路径，与桌面客户端 /ws 共用 server.port
+  napcat_ws_path: "/arona"
+  # Napcat websocket client 的 token，对应 Authorization: Bearer。与 server.token 分开
+  napcat_token: ""

@@ -22,6 +22,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..channel import normalize_method
 from ..relationship.events import DEFAULT_USER_ACT, normalize_user_act
 from .emotions import DEFAULT_EMOTION, normalize_emotion
 
@@ -69,6 +70,7 @@ class IntentCard:
     reply_ok: bool = True
     user_act: str = DEFAULT_USER_ACT
     life_action: str = ""
+    method: str = ""
     # Legacy (ignored by Renderer; kept so old payloads / tests don't explode)
     user_emotion: str = ""
     topic: str = ""
@@ -94,6 +96,7 @@ class IntentCard:
             reply_ok=reply_ok,
             user_act=normalize_user_act(data.get("user_act")),
             life_action=_as_str(data.get("life_action")).lower(),
+            method=normalize_method(data.get("method")),
             user_emotion=_as_str(data.get("user_emotion")),
             topic=_as_str(data.get("topic")),
             stance=_as_str(data.get("stance")),

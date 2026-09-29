@@ -21,6 +21,7 @@ import logging
 from datetime import datetime
 from typing import Any
 
+from ..channel import QQ_SESSION_ID, hold_channel_for
 from ..proactive.care import (
     CARE_KINDS,
     CARE_MEMORY_QUERY,
@@ -380,6 +381,25 @@ def _close_spoken_thought(state: Any, engine: Any, now: datetime) -> None:
             logger.exception("thought save after speech failed")
 
 
+def _qq_ready(state: Any) -> bool:
+    link = getattr(state, "napcat", None)
+    return bool(link is not None and getattr(link, "connected", False))
+
+
+def _save_impulse(engine: Any) -> None:
+    store = getattr(engine, "store", None)
+    if store is None:
+        return
+    try:
+        store.save(engine.state)
+    except Exception:
+        logger.exception("life save after impulse hold failed")
+
+
+async def _noop_send(_payload: dict[str, Any]) -> None:
+    return None
+
+
 async def _speak_impulse(
     state: Any,
     *,
@@ -396,13 +416,31 @@ async def _speak_impulse(
     if impulse is None:
         return False
     target = _pick_session(state, session_id)
-    if target is None:
-        logger.info("impulse speak deferred kind=%s reason=busy_or_no_session", impulse.kind)
+    qq_up = _qq_ready(state)
+    client_up = target is not None
+    hold = (impulse.await_channel or "").strip()
+    if hold == "client" and not client_up:
+        logger.info("impulse held kind=%s channel=client", impulse.kind)
         return False
-    session_id, send = target
+    if hold == "napcat" and not qq_up:
+        logger.info("impulse held kind=%s channel=napcat", impulse.kind)
+        return False
+    if not client_up and not qq_up:
+        logger.info("impulse speak deferred kind=%s reason=no_channel", impulse.kind)
+        return False
+    if hold:
+        impulse.await_channel = ""
+        _save_impulse(engine)
+    if target is None:
+        session_id, send = QQ_SESSION_ID, _noop_send
+        busy_id = QQ_SESSION_ID
+    else:
+        session_id, send = target
+        busy_id = session_id
     climate = _climate(state)
     interrupt_ctx = engine.state.clone()
-    hub.set_busy(session_id, True)
+    if busy_id:
+        hub.set_busy(busy_id, True)
     spoke = False
     try:
         result = await orchestrator.handle_initiate(
@@ -416,6 +454,7 @@ async def _speak_impulse(
             extra_memories=list(impulse.extra_memories),
             climate=climate,
             interrupt_ctx=interrupt_ctx,
+            client_online=client_up,
         )
     except asyncio.CancelledError:
         raise
@@ -423,9 +462,21 @@ async def _speak_impulse(
         logger.exception("impulse speak failed kind=%s", impulse.kind)
         result = "failed"
     finally:
-        hub.set_busy(session_id, False)
+        if busy_id:
+            hub.set_busy(busy_id, False)
 
     scheduler = getattr(state, "scheduler", None)
+    if result == "deferred":
+        impulse.await_channel = hold_channel_for(
+            getattr(orchestrator, "last_outbound_method", "")
+        )
+        _save_impulse(engine)
+        logger.info(
+            "impulse held kind=%s channel=%s",
+            impulse.kind,
+            impulse.await_channel,
+        )
+        return False
     if result == "sent":
         spoke = True
         snapshot = impulse

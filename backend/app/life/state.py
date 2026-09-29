@@ -147,9 +147,10 @@ class Impulse:
     slot_id: str = ""
     date_key: str = ""
     from_thought: bool = False
+    await_channel: str = ""
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "kind": self.kind,
             "created_at": format_life_dt(self.created_at),
             "source_id": self.source_id,
@@ -166,6 +167,9 @@ class Impulse:
             "date_key": self.date_key,
             "from_thought": self.from_thought,
         }
+        if self.await_channel:
+            payload["await_channel"] = self.await_channel
+        return payload
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> Impulse | None:
@@ -194,6 +198,11 @@ class Impulse:
             slot_id=str(data.get("slot_id") or "").strip(),
             date_key=str(data.get("date_key") or "").strip(),
             from_thought=bool(data.get("from_thought", False)),
+            await_channel=_one_of(
+                data.get("await_channel"),
+                frozenset({"client", "napcat"}),
+                "",
+            ),
         )
 
 
@@ -259,6 +268,7 @@ class InnerState:
                 slot_id=impulse.slot_id,
                 date_key=impulse.date_key,
                 from_thought=impulse.from_thought,
+                await_channel=impulse.await_channel,
             )
         return replace(
             self,

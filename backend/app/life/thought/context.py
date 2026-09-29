@@ -185,26 +185,32 @@ def _turns(state: "AppState") -> tuple[tuple, ...]:
     pairs: list[tuple] = []
     pending_user = ""
     pending_at: datetime | None = None
+    pending_method = ""
     for msg in history:
         role = str(msg.get("role") or "")
         content = str(msg.get("content") or "").strip()
         spoken_at = _message_time(msg)
+        spoken_method = str(msg.get("method") or "")
         if role == "user":
             if is_thought_history_marker(content):
                 continue
             if pending_user:
-                pairs.append((pending_user, "", pending_at, None))
+                pairs.append((pending_user, "", pending_at, None, pending_method, ""))
             pending_user = content
             pending_at = spoken_at
+            pending_method = spoken_method
         elif role == "assistant" and content:
             if pending_user:
-                pairs.append((pending_user, content, pending_at, spoken_at))
+                pairs.append(
+                    (pending_user, content, pending_at, spoken_at, pending_method, spoken_method)
+                )
                 pending_user = ""
                 pending_at = None
+                pending_method = ""
             else:
-                pairs.append(("", content, None, spoken_at))
+                pairs.append(("", content, None, spoken_at, "", spoken_method))
     if pending_user:
-        pairs.append((pending_user, "", pending_at, None))
+        pairs.append((pending_user, "", pending_at, None, pending_method, ""))
     return tuple(pairs)
 
 

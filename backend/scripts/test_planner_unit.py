@@ -53,8 +53,8 @@ def main() -> None:
         knowledge=[],
         now=frozen,
     )
-    assert "[2026年8月24日 10:14:05] 老师：早上好" in timed_msg
-    assert "[2026年8月24日 10:14:07] 阿洛娜：老师早上好。" in timed_msg
+    assert "[2026年8月24日 10:14:05 面对面交流] 老师：早上好" in timed_msg
+    assert "[2026年8月24日 10:14:07 面对面交流] 阿洛娜：老师早上好。" in timed_msg
     assert "内部时序依据" in PLANNER_SYSTEM
     assert "内部时序依据" in PLANNER_SYSTEM_CRISIS
 
@@ -86,8 +86,8 @@ def main() -> None:
         knowledge=[],
         now=frozen,
     )
-    assert "[2026年8月24日 10:14:05] 老师：早上好" in from_store
-    assert "[2026年8月24日 10:14:07] 阿洛娜：老师早上好。" in from_store
+    assert "[2026年8月24日 10:14:05 面对面交流] 老师：早上好" in from_store
+    assert "[2026年8月24日 10:14:07 面对面交流] 阿洛娜：老师早上好。" in from_store
 
     assert normalize_emotion("SMILE") == "smile"
     assert normalize_emotion("nope") == "normal"
@@ -152,8 +152,8 @@ def main() -> None:
     )
     hist_in_prompt = local_msgs[1:-1]
     assert len(hist_in_prompt) == LOCAL_MAX_HISTORY_TURNS * 2
-    assert hist_in_prompt[0]["content"] == "老师第3轮"
-    assert hist_in_prompt[-1]["content"] == "阿洛娜第6轮"
+    assert hist_in_prompt[0]["content"] == "[面对面交流] 老师第3轮"
+    assert hist_in_prompt[-1]["content"] == "[面对面交流] 阿洛娜第6轮"
     assert local_msgs[-1]["content"] == "本轮"
 
     follow = parse_and_gate_intent(
@@ -213,7 +213,7 @@ def main() -> None:
     assert "touch" in PLANNER_SYSTEM
     assert "user_act" in PLANNER_SYSTEM
     assert "【当前时间】" in PLANNER_SYSTEM
-    assert "禁止把完整公历年月日念出来" in PLANNER_SYSTEM
+    assert "非必要时不把完整公历年月日念出来" in PLANNER_SYSTEM
     assert set(USER_ACT_WHITELIST) == set(USER_DELTAS)
     for act in USER_ACT_WHITELIST:
         assert act in PLANNER_SYSTEM

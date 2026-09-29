@@ -20,6 +20,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from .channel import method_label
 from .config import AppConfig
 from .safety import is_crisis_text
 from .taxonomy import FACT_CATEGORIES, normalize_memory_category
@@ -179,6 +180,7 @@ def build_messages(
     knowledge: list[str],
     extra_system: str | None = None,
     memory_block: str = "",
+    teacher_method: str | None = None,
 ) -> list[dict[str, str]]:
     system_parts = [config.prompt.local_system_prompt.strip()]
     if extra_system and extra_system.strip():
@@ -217,8 +219,17 @@ def build_messages(
     while trimmed and sum(len(m["content"]) for m in trimmed) > hist_budget:
         trimmed = trimmed[1:]
 
-    messages.extend(trimmed)
-    messages.append({"role": "user", "content": user_text})
+    messages.extend(
+        {
+            "role": msg.get("role", "user"),
+            "content": f"[{method_label(msg.get('method'))}] {msg.get('content') or ''}",
+        }
+        for msg in trimmed
+    )
+    current = user_text
+    if teacher_method is not None:
+        current = f"[{method_label(teacher_method)}] {user_text}"
+    messages.append({"role": "user", "content": current})
     return messages
 
 

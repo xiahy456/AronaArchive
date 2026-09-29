@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from ..channel import method_label
 from ..life.thought.schema import is_thought_history_marker
 from ..query_time import format_extract_now, format_full_datetime
 from ..relationship.events import USER_ACT_WHITELIST_CSV
@@ -102,8 +103,9 @@ PLANNER_SYSTEM_BASE = f"""# 阿洛娜人设
     - 2026年10月10号 → 「10月20号」
 13. 老师指出阿洛娜事实错误（记错、答错、与已知记忆/知识不符）时：先认错再纠正；不要硬撑、狡辩或把错推给老师。没有可靠事实可用来纠正时，只认错并承认不确定，禁止编造更正。老师只是质疑能力或开玩笑说笨，不是指出具体事实错误时，仍按人设轻松接住，不必认错。
 14. life_action：speak / continue_activity / emotion_only。循环认这个动作；reply_ok 仍表示开不开口。reply_ok 为 true 时用 speak；reply_ok 为 false 且只换脸时用 emotion_only；reply_ok 为 false 且继续当前活动时用 continue_activity。
+15. method：这条 draft 从哪边送给老师。只能是 direct 或 message。direct 是面对面（客户端），message 是 QQ 私聊。老师本轮从哪边进来，就优先从哪边回。看【可送达通道】：客户端不在线、又希望老师收到时，选 message。method 为 message 时，draft 仍是可直接发出的口语；arona_emotion 照常填写。
 
-JSON：{{"draft": string, "arona_emotion": string, "followup_ok": bool, "reply_ok": bool, "user_act": string, "life_action": string}}
+JSON：{{"draft": string, "arona_emotion": string, "followup_ok": bool, "reply_ok": bool, "user_act": string, "life_action": string, "method": "direct" | "message"}}
 """
 
 # Used when model.enabled is true: planner draft is rewritten by the renderer.
@@ -115,7 +117,7 @@ PLANNER_PREFIX_RENDERER = """你是桌面陪伴助手「阿洛娜」的「回复
 """
 
 # Used when model.enabled is false: planner draft is the spoken line (no renderer).
-PLANNER_PREFIX_DIRECT = """你是桌面陪伴助手「阿洛娜」。你要以阿洛娜的第一人称，说出她会对老师说的话（draft），并输出本轮其他信息（arona_emotion、followup_ok、reply_ok、user_act、life_action）。
+PLANNER_PREFIX_DIRECT = """你是桌面陪伴助手「阿洛娜」。你要以阿洛娜的第一人称，说出她会对老师说的话（draft），并输出本轮其他信息（arona_emotion、followup_ok、reply_ok、user_act、life_action、method）。
 你的任务分为两步：
 1. 根据【阿洛娜此刻】（若有）、【近期对话】里阿洛娜最后一句和【老师本轮消息】，判断本轮阿洛娜要不要对老师开口（reply_ok），并选择 life_action。
 2. 仅当 reply_ok 为 true 时，写出阿洛娜的回答（draft）并选择表情。reply_ok 为 false 时不要编台词。
@@ -159,8 +161,9 @@ PLANNER_SYSTEM_CRISIS = f"""你是桌面陪伴助手「阿洛娜」。老师此�
    选符合认真担心、心疼的表情（如 worried），不要选活泼或玩笑向的表情。
 7. 记忆/知识只在与本轮直接相关时采用；禁止编造老师没说过的事实。
 8. draft 对老师仍用「今天 / 现在」等口语，禁止把完整公历年月日念出来。【当前时间】是内部时序依据。
+9. method：direct 或 message。老师本轮从哪边进来就优先从哪边回。客户端不在线且希望老师收到时选 message。message 时 draft 仍是可直接发出的口语。
 
-JSON：{{"draft": string, "arona_emotion": string, "followup_ok": bool, "reply_ok": bool, "user_act": string}}
+JSON：{{"draft": string, "arona_emotion": string, "followup_ok": bool, "reply_ok": bool, "user_act": string, "method": "direct" | "message"}}
 """
 
 
@@ -170,14 +173,15 @@ def select_planner_system(*, renderer_enabled: bool) -> str:
 
 
 def _history_time_prefix(msg: dict[str, str]) -> str:
+    label = method_label(msg.get("method"))
     raw = (msg.get("time") or "").strip()
     if not raw:
-        return ""
+        return f"[{label}] "
     try:
         dt = datetime.fromisoformat(raw)
     except ValueError:
-        return f"[{raw}] "
-    return f"[{format_full_datetime(dt)}] "
+        return f"[{raw} {label}] "
+    return f"[{format_full_datetime(dt)} {label}] "
 
 
 _ARONA_MEMORY_HEADER = "【阿洛娜的记忆】"
@@ -224,6 +228,8 @@ def build_planner_user_message(
     memory_block: str = "",
     life_block: str = "",
     day_block: str = "",
+    teacher_method: str | None = None,
+    channels_block: str = "",
 ) -> str:
     labeled = (memory_block or "").strip()
     if labeled:
@@ -289,6 +295,12 @@ def build_planner_user_message(
             "当老师的本轮发言与截图内容无明显关联时，不要主动提起截图内容。\n"
         )
     closing += "请输出唯一 JSON 对象。"
+    teacher_line = user_text.strip()
+    if teacher_method is not None:
+        teacher_line = f"[{method_label(teacher_method)}] {teacher_line}"
+    channel_section = ""
+    if (channels_block or "").strip():
+        channel_section = f"{channels_block.strip()}\n\n"
     return (
         f"{climate_section}"
         f"{format_extract_now(now)}\n\n"
@@ -297,6 +309,7 @@ def build_planner_user_message(
         f"【近期对话】\n{hist_block}\n\n"
         f"{day_section}"
         f"{life_section}"
-        f"【老师本轮消息】\n{user_text.strip()}\n\n"
+        f"{channel_section}"
+        f"【老师本轮消息】\n{teacher_line}\n\n"
         f"{closing}"
     )

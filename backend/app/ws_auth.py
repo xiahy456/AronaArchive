@@ -40,14 +40,20 @@ def is_loopback_host(host: str) -> bool:
     return (host or "").strip().lower() in _LOOPBACK_HOSTS
 
 
-def startup_token_error(host: str, public: bool, token: str) -> str | None:
+def startup_token_error(
+    host: str,
+    public: bool,
+    token: str,
+    *,
+    setting: str = "server.token",
+) -> str | None:
     """Refuse a public or non-loopback listener that has no access token."""
     if is_loopback_host(host) and not public:
         return None
     if configured_access_token(token):
         return None
     return (
-        "拒绝启动：公网或非本机监听必须设置 server.token。"
+        f"拒绝启动：公网或非本机监听必须设置 {setting}。"
         "生成命令：python -c \"import secrets; print(secrets.token_urlsafe(32))\""
     )
 

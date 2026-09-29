@@ -66,6 +66,7 @@ class AddressRouter:
         already_waited: bool,
         last_arona: str,
         silence_ms: int,
+        last_method: str = "",
     ) -> RouteResult:
         rule = self.rules(
             text=text,
@@ -85,6 +86,7 @@ class AddressRouter:
                 last_arona=last_arona,
                 silence_ms=silence_ms,
                 seconds_since_arona=seconds_since_arona,
+                last_method=last_method,
             )
         if llm_action in {ACTION_IGNORE, ACTION_WAIT, ACTION_REPLY}:
             logger.info(

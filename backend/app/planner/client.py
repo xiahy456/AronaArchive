@@ -65,6 +65,8 @@ class PlannerClient:
         memory_block: str = "",
         life_block: str = "",
         day_block: str = "",
+        teacher_method: str | None = None,
+        channels_block: str = "",
     ) -> IntentCard | None:
         if not self.enabled:
             logger.info("planner skipped reason=disabled_or_no_key")
@@ -82,6 +84,8 @@ class PlannerClient:
             memory_block=memory_block,
             life_block=life_block,
             day_block=day_block,
+            teacher_method=teacher_method,
+            channels_block=channels_block,
         )
         if image is not None:
             model = (self.config.vision_model or "").strip() or self.config.model

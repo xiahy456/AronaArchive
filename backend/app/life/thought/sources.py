@@ -20,6 +20,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from ...channel import method_label
 from ...proactive.care import in_window
 from ...proactive.festival import match_festival
 from ...proactive.goal import goal_is_due_soon
@@ -444,19 +445,22 @@ def _format_turns(
         arona = str(turn[1] or "") if len(turn) > 1 else ""
         teacher_at = _talk_time(turn[2]) if len(turn) > 2 else None
         arona_at = _talk_time(turn[3]) if len(turn) > 3 else None
+        teacher_method = turn[4] if len(turn) > 4 else ""
+        arona_method = turn[5] if len(turn) > 5 else ""
         teacher_line = _keep(teacher, seen)
         arona_line = _keep(arona, seen)
         if teacher_line:
-            rows.append(_speak_line("老师", teacher_line, teacher_at))
+            rows.append(_speak_line("老师", teacher_line, teacher_at, teacher_method))
         if arona_line:
-            rows.append(_speak_line("阿洛娜", arona_line, arona_at))
+            rows.append(_speak_line("阿洛娜", arona_line, arona_at, arona_method))
     return rows
 
 
-def _speak_line(who: str, text: str, at: datetime | None) -> str:
+def _speak_line(who: str, text: str, at: datetime | None, method: object = "") -> str:
+    label = method_label(method)
     if at is None:
-        return f"{who}: {text}"
-    return f"[{format_full_datetime(at)}] {who}: {text}"
+        return f"[{label}] {who}: {text}"
+    return f"[{format_full_datetime(at)} {label}] {who}: {text}"
 
 
 def _talk_time(raw: object) -> datetime | None:
