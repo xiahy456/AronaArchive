@@ -22,12 +22,28 @@ import logging
 
 from fastapi import WebSocket
 
-from .protocol import build_send_private
+from .protocol import build_send_mface, build_send_private
 from .split import split_qq_clauses
 
 logger = logging.getLogger(__name__)
 
 CLAUSE_GAP_SEC = 2.0
+
+
+def _sticker_frame(user_qq_id: str, emoji: object) -> dict | None:
+    package = getattr(emoji, "package_id_value", None)
+    emoji_id = str(getattr(emoji, "emoji_id", "") or "").strip()
+    key = str(getattr(emoji, "key", "") or "").strip()
+    summary = str(getattr(emoji, "summary", "") or "").strip()
+    if not callable(package) or not emoji_id or not key or not summary:
+        return None
+    return build_send_mface(
+        user_qq_id,
+        emoji_package_id=package(),
+        emoji_id=emoji_id,
+        key=key,
+        summary=summary,
+    )
 
 
 class NapcatLink:
@@ -54,8 +70,8 @@ class NapcatLink:
         if self._ws is websocket:
             self._ws = None
 
-    async def send_text(self, text: str) -> bool:
-        """Send every clause. False if the socket drops before the last one."""
+    async def send_text(self, text: str, *, emoji: object | None = None) -> bool:
+        """Send every clause, then one sticker. False if text never finishes."""
         clauses = split_qq_clauses(text)
         if not clauses or not self.user_qq_id:
             return False
@@ -66,14 +82,28 @@ class NapcatLink:
             for index, clause in enumerate(clauses):
                 if index and self._gap_sec:
                     await asyncio.sleep(self._gap_sec)
-                if self._ws is not ws:
-                    logger.info("napcat send aborted reason=socket_replaced")
+                if not await self._send_frame(ws, build_send_private(self.user_qq_id, clause)):
                     return False
-                frame = build_send_private(self.user_qq_id, clause)
-                try:
-                    await ws.send_text(json.dumps(frame, ensure_ascii=False))
-                except Exception:
-                    logger.exception("napcat send failed")
-                    self.unbind(ws)
-                    return False
+            if emoji is None:
+                return True
+            if self._gap_sec:
+                await asyncio.sleep(self._gap_sec)
+            sticker = _sticker_frame(self.user_qq_id, emoji)
+            if sticker is None:
+                return True
+            if not await self._send_frame(ws, sticker):
+                logger.info("napcat emoji undelivered after text")
+                return True
             return True
+
+    async def _send_frame(self, ws: WebSocket, frame: dict) -> bool:
+        if self._ws is not ws:
+            logger.info("napcat send aborted reason=socket_replaced")
+            return False
+        try:
+            await ws.send_text(json.dumps(frame, ensure_ascii=False))
+        except Exception:
+            logger.exception("napcat send failed")
+            self.unbind(ws)
+            return False
+        return True

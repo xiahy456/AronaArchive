@@ -88,7 +88,12 @@ class IntentCard:
         followup_ok = _as_bool(data.get("followup_ok"), False)
         if not reply_ok:
             followup_ok = False
-        emotion = normalize_emotion(data.get("arona_emotion"))
+        method = normalize_method(data.get("method"))
+        raw_emotion = data.get("arona_emotion")
+        if method == "message":
+            emotion = raw_emotion.strip() if isinstance(raw_emotion, str) else ""
+        else:
+            emotion = normalize_emotion(raw_emotion)
         return cls(
             draft=draft,
             arona_emotion=emotion,
@@ -96,7 +101,7 @@ class IntentCard:
             reply_ok=reply_ok,
             user_act=normalize_user_act(data.get("user_act")),
             life_action=_as_str(data.get("life_action")).lower(),
-            method=normalize_method(data.get("method")),
+            method=method,
             user_emotion=_as_str(data.get("user_emotion")),
             topic=_as_str(data.get("topic")),
             stance=_as_str(data.get("stance")),

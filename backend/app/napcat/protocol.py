@@ -48,17 +48,48 @@ def private_text_from_event(event: object, user_qq_id: str) -> str | None:
     return joined or None
 
 
-def build_send_private(user_qq_id: str, text: str) -> dict[str, Any]:
+def _user_id(user_qq_id: str) -> int | str:
     raw_id = str(user_qq_id or "").strip()
     try:
-        user_id: int | str = int(raw_id)
+        return int(raw_id)
     except ValueError:
-        user_id = raw_id
+        return raw_id
+
+
+def build_send_private(user_qq_id: str, text: str) -> dict[str, Any]:
     return {
         "action": "send_private_msg",
         "params": {
-            "user_id": user_id,
+            "user_id": _user_id(user_qq_id),
             "message": [{"type": "text", "data": {"text": text}}],
+        },
+        "echo": str(uuid.uuid4()),
+    }
+
+
+def build_send_mface(
+    user_qq_id: str,
+    *,
+    emoji_package_id: int | str,
+    emoji_id: str,
+    key: str,
+    summary: str,
+) -> dict[str, Any]:
+    return {
+        "action": "send_private_msg",
+        "params": {
+            "user_id": _user_id(user_qq_id),
+            "message": [
+                {
+                    "type": "mface",
+                    "data": {
+                        "emoji_package_id": emoji_package_id,
+                        "emoji_id": emoji_id,
+                        "key": key,
+                        "summary": summary,
+                    },
+                }
+            ],
         },
         "echo": str(uuid.uuid4()),
     }

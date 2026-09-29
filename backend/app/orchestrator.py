@@ -46,6 +46,7 @@ def should_record_history_marker(marker: str) -> bool:
         return False
     return True
 
+from .emoji_catalog import lookup_emoji
 from .channel import format_channels, resolve_outbound_method
 from .config import AppConfig
 from .conversation import ConversationManager
@@ -286,7 +287,8 @@ class Orchestrator:
             if link is None or not getattr(link, "connected", False) or not spoken:
                 logger.info("outbound undelivered method=message reason=napcat_down")
                 return False
-            ok = await link.send_text(spoken)
+            emoji = lookup_emoji(emotion)
+            ok = await link.send_text(spoken, emoji=emoji)
             if not ok:
                 logger.info("outbound undelivered method=message reason=send_failed")
             return bool(ok)

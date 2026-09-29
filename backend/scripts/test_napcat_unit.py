@@ -6,6 +6,8 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+import tempfile
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -19,7 +21,12 @@ from app.life.impulse import _speak_impulse  # noqa: E402
 from app.life.state import Impulse, InnerState  # noqa: E402
 from app.napcat import NapcatLink, QqInbox, build_send_private, private_text_from_event, split_qq_clauses  # noqa: E402
 from app.napcat.link import CLAUSE_GAP_SEC  # noqa: E402
-from app.planner.prompts import build_planner_user_message  # noqa: E402
+from app.emoji_catalog import load_emoji_catalog, lookup_emoji, sticker_from_row  # noqa: E402
+from app.planner.prompts import (  # noqa: E402
+    PLANNER_SYSTEM_BASE,
+    PLANNER_SYSTEM_CRISIS,
+    build_planner_user_message,
+)
 from app.planner.schema import parse_and_gate_intent  # noqa: E402
 
 
@@ -301,6 +308,130 @@ async def test_coalesce() -> None:
     print("coalesce ok")
 
 
+def test_emoji_catalog() -> None:
+    known = lookup_emoji("4b9ca94171d02f28e7829afa28709c45")
+    if known is None or known.description != "抽到了":
+        _fail(f"catalog lookup {known}")
+    if known.package_id_value() != 235125 or not isinstance(known.package_id_value(), int):
+        _fail(f"package id {known.package_id_value()!r}")
+    if lookup_emoji("smile") is not None or lookup_emoji("") is not None:
+        _fail("unknown or empty emoji must miss")
+    if sticker_from_row({"emoji_id": "abc", "description": "x"}) is not None:
+        _fail("blank fields must be skipped")
+    if sticker_from_row(["not", "an", "object"]) is not None:
+        _fail("non-object must be skipped")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "a.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "emoji_package_id": "",
+                        "emoji_id": "bad",
+                        "key": "k",
+                        "summary": "s",
+                        "description": "d",
+                    },
+                    {
+                        "emoji_package_id": "1",
+                        "emoji_id": "keep",
+                        "key": "k",
+                        "summary": "[a]",
+                        "description": "好耶",
+                    },
+                    "nope",
+                ],
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        (root / "b.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "emoji_package_id": "9",
+                        "emoji_id": "keep",
+                        "key": "other",
+                        "summary": "[b]",
+                        "description": "重复",
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+        loaded = load_emoji_catalog(root)
+    if len(loaded) != 1 or loaded[0].description != "好耶" or loaded[0].key != "k":
+        _fail(f"catalog filter {loaded}")
+    pair = "好耶：d67b510a9eb2e41c31fbe3810eb06ee6"
+    if pair not in PLANNER_SYSTEM_BASE or pair not in PLANNER_SYSTEM_CRISIS:
+        _fail("prompt must pair description with emoji_id")
+    if "必须从下列英文值中原样选一个" not in PLANNER_SYSTEM_BASE:
+        _fail("direct emotion whitelist must stay")
+    kept = parse_and_gate_intent(
+        '{"draft":"好耶","reply_ok":true,"method":"message",'
+        '"arona_emotion":"4b9ca94171d02f28e7829afa28709c45"}'
+    )
+    if kept is None or kept.arona_emotion != "4b9ca94171d02f28e7829afa28709c45":
+        _fail(f"message keeps emoji id {kept}")
+    illegal = parse_and_gate_intent(
+        '{"draft":"好耶","reply_ok":true,"method":"message","arona_emotion":"SMILE"}'
+    )
+    if illegal is None or illegal.arona_emotion != "SMILE":
+        _fail(f"message must not fold unknown faces {illegal}")
+    blank = parse_and_gate_intent(
+        '{"draft":"好耶","reply_ok":true,"method":"message","arona_emotion":""}'
+    )
+    if blank is None or blank.arona_emotion != "":
+        _fail(f"empty message emotion stays empty {blank}")
+    direct = parse_and_gate_intent(
+        '{"draft":"好","reply_ok":true,"method":"direct","arona_emotion":"SMILE"}'
+    )
+    if direct is None or direct.arona_emotion != "smile":
+        _fail(f"direct still normalizes {direct}")
+    unknown = parse_and_gate_intent(
+        '{"draft":"好","reply_ok":true,"method":"direct","arona_emotion":"not-a-face"}'
+    )
+    if unknown is None or unknown.arona_emotion != "normal":
+        _fail(f"direct unknown becomes normal {unknown}")
+    print("emoji catalog ok")
+
+
+async def test_emoji_send() -> None:
+    sticker = lookup_emoji("4b9ca94171d02f28e7829afa28709c45")
+    if sticker is None:
+        _fail("missing sample sticker")
+    link = NapcatLink("42", gap_sec=0.05)
+    ws = _Ws()
+    await link.bind(ws)  # type: ignore[arg-type]
+    started = time.perf_counter()
+    ok = await link.send_text("欢迎回来，老师！今天想做什么？", emoji=sticker)
+    elapsed = time.perf_counter() - started
+    if not ok or len(ws.frames) != 3:
+        _fail(f"expected two texts then mface, got {ws.frames}")
+    if elapsed < 0.08:
+        _fail(f"mface should wait another gap, elapsed={elapsed:.3f}")
+    if ws.frames[0]["params"]["message"][0]["type"] != "text":
+        _fail("first frame is text")
+    if ws.frames[1]["params"]["message"][0]["type"] != "text":
+        _fail("second frame is text")
+    face = ws.frames[2]["params"]["message"][0]
+    if face["type"] != "mface":
+        _fail(f"third frame {face}")
+    data = face["data"]
+    if data["emoji_package_id"] != 235125 or not isinstance(data["emoji_package_id"], int):
+        _fail(f"package id {data['emoji_package_id']!r}")
+    if data["emoji_id"] != sticker.emoji_id or data["key"] != sticker.key:
+        _fail(f"mface identity {data}")
+    if data["summary"] != "[抽到了]":
+        _fail(f"summary {data['summary']!r}")
+    alone = NapcatLink("42", gap_sec=0)
+    sink = _Ws()
+    await alone.bind(sink)  # type: ignore[arg-type]
+    if await alone.send_text("   ", emoji=sticker) or sink.frames:
+        _fail("no text clause must not send a sticker alone")
+    print("emoji send ok")
+
+
 def test_config() -> None:
     cfg = NapcatConfig(user_qq_id=10001, napcat_ws_path="arona", napcat_token=" tok ")
     if cfg.user_qq_id != "10001" or cfg.napcat_ws_path != "/arona" or cfg.napcat_token != "tok":
@@ -315,8 +446,10 @@ def main() -> None:
     test_split()
     test_inbound()
     test_prompt_method()
+    test_emoji_catalog()
     test_config()
     asyncio.run(test_link_send())
+    asyncio.run(test_emoji_send())
     asyncio.run(test_offline_impulse())
     asyncio.run(test_coalesce())
     print("napcat unit ok")
