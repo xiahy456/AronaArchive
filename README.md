@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <strong>基于<em>《蔚蓝档案》</em>角色<em>「阿洛娜」</em>的自循环桌面AI</strong>
+  <strong>基于<em>《蔚蓝档案》</em>角色<em>「阿洛娜」</em>的自循环 AI</strong>
 </p>
 
 <p align="center">
@@ -30,14 +30,22 @@
 
 **阿洛娜档案** 是一个以游戏《蔚蓝档案》（Blue Archive）中角色「阿洛娜」为原型打造的非对话式桌面AI。在设定上，她是「什亭之匣」的操作系统管理员，性格开朗、热情，乐于帮助老师（用户）解决问题。
 
-本项目把生命循环、内心思考、关系气候、双模型链路、主动冲动、记忆与世界观、语音交互、屏幕操作与 Spine 2D 角色动画接到同一条桌面链路里，让阿洛娜待在屏幕上，而不是停在聊天框里。
+本项目把生命循环、内心思考与笔记、关系气候、双模型链路、主动冲动、记忆与世界观、语音交互、屏幕操作、Spine 2D 角色动画与 QQ 私聊通道接到同一条桌面链路里，让阿洛娜待在屏幕上，而不是停在聊天框里。
 
 <p align="center">
   <img src="assets/running_example_2.png" alt="Running Example" width="600"/>
 </p>
 
 <p align="center">
-  <em>前端运行截图 - 阿洛娜 & 设置界面</em>
+  <em>运行展示 - 阿洛娜客户端 & 设置界面</em>
+</p>
+
+<p align="center">
+  <img src="assets/running_example_3.png" alt="Running Example" width="600"/>
+</p>
+
+<p align="center">
+  <em>运行展示 - QQ</em>
 </p>
 
 ---
@@ -72,15 +80,14 @@ AronaArchive/
 - **双模型链路**：Planner 意图规划 → Renderer 渲染器（AronaLM-Renderer-V2.x）
 - **屏幕视觉与电脑操作**：阿洛娜在需要时会读屏获取信息，并通过电脑操作完成任务
 - **连续听写**：ASR 片段先入缓冲，静音后再提交，系统判定回复时机
-- **记忆与知识分离**：用户长期事实进 SQLite + FTS5 + Chroma；阿洛娜短期记忆进 Json 滑动窗口存储；世界观设定进 Markdown 语料 → 本地 BGE + Chroma RAG；互不混写、按需注入 Prompt
-- **异步记忆抽取**：对话主路径不阻塞；LLM JSON 抽取
+- **记忆与知识分离**：用户长期事实进 SQLite + FTS5 + Chroma；阿洛娜短期记忆进 Json 滑动窗口存储；世界观设定进 Markdown 语料 → 本地 BGE + Chroma RAG；互不混写、按需注入 Prompt。对话主路径不阻塞；LLM JSON 抽取记忆
 
-### 🖥️ 桌面客户端与语音交互
+### 🖥️ 桌面客户端、语音交互与 QQ 私聊通道
 
 - **Spine 2D 动画**：阿洛娜立绘、表情与触摸互动
 - **Qt 界面**：Windows 桌面应用，经 WebSocket 对接后端；系统托盘可显示/隐藏、切换鼠标穿透与截图输入
 - **文字与语音交互**：全局快捷键唤出输入框，支持多行，回车发送；腾讯云实时 ASR 提供语音转文本；GPT-SoVITS 提供语音合成
-- **全局快捷键**（均可在 `config.json` 修改）：
+- **客户端全局快捷键**（均可在 `config.json` 修改）：
 
 | 默认快捷键 | 功能 |
 |------------|------|
@@ -89,6 +96,8 @@ AronaArchive/
 | `Ctrl+Alt+T` | 唤出文字输入 |
 | `Ctrl+Alt+X` | 开 / 关屏幕截图输入 |
 | `Ctrl+Alt+S` | 取消当前电脑操作（computer use） |
+
+- **Napcat 接入 QQ**：阿洛娜通过 Napcat 连入 QQ，作为消息发送的另一条通道，与桌面链路并行、同源
 
 ---
 
@@ -105,8 +114,8 @@ AronaArchive/
    - `planner.api_key` / `memory.extractor.api_key`：把 `YOUR_DEEPSEEK_API_KEY` 换成你的 DeepSeek API Key。**Planner 必填**；不填 Key 或关闭 `planner.enabled` 则回落本地单模型。记忆抽取无 Key 时走正则降级。有截图或电脑操作时 Planner 使用 `planner.vision_model`（默认 `deepseek-flash`）
    - `model.enabled`：是否启用 Arona-Renderer 渲染修正；`true` 启用，`false` 只用 Planner 草稿。仅启用时才需要放置 GGUF。**默认不启用**
    - `knowledge.enabled`：是否启用世界观 RAG。官方压缩包已灌库，**默认启用**；从源码启动时示例配置为 `false`，需先灌库
-   - `computer_use.enabled`：是否允许阿洛娜操作老师的电脑。**默
-   认开启**；客户端与后端需同步打开
+   - `computer_use.enabled`：是否允许阿洛娜操作老师的电脑。**默认开启**；客户端与后端需同步打开
+   - `napcat.user_qq_id`：要走 QQ 私聊时填老师的 QQ 号；空则只挂反向 WebSocket，不收不发
 
 3. 按需把模型放到解压目录内的 `models/`（路径已写在包内 `config.yaml`，详见包内 `models/README.txt` 或 [`models/README.md`](models/README.md)）：
 
@@ -146,6 +155,20 @@ TTS 留在本机时 `tts.host` 保持 `127.0.0.1`。把后端放到公网服务�
 > **注意**：请在腾讯语音识别热词表中上传 [`docs/hot_word.txt`](docs/hot_word.txt)，并将其设置为默认热词。
 
 3. 启动客户端，直接运行客户端可执行文件即可
+
+### QQ 私聊通道
+
+后端内置 Napcat 反向 WebSocket 接入点，与桌面客户端共用 `server.port`，路径默认 `/arona`。
+
+1. 部署 [Napcat](https://github.com/NapNeko/NapCatQQ) 并登录阿洛娜的 QQ 号
+2. 在 Napcat 的反向 WebSocket 配置里填：
+
+   - 地址：`ws://你的后端地址:20456/arona`（公网用 `wss://你的域名/arona`）
+   - 令牌：与后端 `napcat.napcat_token` 相同（放在 `Authorization: Bearer`；未设令牌时留空）
+
+3. 在后端 `config.yaml` 的 `napcat` 段填老师的 QQ 号 `user_qq_id`。空则只挂连接、不收不发私聊
+
+> Napcat 令牌与 `server.token` 分开设置；二者空令牌的放行规则相同。详见 [`backend/README.md`](backend/README.md) 的 `napcat` 段。
 
 ### 公网部署后端
 
@@ -220,16 +243,17 @@ tts/gpt-sovits/
 - **《蔚蓝档案》(ブルーアーカイブ)** - 一切奇迹的起点 (https://bluearchive-cn.com/)
 - **Spine** - 2D 动画引擎 (https://esotericsoftware.com/)
 - **基沃托斯古书馆** - 游戏内资源与 Blueaka 字体 (https://kivo.wiki/)
-- **Qt** - 跨平台 GUI 框架 (https://www.qt.io/)
-- **llama.cpp / llama-cpp-python** - 本地 GGUF 推理 (https://github.com/ggml-org/llama.cpp)
-- **Qwen3-1.7B** - 微调训练基底模型 (https://huggingface.co/Qwen/Qwen3-1.7B)
-- **Unsloth** - QLoRA 高效微调 (https://unsloth.ai/)
 - **ChromaDB** - 向量数据库 (https://www.trychroma.com/products/chromadb)
 - **DeepSeek** - Planner 意图规划、视觉读屏、computer use 多模态操作与记忆抽取 API (https://www.deepseek.com/)
+- **Qt** - 跨平台 GUI 框架 (https://www.qt.io/)
 - **GPT-SoVITS** - 语音合成服务 (https://github.com/RVC-Boss/GPT-SoVITS)
 - **GPT-SoVITS_minimal_inference** - 加速推理后端 (https://github.com/GPT-SoVITS-Devel/GPT-SoVITS_minimal_inference)
 - **腾讯云语音识别** - 在线语音识别 (https://cloud.tencent.com/product/asr)
 - **bge-small-zh-v1.5** - 文本嵌入模型 (https://huggingface.co/BAAI/bge-small-zh-v1.5)
+- **Napcat** - QQ 协议框架，提供反向 WebSocket 接入 (https://github.com/NapNeko/NapCatQQ)
+- **llama.cpp / llama-cpp-python** - 本地 GGUF 推理 (https://github.com/ggml-org/llama.cpp)
+- **Qwen3-1.7B** - 微调训练基底模型 (https://huggingface.co/Qwen/Qwen3-1.7B)
+- **Unsloth** - QLoRA 高效微调 (https://unsloth.ai/)
 
 <p align="center">
   <strong>感谢所有协助开发的贡献者们，与所有「蔚蓝档案」社区内容的创作者们</strong>
