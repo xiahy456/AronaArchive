@@ -555,8 +555,8 @@ def test_sources_for_each_trigger() -> None:
     spontaneous = _one("spontaneous")
     if spontaneous.cancelled or "【触发】" not in spontaneous.text:
         _fail(f"spontaneous should render, got {spontaneous}")
-    if "阿洛娜今天因思考开过2次口" not in spontaneous.text:
-        _fail(f"the speak count should name Arona, got {spontaneous.text}")
+    if "因思考开过" in spontaneous.text:
+        _fail(f"the speak count should stay out of the prompt, got {spontaneous.text}")
     if "自发间隔到了" not in spontaneous.text or "日记6" not in spontaneous.text:
         _fail(f"spontaneous should keep the journal tail, got {spontaneous.text}")
     if "日记0" in spontaneous.text:

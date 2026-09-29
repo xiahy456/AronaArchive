@@ -188,7 +188,7 @@ def _sections(
     sections["阿洛娜此刻"] = _here(kind, inner, trigger, ctx, seen)
     sections["上一次想法"] = _previous(ledger, seen)
     sections["她的笔记"] = _notes(kind, ctx, seen)
-    sections["今天"] = _today(kind, now, ledger, ctx, seen)
+    sections["今天"] = _today(kind, ctx, seen)
     sections["最近的话"] = _talk(kind, ctx, seen)
     sections["老师的档案"] = _archive(kind, trigger, now, ctx, seen)
     sections["相关常识"] = _knowledge(kind, focus, ctx, seen)
@@ -273,8 +273,6 @@ def _note_body(row: object) -> tuple[str, datetime | None]:
 
 def _today(
     kind: str,
-    now: datetime,
-    ledger: ThoughtLedger,
     ctx: SourceContext,
     seen: dict[str, bool],
 ) -> list[str]:
@@ -283,8 +281,6 @@ def _today(
         rows.append(_keep(f"距老师上次说话{_ago(ctx.seconds_since_teacher)}", seen))
     if ctx.seconds_since_arona is not None:
         rows.append(_keep(f"距她上次开口{_ago(ctx.seconds_since_arona)}", seen))
-    count = ledger.speak_count if ledger.speak_day == now.date().isoformat() else 0
-    rows.append(_keep(f"阿洛娜今天因思考开过{max(0, int(count))}次口", seen))
     if kind == "consolidate":
         journal = list(ctx.journal)
     elif kind in {"spontaneous", "arrived"}:
