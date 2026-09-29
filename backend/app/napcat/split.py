@@ -16,22 +16,40 @@
 
 from __future__ import annotations
 
+import unicodedata
+
 _END = frozenset("。.；;？?！!")
+_COMMA = frozenset("，,")
+_MIN_COMMA_WORDS = 3
 
 
 def split_qq_clauses(text: str) -> list[str]:
-    """Keep ending punctuation on the clause. `……` and `...` stay inside it."""
+    """Split on sentence marks, and on a comma after at least three words.
+
+    Ending `。` `.` `，` `,` are removed. `……`, `...`, `..`, `？`, and `！` stay.
+    """
     raw = text or ""
     if not raw.strip():
         return []
     clauses: list[str] = []
     buf: list[str] = []
+    words = 0
 
     def flush() -> None:
-        clause = "".join(buf).strip()
+        nonlocal words
+        clause = _strip_trailing_stop("".join(buf).strip())
         buf.clear()
+        words = 0
         if clause:
             clauses.append(clause)
+
+    def append_char(ch: str) -> None:
+        nonlocal words
+        buf.append(ch)
+        if _is_word(ch):
+            words += 1
+        elif _is_punct(ch):
+            words = 0
 
     i = 0
     n = len(raw)
@@ -41,6 +59,7 @@ def split_qq_clauses(text: str) -> list[str]:
             while i < n and raw[i] == "…":
                 buf.append(raw[i])
                 i += 1
+            words = 0
             continue
         if ch == ".":
             j = i + 1
@@ -49,10 +68,16 @@ def split_qq_clauses(text: str) -> list[str]:
             if j - i >= 3:
                 buf.extend(raw[i:j])
                 i = j
+                words = 0
                 continue
-        if ch in _END:
+        if ch in _COMMA and words < _MIN_COMMA_WORDS:
+            append_char(ch)
+            i += 1
+            continue
+        if ch in _END or ch in _COMMA:
             buf.append(ch)
             i += 1
+            words = 0
             while i < n and _continues_delimiter(raw, i):
                 if raw[i] == ".":
                     j = i + 1
@@ -65,7 +90,7 @@ def split_qq_clauses(text: str) -> list[str]:
                 i += 1
             flush()
             continue
-        buf.append(ch)
+        append_char(ch)
         i += 1
     flush()
     return clauses
@@ -80,4 +105,24 @@ def _continues_delimiter(raw: str, index: int) -> bool:
         while j < len(raw) and raw[j] == ".":
             j += 1
         return (j - index) < 3
-    return ch in _END
+    return ch in _END or ch in _COMMA
+
+
+def _is_punct(ch: str) -> bool:
+    return unicodedata.category(ch).startswith("P")
+
+
+def _is_word(ch: str) -> bool:
+    return not ch.isspace() and not _is_punct(ch)
+
+
+def _strip_trailing_stop(clause: str) -> str:
+    """Drop a trailing period or comma. Ellipsis and a two-dot run stay."""
+    while clause:
+        if clause.endswith("…") or clause.endswith(".."):
+            return clause
+        if clause[-1] in "。.，,":
+            clause = clause[:-1].rstrip()
+            continue
+        return clause
+    return clause

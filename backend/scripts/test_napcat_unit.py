@@ -37,15 +37,25 @@ def _fail(msg: str) -> None:
 
 def test_split() -> None:
     cases = [
-        ("我一直在这里等着哦。", ["我一直在这里等着哦。"]),
-        ("诶……原来是这样吗。", ["诶……原来是这样吗。"]),
-        ("欢迎回来，老师！今天想做什么？", ["欢迎回来，老师！", "今天想做什么？"]),
+        ("我一直在这里等着哦。", ["我一直在这里等着哦"]),
+        ("诶……原来是这样吗。", ["诶……原来是这样吗"]),
+        ("欢迎回来，老师！今天想做什么？", ["欢迎回来", "老师！", "今天想做什么？"]),
         (
             "诶？！怎么会这样！那就麻烦了呢……",
             ["诶？！", "怎么会这样！", "那就麻烦了呢……"],
         ),
-        ("等等...我在。", ["等等...我在。"]),
+        ("等等...我在。", ["等等...我在"]),
         ("a..b", ["a..", "b"]),
+        ("不过，其实感觉还好啦", ["不过，其实感觉还好啦"]),
+        ("听到老师这么说，我的脸好像有点热热的呢", ["听到老师这么说", "我的脸好像有点热热的呢"]),
+        (
+            "诶……老师怎么突然回这么一句啦！我、我刚刚那是为了测试才说的呀……可是，听到老师这么说，我的脸好像有点热热的呢。",
+            [
+                "诶……老师怎么突然回这么一句啦！",
+                "我、我刚刚那是为了测试才说的呀……可是，听到老师这么说",
+                "我的脸好像有点热热的呢",
+            ],
+        ),
     ]
     for text, expected in cases:
         got = split_qq_clauses(text)
@@ -175,10 +185,10 @@ async def test_link_send() -> None:
     link = NapcatLink("42", gap_sec=0)
     ws = _Ws()
     await link.bind(ws)  # type: ignore[arg-type]
-    ok = await link.send_text("欢迎回来，老师！今天想做什么？")
+    ok = await link.send_text("欢迎回来老师！今天想做什么？")
     if not ok or len(ws.frames) != 2:
         _fail(f"expected two frames, got {ws.frames}")
-    if ws.frames[0]["params"]["message"][0]["data"]["text"] != "欢迎回来，老师！":
+    if ws.frames[0]["params"]["message"][0]["data"]["text"] != "欢迎回来老师！":
         _fail("first clause")
     if ws.frames[1]["params"]["message"][0]["data"]["text"] != "今天想做什么？":
         _fail("second clause")
@@ -404,7 +414,7 @@ async def test_emoji_send() -> None:
     ws = _Ws()
     await link.bind(ws)  # type: ignore[arg-type]
     started = time.perf_counter()
-    ok = await link.send_text("欢迎回来，老师！今天想做什么？", emoji=sticker)
+    ok = await link.send_text("欢迎回来老师！今天想做什么？", emoji=sticker)
     elapsed = time.perf_counter() - started
     if not ok or len(ws.frames) != 3:
         _fail(f"expected two texts then mface, got {ws.frames}")
