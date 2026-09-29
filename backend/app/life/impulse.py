@@ -252,15 +252,20 @@ def without_stale_care(
     now: datetime,
     windows: dict[str, tuple[str, str]],
 ) -> InnerState:
-    """Drop meal/sleep rumination, and a matching pending impulse, after the window or the day."""
+    """Drop meal/sleep rumination, and an unsent care reminder, after the window or the day.
+
+    A line she already decided to say (from_thought) stays until the life loop speaks it.
+    """
     kept = [
         item
         for item in state.rumination
         if care_kind_live(_care_kind_of(item.id), item.created_at, now, windows)
     ]
     impulse = state.pending_impulse
-    drop_pending = impulse is not None and not care_kind_live(
-        impulse.kind, impulse.created_at, now, windows
+    drop_pending = (
+        impulse is not None
+        and not impulse.from_thought
+        and not care_kind_live(impulse.kind, impulse.created_at, now, windows)
     )
     if len(kept) == len(state.rumination) and not drop_pending:
         return state

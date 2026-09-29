@@ -731,6 +731,84 @@ def test_stale_care_rumination_expires() -> None:
     print("  ok")
 
 
+def test_thought_speech_survives_closed_care_window() -> None:
+    print("== a thought she decided to say survives a closed care window ==")
+    from app.config import CareConfig
+    from app.life.impulse import expire_stale_care, flush_impulse, without_stale_care
+
+    windows = {
+        "breakfast": ("06:30", "08:00"),
+        "lunch": ("11:30", "13:00"),
+        "dinner": ("17:30", "19:00"),
+        "sleep": ("23:00", "23:20"),
+    }
+    at = datetime(2026, 9, 29, 19, 6, 0)
+    created = at - timedelta(seconds=SIMMER_SEC)
+    worry = Rumination(id="imp-dinner", content="老师晚饭窗口到了", created_at=created)
+    system = without_stale_care(
+        InnerState(
+            rumination=[worry],
+            pending_impulse=Impulse(
+                kind="dinner",
+                created_at=created,
+                hint="老师晚饭窗口到了",
+                allow_speak=True,
+            ),
+        ),
+        at,
+        windows,
+    )
+    if system.pending_impulse is not None:
+        _fail("a system dinner impulse should expire after the window")
+    if any(item.id == "imp-dinner" for item in system.rumination):
+        _fail("dinner rumination should expire with a system reminder")
+
+    spoken = Impulse(
+        kind="dinner",
+        created_at=created,
+        hint="问一句老师晚饭吃得怎么样",
+        allow_speak=True,
+        from_thought=True,
+    )
+
+    async def _send(_payload: dict) -> None:
+        return None
+
+    async def _sent(**_kw) -> str:
+        return "sent"
+
+    class _Hub:
+        def idle_sessions(self):
+            return [("s1", _send)]
+
+        def set_busy(self, _sid, _busy) -> None:
+            return None
+
+    with tempfile.TemporaryDirectory() as tmp:
+        engine = LifeEngine.from_path(Path(tmp) / "life.json", _settings())
+        engine.state = InnerState(rumination=[worry], pending_impulse=spoken)
+        engine.store.save(engine.state)
+        app = SimpleNamespace(
+            life=engine,
+            hub=_Hub(),
+            orchestrator=SimpleNamespace(handle_initiate=_sent, relationship=None),
+            config=SimpleNamespace(
+                proactive=SimpleNamespace(care=CareConfig(), relationship=None)
+            ),
+            journal=None,
+            scheduler=None,
+            napcat=None,
+        )
+        expire_stale_care(app, at)
+        if engine.state.pending_impulse is None or not engine.state.pending_impulse.from_thought:
+            _fail("a thought she decided to say should stay after the window")
+        if any(item.id == "imp-dinner" for item in engine.state.rumination):
+            _fail("dinner rumination should still expire")
+        if not asyncio.run(flush_impulse(app, now=at)):
+            _fail("the kept dinner thought should still speak")
+    print("  ok")
+
+
 def test_glance_gate_and_hands() -> None:
     print("== glance gate and using_computer stay through rest ==")
     from app.life.glance import glance_allowed
@@ -834,6 +912,7 @@ def main() -> None:
     test_snapshot_before_apply_and_interrupt_keeps_thinking()
     test_journal_skips_crisis_and_teacher_text()
     test_stale_care_rumination_expires()
+    test_thought_speech_survives_closed_care_window()
     test_glance_gate_and_hands()
     print("all life unit tests passed")
 
