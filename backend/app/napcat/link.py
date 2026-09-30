@@ -22,6 +22,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import uuid
+from typing import Any
 
 from fastapi import WebSocket
 
@@ -55,6 +57,7 @@ class NapcatLink:
         self._gap_sec = max(0.0, float(gap_sec))
         self._ws: WebSocket | None = None
         self._send_lock = asyncio.Lock()
+        self._pending: dict[str, asyncio.Future[dict[str, Any]]] = {}
 
     @property
     def connected(self) -> bool:
@@ -72,6 +75,59 @@ class NapcatLink:
     def unbind(self, websocket: WebSocket) -> None:
         if self._ws is websocket:
             self._ws = None
+        self._fail_pending()
+
+    def complete_echo(self, frame: dict[str, Any]) -> None:
+        echo = str(frame.get("echo") or "")
+        fut = self._pending.get(echo)
+        if fut is None or fut.done():
+            return
+        fut.set_result(frame)
+
+    def _fail_pending(self) -> None:
+        pending = list(self._pending.values())
+        self._pending.clear()
+        for fut in pending:
+            if not fut.done():
+                fut.set_result({})
+
+    async def get_file(
+        self,
+        file_id: str = "",
+        *,
+        file: str = "",
+        timeout: float = 20.0,
+    ) -> dict[str, Any] | None:
+        """Ask Napcat for one file and wait for the matching echo."""
+        params: dict[str, str] = {}
+        if str(file_id or "").strip():
+            params["file_id"] = str(file_id).strip()
+        elif str(file or "").strip():
+            params["file"] = str(file).strip()
+        else:
+            return None
+        ws = self._ws
+        if ws is None:
+            return None
+        echo = str(uuid.uuid4())
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future[dict[str, Any]] = loop.create_future()
+        self._pending[echo] = fut
+        frame = {"action": "get_file", "params": params, "echo": echo}
+        async with self._send_lock:
+            if not await self._send_frame(ws, frame):
+                self._pending.pop(echo, None)
+                return None
+        try:
+            result = await asyncio.wait_for(fut, timeout)
+        except asyncio.TimeoutError:
+            logger.info("napcat get_file timeout")
+            return None
+        finally:
+            self._pending.pop(echo, None)
+        if not result:
+            return None
+        return result
 
     async def send_text(self, text: str, *, emoji: object | None = None) -> bool:
         """Send every clause, then one sticker. False if text never finishes."""

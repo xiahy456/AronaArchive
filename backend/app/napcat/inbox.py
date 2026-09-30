@@ -21,11 +21,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
 from ..channel import METHOD_MESSAGE, QQ_SESSION_ID
+from ..image_input import image_payload_from_napcat_file
 from ..proactive.goal import wants_goal_mute
+from .protocol import QqFileImage, QqUrlImage
 
 logger = logging.getLogger(__name__)
 
@@ -34,26 +37,34 @@ _INTERRUPT_KINDS = frozenset({"interact", "computer_use"})
 _BLOCK_KINDS = frozenset({"chat", "welcome", "qq"})
 
 
+@dataclass(frozen=True)
+class _QqPiece:
+    text: str
+    images: tuple[Any, ...]
+
+
 class QqInbox:
     def __init__(self, state: Any, *, coalesce_sec: float = COALESCE_SEC) -> None:
         self.state = state
         self._coalesce_sec = max(0.0, float(coalesce_sec))
-        self._parts: list[str] = []
-        self._held: list[str] = []
+        self._parts: list[_QqPiece] = []
+        self._held: list[_QqPiece] = []
         self._timer: asyncio.Task[None] | None = None
         self._running = False
         self._lock = asyncio.Lock()
 
-    async def push(self, text: str) -> None:
+    async def push(self, text: str, images: Any = None) -> None:
         cleaned = (text or "").strip()
-        if not cleaned:
+        refs = tuple(images or ())
+        if not cleaned and not refs:
             return
+        piece = _QqPiece(cleaned, refs)
         await self._interrupt_hands()
         async with self._lock:
             if self._running or self._blocked():
-                self._held.append(cleaned)
+                self._held.append(piece)
                 return
-            self._parts.append(cleaned)
+            self._parts.append(piece)
             self._restart_timer_locked()
 
     def on_generation_idle(self) -> None:
@@ -105,13 +116,17 @@ class QqInbox:
         async with self._lock:
             if self._running or not self._parts:
                 return
-            text = "\n".join(part for part in self._parts if part.strip())
+            text = "\n".join(part.text for part in self._parts if part.text.strip())
+            images = [image for part in self._parts for image in part.images]
             self._parts.clear()
-            if not text:
+            if not text and not images:
                 return
             self._running = True
         try:
-            await self._generate(text)
+            resolved = await self._resolve_images(images)
+            if not text and not resolved:
+                return
+            await self._generate(text, resolved)
         finally:
             async with self._lock:
                 self._running = False
@@ -120,7 +135,28 @@ class QqInbox:
                     self._held.clear()
                     self._restart_timer_locked()
 
-    async def _generate(self, text: str) -> None:
+    async def _resolve_images(self, images: list[Any]) -> list[Any]:
+        resolved: list[Any] = []
+        link = getattr(self.state, "napcat", None)
+        for image in images:
+            if isinstance(image, QqUrlImage):
+                if image.url:
+                    resolved.append(image.url)
+                continue
+            if not isinstance(image, QqFileImage):
+                continue
+            if link is None or not getattr(link, "connected", False):
+                logger.info("qq file image dropped reason=napcat_down")
+                continue
+            frame = await link.get_file(image.file_id, file=image.file)
+            payload = image_payload_from_napcat_file(frame)
+            if payload is None:
+                logger.info("qq file image dropped file_id=%s", image.file_id or image.file)
+                continue
+            resolved.append(payload)
+        return resolved
+
+    async def _generate(self, text: str, images: list[Any] | None = None) -> None:
         state = self.state
         hub = getattr(state, "hub", None)
         if hub is not None:
@@ -147,6 +183,7 @@ class QqInbox:
                 send=self._send_direct,
                 inbound_method=METHOD_MESSAGE,
                 client_online=client_online,
+                qq_images=list(images or []),
             )
             from ..life.thought.triggers import note_finished_turn
 

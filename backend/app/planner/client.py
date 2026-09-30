@@ -39,6 +39,17 @@ from .schema import IntentCard, parse_and_gate_intent
 logger = logging.getLogger(__name__)
 
 
+def qq_image_content(user_payload: str, images: list[str | ImagePayload]) -> list[dict[str, Any]]:
+    """One text part, then each QQ image as an image_url (https or data URL)."""
+    parts: list[dict[str, Any]] = [{"type": "text", "text": user_payload}]
+    for image in images:
+        url = image if isinstance(image, str) else image.data_url()
+        if not str(url or "").strip():
+            continue
+        parts.append({"type": "image_url", "image_url": {"url": url}})
+    return parts
+
+
 class PlannerClient:
     def __init__(
         self, config: PlannerConfig, *, renderer_enabled: bool = True
@@ -64,6 +75,7 @@ class PlannerClient:
         knowledge: list[str],
         climate_block: str = "",
         image: ImagePayload | None = None,
+        qq_images: list[str | ImagePayload] | None = None,
         crisis: bool = False,
         memory_block: str = "",
         life_block: str = "",
@@ -76,23 +88,28 @@ class PlannerClient:
             return None
 
         url = self.config.base_url.rstrip("/") + "/chat/completions"
-        has_image = image is not None
+        photos = [item for item in (qq_images or []) if item]
+        has_screenshot = image is not None and not photos
         user_payload = build_planner_user_message(
             user_text=user_text,
             history=history,
             memories=memories,
             knowledge=knowledge,
             climate_block=climate_block,
-            has_screenshot=has_image,
+            has_screenshot=has_screenshot,
+            has_qq_images=bool(photos),
             memory_block=memory_block,
             life_block=life_block,
             day_block=day_block,
             teacher_method=teacher_method,
             channels_block=channels_block,
         )
-        if image is not None:
+        if photos:
             model = (self.config.vision_model or "").strip() or self.config.model
-            user_content: str | list[dict[str, Any]] = [
+            user_content: str | list[dict[str, Any]] = qq_image_content(user_payload, photos)
+        elif image is not None:
+            model = (self.config.vision_model or "").strip() or self.config.model
+            user_content = [
                 {"type": "text", "text": user_payload},
                 {
                     "type": "image_url",

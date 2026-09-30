@@ -26,7 +26,7 @@ from typing import Any
 from fastapi import WebSocket, WebSocketDisconnect
 
 from ..ws_auth import reject_unauthorized
-from .protocol import private_text_from_event
+from .protocol import private_inbound_from_event
 
 logger = logging.getLogger(__name__)
 
@@ -47,11 +47,22 @@ async def napcat_endpoint(websocket: WebSocket, state: Any) -> None:
             except json.JSONDecodeError:
                 logger.info("napcat ignored non-json")
                 continue
-            text = private_text_from_event(data, link.user_qq_id)
-            if not text:
+            if (
+                isinstance(data, dict)
+                and data.get("echo")
+                and data.get("post_type") != "message"
+            ):
+                link.complete_echo(data)
                 continue
-            logger.info("napcat private text chars=%d", len(text))
-            await inbox.push(text)
+            inbound = private_inbound_from_event(data, link.user_qq_id)
+            if inbound is None:
+                continue
+            logger.info(
+                "napcat private text chars=%d images=%d",
+                len(inbound.text),
+                len(inbound.images),
+            )
+            await inbox.push(inbound.text, inbound.images)
     except WebSocketDisconnect:
         logger.info("napcat disconnected")
     except Exception:

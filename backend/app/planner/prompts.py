@@ -240,6 +240,7 @@ def build_planner_user_message(
     climate_block: str = "",
     now: datetime | None = None,
     has_screenshot: bool = False,
+    has_qq_images: bool = False,
     memory_block: str = "",
     life_block: str = "",
     day_block: str = "",
@@ -309,6 +310,8 @@ def build_planner_user_message(
             "本轮附带老师电脑屏幕截图。仅在回答需要截图上的信息时，才取用截图内容；"
             "当老师的本轮发言与截图内容无明显关联时，不要主动提起截图内容。\n"
         )
+    if has_qq_images:
+        closing += "本轮附带老师发来的图片，请结合图片和文字一起理解。\n"
     closing += "请输出唯一 JSON 对象。"
     teacher_line = user_text.strip()
     if teacher_method is not None:

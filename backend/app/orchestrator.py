@@ -322,6 +322,7 @@ class Orchestrator:
         abort_check: AbortCheck | None = None,
         on_committed: Callable[[], None] | None = None,
         image: ImagePayload | None = None,
+        qq_images: list[str | ImagePayload] | None = None,
         interrupt_ctx: InnerState | None = None,
         on_life_action: LifeActionFn | None = None,
         inbound_method: str = "direct",
@@ -336,7 +337,8 @@ class Orchestrator:
 
         begin_trace(started_at=started_at, request_json=request_json)
         user_text = (content or "").strip()
-        if not user_text:
+        photos = [item for item in (qq_images or []) if item]
+        if not user_text and not photos:
             logger.info("chat empty content session=%s", session_id)
             await send(
                 msg_chat_response(
@@ -357,6 +359,7 @@ class Orchestrator:
                 abort_check=abort_check,
                 on_committed=on_committed,
                 image=image,
+                qq_images=photos,
                 interrupt_ctx=interrupt_ctx,
                 on_life_action=on_life_action,
                 inbound_method=inbound_method,
@@ -411,7 +414,13 @@ class Orchestrator:
             use_memory,
             user_text,
         )
-        if image is not None:
+        if photos:
+            logger.info(
+                "planner input 包含文本与QQ图片 session=%s count=%d",
+                session_id,
+                len(photos),
+            )
+        elif image is not None:
             logger.info(
                 "planner input 包含文本与图片 session=%s bytes=%d mime=%s",
                 session_id,
@@ -538,6 +547,7 @@ class Orchestrator:
                 knowledge=knowledge_chunks,
                 climate_block=self._climate_block(decision),
                 image=image,
+                qq_images=photos,
                 memory_block=memory_block,
                 life_block=self._life_block(interrupt_ctx),
                 day_block=self._day_block(),
@@ -571,8 +581,11 @@ class Orchestrator:
                         memories=memories,
                         memory_block=memory_block,
                         image=image,
+                        qq_images=photos,
                         interrupt_ctx=interrupt_ctx,
                         on_life_action=on_life_action,
+                        inbound_method=inbound_method,
+                        client_online=client_online,
                     )
                 emotion = intent.arona_emotion
                 self._merge_decision_into_intent(intent, decision)
@@ -701,6 +714,7 @@ class Orchestrator:
         memories: list[str] | None = None,
         memory_block: str = "",
         image: ImagePayload | None = None,
+        qq_images: list[str | ImagePayload] | None = None,
         interrupt_ctx: InnerState | None = None,
         on_life_action: LifeActionFn | None = None,
         inbound_method: str = "direct",
@@ -718,6 +732,7 @@ class Orchestrator:
                 knowledge=[],
                 climate_block=crisis_planner_climate_block(),
                 image=image,
+                qq_images=qq_images,
                 crisis=True,
                 memory_block=memory_block,
                 life_block=self._life_block(interrupt_ctx),

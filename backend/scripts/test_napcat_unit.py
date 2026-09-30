@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import sys
 import tempfile
@@ -27,6 +28,9 @@ from app.planner.prompts import (  # noqa: E402
     PLANNER_SYSTEM_CRISIS,
     build_planner_user_message,
 )
+from app.image_input import image_payload_from_napcat_file  # noqa: E402
+from app.napcat.protocol import QqFileImage, QqUrlImage, private_inbound_from_event  # noqa: E402
+from app.planner.client import qq_image_content  # noqa: E402
 from app.planner.schema import parse_and_gate_intent  # noqa: E402
 
 
@@ -442,6 +446,147 @@ async def test_emoji_send() -> None:
     print("emoji send ok")
 
 
+def test_qq_images() -> None:
+    def event(message: list[dict]) -> dict:
+        return {
+            "post_type": "message",
+            "message_type": "private",
+            "user_id": 10001,
+            "message": message,
+        }
+
+    mall = event(
+        [
+            {
+                "type": "image",
+                "data": {
+                    "emoji_id": "abc",
+                    "emoji_package_id": "1",
+                    "summary": "[期待]",
+                    "url": "https://example.test/a.gif",
+                },
+            }
+        ]
+    )
+    if private_inbound_from_event(mall, "10001") is not None:
+        _fail("mall sticker must not enqueue")
+    favorite = event(
+        [
+            {
+                "type": "image",
+                "data": {
+                    "sub_type": "1",
+                    "summary": "[动画表情]",
+                    "url": "https://example.test/b.jpg",
+                    "file": "b.jpg",
+                },
+            }
+        ]
+    )
+    if private_inbound_from_event(favorite, "10001") is not None:
+        _fail("favorite sticker must not enqueue")
+    photo = event(
+        [
+            {"type": "text", "data": {"text": "看这个"}},
+            {
+                "type": "image",
+                "data": {
+                    "file": "a.png",
+                    "sub_type": 0,
+                    "url": "https://multimedia.nt.qq.com.cn/download?x=1",
+                },
+            },
+        ]
+    )
+    inbound = private_inbound_from_event(photo, "10001")
+    if inbound is None or inbound.text != "看这个" or len(inbound.images) != 1:
+        _fail(f"photo inbound {inbound}")
+    if not isinstance(inbound.images[0], QqUrlImage):
+        _fail("photo should stay a url")
+    if inbound.images[0].url != "https://multimedia.nt.qq.com.cn/download?x=1":
+        _fail(f"photo url {inbound.images[0]}")
+    bare = event(
+        [{"type": "image", "data": {"file": "c.png", "url": "https://example.test/c.png"}}]
+    )
+    bare_in = private_inbound_from_event(bare, "10001")
+    if bare_in is None or bare_in.text or not isinstance(bare_in.images[0], QqUrlImage):
+        _fail("missing sub_type with empty summary is a photo")
+    filed = event(
+        [{"type": "file", "data": {"file": "shot.png", "file_id": "fid-1", "file_size": "12"}}]
+    )
+    filed_in = private_inbound_from_event(filed, "10001")
+    if (
+        filed_in is None
+        or not isinstance(filed_in.images[0], QqFileImage)
+        or filed_in.images[0].file_id != "fid-1"
+    ):
+        _fail(f"file image {filed_in}")
+    pdf = event([{"type": "file", "data": {"file": "notes.pdf", "file_id": "fid-2"}}])
+    if private_inbound_from_event(pdf, "10001") is not None:
+        _fail("non-image file must not enqueue")
+    qq_prompt = build_planner_user_message(
+        user_text="看这个",
+        history=[],
+        memories=[],
+        knowledge=[],
+        has_qq_images=True,
+    )
+    if "本轮附带老师发来的图片，请结合图片和文字一起理解。" not in qq_prompt:
+        _fail("qq image prompt")
+    if "仅在回答需要截图上的信息时" in qq_prompt:
+        _fail("qq images must not use the screenshot sentence")
+    shot = build_planner_user_message(
+        user_text="看屏幕",
+        history=[],
+        memories=[],
+        knowledge=[],
+        has_screenshot=True,
+    )
+    if "仅在回答需要截图上的信息时" not in shot:
+        _fail("screenshot prompt")
+    if "本轮附带老师发来的图片" in shot:
+        _fail("screenshot must not use the qq sentence")
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 8
+    encoded = base64.b64encode(png).decode("ascii")
+    payload = image_payload_from_napcat_file({"data": {"base64": encoded, "file_name": "a.png"}})
+    if payload is None or not payload.data_url().startswith("data:image/png;base64,"):
+        _fail("get_file base64 data url")
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "local.png"
+        path.write_bytes(png)
+        local = image_payload_from_napcat_file({"data": {"file": str(path)}})
+    if local is None or local.mime != "image/png":
+        _fail("get_file local path")
+    content = qq_image_content("文字", ["https://example.test/a.png", payload])
+    if content[0]["type"] != "text" or content[1]["image_url"]["url"] != "https://example.test/a.png":
+        _fail("url image stays external")
+    if not str(content[2]["image_url"]["url"]).startswith("data:image/png;base64,"):
+        _fail("file image is inline")
+    print("qq images ok")
+
+
+async def test_get_file_roundtrip() -> None:
+    link = NapcatLink("42", gap_sec=0)
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 8
+    encoded = base64.b64encode(png).decode("ascii")
+
+    class _Reply:
+        async def send_text(self, raw: str) -> None:
+            frame = json.loads(raw)
+            if frame.get("action") != "get_file" or frame["params"].get("file_id") != "fid-1":
+                _fail(f"get_file frame {frame}")
+            link.complete_echo(
+                {"status": "ok", "echo": frame["echo"], "data": {"base64": encoded}}
+            )
+
+    await link.bind(_Reply())  # type: ignore[arg-type]
+    frame = await link.get_file("fid-1")
+    payload = image_payload_from_napcat_file(frame)
+    if payload is None or payload.mime != "image/png":
+        _fail(f"get_file roundtrip {frame}")
+    print("get_file ok")
+
+
 def test_config() -> None:
     cfg = NapcatConfig(user_qq_id=10001, napcat_ws_path="arona", napcat_token=" tok ")
     if cfg.user_qq_id != "10001" or cfg.napcat_ws_path != "/arona" or cfg.napcat_token != "tok":
@@ -457,9 +602,11 @@ def main() -> None:
     test_inbound()
     test_prompt_method()
     test_emoji_catalog()
+    test_qq_images()
     test_config()
     asyncio.run(test_link_send())
     asyncio.run(test_emoji_send())
+    asyncio.run(test_get_file_roundtrip())
     asyncio.run(test_offline_impulse())
     asyncio.run(test_coalesce())
     print("napcat unit ok")

@@ -67,6 +67,65 @@ def _infer_mime(data: bytes) -> str | None:
     return None
 
 
+def _infer_qq_mime(data: bytes) -> str | None:
+    if data.startswith(_JPEG_MAGIC):
+        return "image/jpeg"
+    if data.startswith(_PNG_MAGIC):
+        return "image/png"
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
+def image_payload_from_bytes(data: bytes) -> ImagePayload | None:
+    """Bytes of a QQ file image. Screenshots keep the stricter jpeg/png parser."""
+    if not data:
+        return None
+    if len(data) > MAX_IMAGE_BYTES:
+        logger.info("image dropped reason=too_large bytes=%d", len(data))
+        return None
+    mime = _infer_qq_mime(data)
+    if mime is None:
+        logger.info("image dropped reason=not_image bytes=%d", len(data))
+        return None
+    return ImagePayload(mime=mime, data=data)
+
+
+def image_payload_from_base64(raw: str) -> ImagePayload | None:
+    data = _decode_base64(raw)
+    if data is None:
+        return None
+    return image_payload_from_bytes(data)
+
+
+def image_payload_from_napcat_file(frame: object) -> ImagePayload | None:
+    """Prefer get_file base64. Otherwise read a local path in data.file."""
+    if not isinstance(frame, dict):
+        return None
+    data = frame.get("data")
+    if not isinstance(data, dict):
+        return None
+    encoded = data.get("base64")
+    if isinstance(encoded, str) and encoded.strip():
+        payload = image_payload_from_base64(encoded)
+        if payload is not None:
+            return payload
+    path = str(data.get("file") or "").strip()
+    if not path:
+        return None
+    file_path = Path(path)
+    if not file_path.is_file():
+        return None
+    try:
+        blob = file_path.read_bytes()
+    except OSError:
+        logger.info("image dropped reason=unreadable path=%s", path)
+        return None
+    return image_payload_from_bytes(blob)
+
+
 def _decode_base64(raw: str) -> bytes | None:
     text = (raw or "").strip()
     if not text:
