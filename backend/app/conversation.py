@@ -30,7 +30,7 @@ from .life.thought.schema import is_thought_history_marker
 
 logger = logging.getLogger(__name__)
 
-MAX_DIALOGUE_ENTRIES = 256
+MAX_DIALOGUE_ENTRIES = 2048
 _DT_FMT = "%Y-%m-%dT%H:%M:%S"
 _ROLES = frozenset({"user", "assistant", "event"})
 _KINDS = frozenset({"speech", "touch", "arrive", "leave"})

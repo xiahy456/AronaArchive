@@ -97,7 +97,7 @@ class PromptConfig(BaseModel):
 class ConversationConfig(BaseModel):
     max_history_turns: int = 6
     persist_path: str = "data/memory/dialogue.json"
-    max_entries: int = 256
+    max_entries: int = 2048
 
 
 class KnowledgeConfig(BaseModel):

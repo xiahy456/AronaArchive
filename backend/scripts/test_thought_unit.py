@@ -2681,16 +2681,15 @@ def test_situation_facts_do_not_enqueue() -> None:
             last_user_act="depart",
             climate="cling_risk",
             goals=goals,
-            quiet_sec=1000,
-            speak_count=5,
+                quiet_sec=1000,
         )
         blob = "\n".join(fact.text for fact in facts)
         if "现在处于晚饭窗口，今天还没提过晚饭" not in blob:
             _fail(f"an open dinner window should stay visible, got {blob}")
         if "先别提" not in blob or "交报告" not in blob:
             _fail(f"a muted goal should remain and say so, got {blob}")
-        if "老师在屏幕前已经安静很久" not in blob or "开口5次" not in blob:
-            _fail(f"a long quiet should stay visible with the speak count, got {blob}")
+        if "老师在屏幕前已经安静很久" not in blob or "因为自己的想法开口" in blob:
+            _fail(f"a long quiet should stay visible without a speak count, got {blob}")
         if "老师刚刚离开屏幕前" in blob:
             _fail(f"a goodbye past the quiet window should not stay fresh, got {blob}")
         fresh = "\n".join(
@@ -2701,7 +2700,6 @@ def test_situation_facts_do_not_enqueue() -> None:
                 climate="cling_risk",
                 goals=goals,
                 quiet_sec=30,
-                speak_count=5,
             )
         )
         if "老师刚刚离开屏幕前" not in fresh:
@@ -2717,7 +2715,6 @@ def test_situation_facts_do_not_enqueue() -> None:
                 climate="cling_risk",
                 goals=goals,
                 quiet_sec=None,
-                speak_count=5,
             )
         )
         if "老师刚刚离开屏幕前" in unknown or "老师在屏幕前已经安静很久" in unknown:
@@ -2794,7 +2791,6 @@ def test_situation_facts_do_not_enqueue() -> None:
                 climate="cling_risk",
                 goals=goals,
                 quiet_sec=1000,
-                speak_count=5,
             )
         )
         if "今天还没提过晚饭" not in again:

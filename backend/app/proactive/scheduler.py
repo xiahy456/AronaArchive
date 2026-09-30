@@ -478,7 +478,6 @@ class ProactiveScheduler:
         moods: list[dict[str, object]] | None = None,
         birthday_content: str = "",
         quiet_sec: float | None = None,
-        speak_count: int = 0,
     ) -> list[SituationFact]:
         """Facts she can notice. Caps, cooldowns, mutes, and depart do not remove them."""
         dt = now or datetime.now()
@@ -546,12 +545,8 @@ class ProactiveScheduler:
             if last_user is not None:
                 elapsed = (dt - last_user).total_seconds()
         if elapsed is not None and after_sec > 0 and elapsed >= after_sec:
-            count = max(0, int(speak_count))
             facts.append(
-                SituationFact(
-                    kind="idle",
-                    text=f"老师在屏幕前已经安静很久。今天阿洛娜已经因为自己的想法开口{count}次",
-                )
+                SituationFact(kind="idle", text="老师在屏幕前已经安静很久")
             )
         if (
             (last_user_act or "") == "depart"

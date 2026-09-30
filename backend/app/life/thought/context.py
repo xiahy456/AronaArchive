@@ -89,10 +89,6 @@ def gather_context(
     windows = _windows(state)
     goals = _goals(state)
     _picked_glance = _glance_text(trigger, glance, glance_at)
-    ledger = getattr(state, "thought", None)
-    speak_count = 0
-    if getattr(ledger, "speak_day", "") == now.date().isoformat():
-        speak_count = int(getattr(ledger, "speak_count", 0) or 0)
     situation = _situation(
         state,
         now,
@@ -100,7 +96,6 @@ def gather_context(
         last_user_act=last_act,
         climate=climate,
         quiet_sec=since_teacher,
-        speak_count=speak_count,
     )
     return SourceContext(
         teacher_online=bool(state.hub.all_sessions()),
@@ -268,7 +263,6 @@ def _situation(
     last_user_act: str,
     climate: str,
     quiet_sec: float | None,
-    speak_count: int,
 ) -> tuple:
     scheduler = getattr(state, "scheduler", None)
     if scheduler is None or not hasattr(scheduler, "situation_facts"):
@@ -295,7 +289,6 @@ def _situation(
             moods=moods,
             birthday_content=birthday,
             quiet_sec=quiet_sec,
-            speak_count=speak_count,
         )
     except Exception:
         logger.exception("thought situation read failed")

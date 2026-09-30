@@ -38,7 +38,7 @@ prompt:
 conversation:
   max_history_turns: 12
   persist_path: "data/memory/dialogue.json"
-  max_entries: 256
+  max_entries: 2048
 
 knowledge:
   enabled: false
