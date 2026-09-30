@@ -286,8 +286,8 @@ def _gap_sec(state: "AppState", *, online: bool, last_thought_at: datetime | Non
             lo = float(getattr(cfg, "spontaneous_online_min_sec", 240))
             hi = float(getattr(cfg, "spontaneous_online_max_sec", 600))
         else:
-            lo = float(getattr(cfg, "spontaneous_away_min_sec", 900))
-            hi = float(getattr(cfg, "spontaneous_away_max_sec", 1800))
+            lo = float(getattr(cfg, "spontaneous_away_min_sec", 600))
+            hi = float(getattr(cfg, "spontaneous_away_max_sec", 1200))
         if hi < lo:
             lo, hi = hi, lo
         holder.gap_sec = lo if lo == hi else random.uniform(lo, hi)
