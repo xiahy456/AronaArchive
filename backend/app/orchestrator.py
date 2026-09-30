@@ -134,6 +134,7 @@ class Orchestrator:
             config.planner, renderer_enabled=config.model.enabled
         )
         self.relationship = relationship
+        self.stance = None
         self.life_journal: Any = None
         self.arona_memory: Any = None
         self.last_initiate_text = ""
@@ -553,6 +554,7 @@ class Orchestrator:
                 day_block=self._day_block(),
                 teacher_method=inbound_method,
                 channels_block=self._channels_block(client_online=client_online),
+                **self._stance_args(),
             )
             logger.info(
                 "planner session=%s ok=%s latency=%.3fs",
@@ -999,6 +1001,7 @@ class Orchestrator:
                 life_block=self._life_block(interrupt_ctx),
                 day_block=self._day_block(),
                 channels_block=self._channels_block(client_online=client_online),
+                **self._stance_args(),
             )
             logger.info(
                 "initiate planner session=%s kind=%s ok=%s latency=%.3fs",
@@ -1384,6 +1387,15 @@ class Orchestrator:
             on_life_action=on_life_action,
             client_online=client_online,
         )
+
+    def _stance_args(self) -> dict[str, str]:
+        stance = getattr(self, "stance", None)
+        if stance is None:
+            return {}
+        return {
+            "stage": str(getattr(stance, "committed_stage", "") or ""),
+            "patch": str(getattr(stance, "personal_patch", "") or ""),
+        }
 
     def _climate_block(self, decision: Decision | None) -> str:
         if decision is None:

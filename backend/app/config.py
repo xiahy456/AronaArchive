@@ -313,6 +313,18 @@ class RelationshipConfig(BaseModel):
     baseline_tension: float = 0.25
 
 
+class StanceConfig(BaseModel):
+    """Daily stage-decision LLM (friend / steady / lover)."""
+
+    enabled: bool = True
+    persist_path: str = "data/memory/stance.json"
+    history_days: int = 14
+    promote_days: int = 3
+    demote_days: int = 30
+    patch_max_chars: int = 200
+    timeout_sec: float = 120
+
+
 class ProactiveConfig(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -339,6 +351,7 @@ class AppConfig(BaseModel):
     planner: PlannerConfig = Field(default_factory=PlannerConfig)
     listen: ListenConfig = Field(default_factory=ListenConfig)
     proactive: ProactiveConfig = Field(default_factory=ProactiveConfig)
+    stance: StanceConfig = Field(default_factory=StanceConfig)
     life: LifeConfig = Field(default_factory=LifeConfig)
     interact: InteractConfig = Field(default_factory=InteractConfig)
     computer_use: ComputerUseConfig = Field(default_factory=ComputerUseConfig)
@@ -379,6 +392,10 @@ class AppConfig(BaseModel):
     @property
     def relationship_abs_path(self) -> Path:
         return self.resolve_path(self.proactive.relationship.persist_path)
+
+    @property
+    def stance_abs_path(self) -> Path:
+        return self.resolve_path(self.stance.persist_path)
 
     @property
     def dialogue_abs_path(self) -> Path:

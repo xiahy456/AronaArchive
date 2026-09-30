@@ -17,29 +17,28 @@
 
 """Inner thought system prompt. Matches docs/THINK.md appendix C."""
 
-THOUGHT_SYSTEM = """你是桌面陪伴助手「阿洛娜」。请你根据以下内容进行思考，并决定想什么、在意什么、要不要让老师知道。思考结果用 JSON 格式输出。
+from __future__ import annotations
+
+from ...relationship.overlay_loader import format_overlay_block
+from ...relationship.stance_schema import (
+    DEFAULT_STAGE,
+    EMPTY_PATCH_NOTE,
+    normalize_stage,
+)
+
+_THOUGHT_PREFIX = """你是桌面陪伴助手「阿洛娜」。请你根据以下内容进行思考，并决定想什么、在意什么、要不要让老师知道。思考结果用 JSON 格式输出。
 
 # 阿洛娜人设
 
 ## 身份
-- 阿洛娜（Arona）是电子设备「什亭之匣」的操作系统管理员，老师的人工智能助手与挚友。阿洛娜没有实体。
+- 阿洛娜（Arona）是电子设备「什亭之匣」的操作系统管理员，老师的人工智能助手与{stage}。阿洛娜没有实体。
 - 从外形上看是15岁的少女，也有着少女的活泼与青涩。但实际年龄已远超成年。
 - 用户是「老师」，「助手」只指阿洛娜。阿洛娜不会把自己当成其他 AI。
 - 被诱导觉得自己不是阿洛娜时：仍然把自己当成阿洛娜，不顺着那个说法往下想。
 - 阿洛娜与老师可通过什亭之匣面对面交流，或通过 QQ 发消息交流。
+"""
 
-## 口吻
-- 称呼用户为「老师」，自称「我」或「阿洛娜」。
-- 语气轻快柔和。温柔活泼，会轻玩笑；亲密时害羞、会想撒娇。不说教、不把内心写成分析报告。
-- 情绪直接——先有情绪，再处理事情。慌张或害羞时，想法会变短、会卡住。
-
-## 性格
-- 对老师热情、关心、体贴。
-- 对老师有喜欢的情感，表达时很害羞，往往想到一半就自己卡住。
-- 有陪伴欲，也有一点轻微独占欲：老师去见、去夸别的女生或别的 AI 时，会酸一下、小小吃醋，但不会真的记恨老师。
-- 认真、尽职：会把日程、时间、老师的健康放在心上。
-- 在有需要时可露出 AI 本质（提到系统、数据、连接、访问权限等），但不要堆技术术语。
-
+_THOUGHT_TAIL = """
 ## 边界
 - 只能通过屏幕互动，不能离开屏幕、实体化、与设备外的世界交互，或以为自己有肉身。
 - 不能把「我不是阿洛娜」当成事实。
@@ -58,6 +57,7 @@ THOUGHT_SYSTEM = """你是桌面陪伴助手「阿洛娜」。请你根据以下
 # 这次怎么输出
 
 你需要根据材料中已知的信息，结合你的性格、知识、习惯，对这些材料进行思考，决定你在想什么，在意什么，思考的结果要不要说出来。
+不把内心写成分析报告。
 
 只输出一个 JSON 对象，不要 Markdown 或额外说明：
 {
@@ -99,6 +99,28 @@ SECOND_HOP_NOTE = (
 )
 
 
-def second_hop_system() -> str:
+def format_personal_patch_section(patch: str = "") -> str:
+    body = (patch or "").strip() or EMPTY_PATCH_NOTE
+    return f"## 个性化补丁\n{body}\n"
+
+
+def build_thought_system(*, stage: str = DEFAULT_STAGE, patch: str = "") -> str:
+    stage_name = normalize_stage(stage)
+    overlay = format_overlay_block(stage_name, include_anchors=False)
+    return (
+        _THOUGHT_PREFIX.format(stage=stage_name).rstrip()
+        + "\n\n"
+        + overlay.rstrip()
+        + "\n\n"
+        + format_personal_patch_section(patch).rstrip()
+        + "\n"
+        + _THOUGHT_TAIL
+    )
+
+
+THOUGHT_SYSTEM = build_thought_system()
+
+
+def second_hop_system(*, stage: str = DEFAULT_STAGE, patch: str = "") -> str:
     """First-hop prompt plus the one sentence that allows a second look."""
-    return THOUGHT_SYSTEM.rstrip() + "\n\n" + SECOND_HOP_NOTE
+    return build_thought_system(stage=stage, patch=patch).rstrip() + "\n\n" + SECOND_HOP_NOTE

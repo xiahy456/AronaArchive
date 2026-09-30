@@ -153,6 +153,15 @@ proactive:
   festival:
     enabled: true
 
+stance:
+  enabled: true
+  persist_path: "data/memory/stance.json"
+  history_days: 14
+  promote_days: 3
+  demote_days: 30
+  patch_max_chars: 200
+  timeout_sec: 120
+
 life:
   enabled: true
   persist_path: "data/memory/life.json"

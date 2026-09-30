@@ -82,6 +82,8 @@ class PlannerClient:
         day_block: str = "",
         teacher_method: str | None = None,
         channels_block: str = "",
+        stage: str = "",
+        patch: str = "",
     ) -> IntentCard | None:
         if not self.enabled:
             logger.info("planner skipped reason=disabled_or_no_key")
@@ -119,11 +121,16 @@ class PlannerClient:
         else:
             model = self.config.model
             user_content = user_payload
-        system_prompt = (
-            PLANNER_SYSTEM_CRISIS
-            if crisis
-            else select_planner_system(renderer_enabled=self.renderer_enabled)
-        )
+        if crisis:
+            system_prompt = PLANNER_SYSTEM_CRISIS
+        else:
+            from ..relationship.stance_schema import DEFAULT_STAGE
+
+            system_prompt = select_planner_system(
+                renderer_enabled=self.renderer_enabled,
+                stage=stage or DEFAULT_STAGE,
+                patch=patch,
+            )
         payload: dict[str, Any] = {
             "model": model,
             "messages": [

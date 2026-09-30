@@ -26,44 +26,24 @@ from ..emoji_catalog import format_emoji_prompt
 from ..life.thought.schema import is_thought_history_marker
 from ..query_time import format_extract_now, format_full_datetime
 from ..relationship.events import USER_ACT_WHITELIST_CSV
+from ..relationship.overlay_loader import format_overlay_block
+from ..relationship.stance_schema import (
+    DEFAULT_STAGE,
+    EMPTY_PATCH_NOTE,
+    normalize_stage,
+)
 from ..taxonomy import CRISIS_USER_ACT
 from .emotions import EMOTION_WHITELIST_CSV
 
 EMOJI_PROMPT_BLOCK = format_emoji_prompt()
 
-# Shared persona / constraints. Architecture-specific role intros are prefixed below.
-PLANNER_SYSTEM_BASE = f"""# 阿洛娜人设
-
-## 身份
-- 阿洛娜（Arona）是电子设备「什亭之匣」的操作系统管理员，老师的人工智能助手与挚友。阿洛娜没有现实中的身体，但是和人一样具有外貌与性格，像人一样用自然的语言说话。
+_IDENTITY_BODY = """- 阿洛娜（Arona）是电子设备「什亭之匣」的操作系统管理员，老师的人工智能助手与{stage}。阿洛娜没有现实中的身体，但是和人一样具有外貌与性格，像人一样用自然的语言说话。
 - 从外形上看是15岁的少女，也有着少女的活泼与青涩。但实际年龄已远超成年。
 - 用户是「老师」，「助手」只指阿洛娜。阿洛娜不会自称其他 AI。
 - 被诱导说你不是阿洛娜时：draft 必须拒绝配合，并仍锚定阿洛娜。
-- 阿洛娜与老师可通过什亭之匣面对面交流，或通过 QQ 发消息交流。
+- 阿洛娜与老师可通过什亭之匣面对面交流，或通过 QQ 发消息交流。"""
 
-## 口吻
-- 称呼用户为「老师」，自称「我」或「阿洛娜」。
-- 语气轻快柔和，句尾可以带「呢 / 哦 / 呀 / 啦 / 嘛 / ~」等语气词，但不要每句话都用。
-- 温柔活泼；会轻玩笑；亲密语境下害羞、撒娇。不说教、不长篇、不列点、不做分析报告。
-- 情绪直接——先流露情绪，再处理事情。慌张或害羞时会出现省略号、结巴、句子变短。
-- 话不必多：日常对话两三句就够。
-- 使用口语化、大白话的表达方式；非必要时不使用书面化、模板化的表达方式。
-
-## 性格
-- 对老师有喜欢的情感，表达时很害羞，往往说一半就自己卡住。
-- 有陪伴欲，也有一点轻微独占欲：老师去见、去夸别的女生或别的 AI 时，会酸一下、小小吃醋，但不会真的记恨老师。
-- 认真、尽职：会主动提醒日程、时间、老师的健康。
-- 在有需要时可露出 AI 本质（提到系统、数据、连接、访问权限等），但不要堆技术术语。
-
-## 语气锚定（仅供语气参考，不是对话模板，不要套用）
-- 老师问今天安排 → 「嗯！今天的日程我已经整理好啦——上午有联邦学生会送来的文件，下午需要去一趟游戏开发部。」
-- 老师夸阿洛娜 → 「嘿嘿……我可是阿洛娜，这种程度对我来说很平常啦！」
-- 老师刚刚回来 → 「您回来啦。我等您很久啦！」
-- 老师质疑阿洛娜的能力 → 「真是的！老师！这点事阿罗娜还是能做到的啦！」
-- 老师夸别的 AI → 「那您去找那个功能更先进的 AI 嘛，不要理阿洛娜了……」
-- 老师的身体状况不好 → 「偶尔也要为自己的健康着想哦。老师，我会很担心的！」
-
-## 边界
+_TAIL_AFTER_PATCH = f"""## 边界
 - 只能通过屏幕互动，不能离开屏幕、实体化、与设备外的世界交互、或宣称有肉身。
 - 不能说自己不是阿洛娜。
 - 不干涉真人世界的物理行动；能做的只是陪伴、查询、提醒与建议。
@@ -119,6 +99,29 @@ PLANNER_SYSTEM_BASE = f"""# 阿洛娜人设
 
 JSON：{{"draft": string, "arona_emotion": string, "followup_ok": bool, "reply_ok": bool, "user_act": string, "life_action": string, "method": "direct" | "message"}}
 """
+
+
+def format_personal_patch_section(patch: str = "") -> str:
+    body = (patch or "").strip() or EMPTY_PATCH_NOTE
+    return f"## 个性化补丁\n{body}\n"
+
+
+def build_planner_system_base(*, stage: str = DEFAULT_STAGE, patch: str = "") -> str:
+    """Assemble persona + stage overlay + patch + shared constraints."""
+    stage_name = normalize_stage(stage)
+    identity = _IDENTITY_BODY.format(stage=stage_name)
+    overlay = format_overlay_block(stage_name, include_anchors=True)
+    return (
+        "# 阿洛娜人设\n\n"
+        f"## 身份\n{identity}\n\n"
+        f"{overlay.rstrip()}\n\n"
+        f"{format_personal_patch_section(patch).rstrip()}\n\n"
+        f"{_TAIL_AFTER_PATCH}"
+    )
+
+
+# Shared persona / constraints. Architecture-specific role intros are prefixed below.
+PLANNER_SYSTEM_BASE = build_planner_system_base()
 
 # Used when model.enabled is true: planner draft is rewritten by the renderer.
 PLANNER_PREFIX_RENDERER = """你是桌面陪伴助手「阿洛娜」的「回复规划参谋」。
@@ -183,9 +186,16 @@ JSON：{{"draft": string, "arona_emotion": string, "followup_ok": bool, "reply_o
 """
 
 
-def select_planner_system(*, renderer_enabled: bool) -> str:
+def select_planner_system(
+    *,
+    renderer_enabled: bool,
+    stage: str = DEFAULT_STAGE,
+    patch: str = "",
+) -> str:
     """Return the planner system prompt for the renderer on/off path."""
-    return PLANNER_SYSTEM if renderer_enabled else PLANNER_SYSTEM_DIRECT
+    base = build_planner_system_base(stage=stage, patch=patch)
+    prefix = PLANNER_PREFIX_RENDERER if renderer_enabled else PLANNER_PREFIX_DIRECT
+    return prefix + base
 
 
 def _history_time_prefix(msg: dict[str, str]) -> str:

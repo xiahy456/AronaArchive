@@ -34,7 +34,7 @@ from .client import ThoughtClient
 from .commit import commit_inner
 from .context import gather_context
 from .gate import ThoughtClocks, ThoughtDecision, ThoughtGateFacts, decide_thought
-from .prompt import second_hop_system
+from .prompt import build_thought_system, second_hop_system
 from .schema import InnerThought, parse_inner
 from .sources import SourceContext, fill_need, select_sources
 from .speech import maybe_offer_thought
@@ -172,7 +172,8 @@ async def _think(
             logger.info("thought model skipped reason=disabled_or_no_key")
             return "failed"
         caller = ThoughtClient(planner).complete
-    raw = await _invoke(caller, sources.text)
+    system = _thought_system(state)
+    raw = await _invoke(caller, sources.text, system=system)
     parsed = parse_inner(raw)
     if parsed is None:
         logger.info("thought parse failed")
@@ -181,7 +182,7 @@ async def _think(
         second_raw = await _invoke(
             caller,
             _second_user(sources.text, raw or "", parsed, ctx, now),
-            system=second_hop_system(),
+            system=second_hop_system(**_thought_kwargs(state)),
         )
         second = parse_inner(second_raw)
         if second is None:
@@ -267,6 +268,20 @@ async def _invoke(caller: Any, user_text: str, *, system: str | None = None) -> 
     if system is not None and _accepts_system(caller):
         return await caller(user_text, system=system)
     return await caller(user_text)
+
+
+def _thought_kwargs(state: "AppState") -> dict[str, str]:
+    stance = getattr(state, "stance", None)
+    if stance is None:
+        return {}
+    return {
+        "stage": str(getattr(stance, "committed_stage", "") or ""),
+        "patch": str(getattr(stance, "personal_patch", "") or ""),
+    }
+
+
+def _thought_system(state: "AppState") -> str:
+    return build_thought_system(**_thought_kwargs(state))
 
 
 def _accepts_system(caller: Any) -> bool:

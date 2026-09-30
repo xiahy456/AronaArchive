@@ -222,8 +222,20 @@ def main() -> None:
     assert PLANNER_SYSTEM_DIRECT == PLANNER_PREFIX_DIRECT + PLANNER_SYSTEM_BASE
     assert PLANNER_SYSTEM_BASE in PLANNER_SYSTEM
     assert PLANNER_SYSTEM_BASE in PLANNER_SYSTEM_DIRECT
-    assert select_planner_system(renderer_enabled=True) is PLANNER_SYSTEM
-    assert select_planner_system(renderer_enabled=False) is PLANNER_SYSTEM_DIRECT
+    assert select_planner_system(renderer_enabled=True) == PLANNER_SYSTEM
+    assert select_planner_system(renderer_enabled=False) == PLANNER_SYSTEM_DIRECT
+    assert "亲密语境下害羞、撒娇" in select_planner_system(renderer_enabled=True)
+    assert "## 个性化补丁" in select_planner_system(renderer_enabled=True)
+    assert "服从气候" in select_planner_system(renderer_enabled=True)
+    friend = select_planner_system(renderer_enabled=True, stage="朋友")
+    lover = select_planner_system(renderer_enabled=True, stage="恋人")
+    assert "助手与朋友" in friend
+    assert "助手与恋人" in lover
+    assert "不要自造昵称" in friend
+    patched = select_planner_system(
+        renderer_enabled=True, stage="挚友", patch="老师希望被叫小老师。"
+    )
+    assert "老师希望被叫小老师。" in patched
     assert "reply_ok 必须为 true" in PLANNER_SYSTEM_CRISIS
     assert "crisis" in PLANNER_SYSTEM_CRISIS
     assert "热线告示" in PLANNER_SYSTEM_CRISIS

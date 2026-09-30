@@ -46,6 +46,8 @@ from .orchestrator import Orchestrator
 from .planner import PlannerClient
 from .proactive import ConnectionHub, ProactiveScheduler, WelcomeState, run_proactive_loop
 from .relationship import RelationshipEngine, RelationshipSettings
+from .relationship.stance_loop import review_day, run_stance_loop
+from .relationship.stance_store import StanceStore
 from .napcat import NapcatLink, QqInbox, napcat_endpoint
 from .ws_auth import startup_token_error
 from .ws_handler import AppState, websocket_endpoint
@@ -113,6 +115,8 @@ def create_app() -> FastAPI:
         config.relationship_abs_path,
         RelationshipSettings.from_config(config.proactive.relationship),
     )
+    stance_store = StanceStore(config.stance_abs_path)
+    stance_state = stance_store.load()
     orchestrator = Orchestrator(
         config,
         model=model,
@@ -123,6 +127,7 @@ def create_app() -> FastAPI:
         planner=planner,
         relationship=relationship,
     )
+    orchestrator.stance = stance_state
     hub = ConnectionHub()
     scheduler = ProactiveScheduler(
         config.proactive_abs_path,
@@ -174,6 +179,8 @@ def create_app() -> FastAPI:
     state.arona_memory = arona_memory
     state.thought = thought
     state.thought_store = thought_store
+    state.stance = stance_state
+    state.stance_store = stance_store
     state.glance_request_id = ""
     state.napcat = NapcatLink(config.napcat.user_qq_id)
     orchestrator.napcat = state.napcat
@@ -217,6 +224,7 @@ def create_app() -> FastAPI:
         loop_task = None
         life_task = None
         thought_task = None
+        stance_task = None
         if (
             config.proactive.idle.enabled
             or config.proactive.care.enabled
@@ -231,6 +239,13 @@ def create_app() -> FastAPI:
             if config.life.thought.enabled:
                 thought_task = asyncio.create_task(run_thought_loop(state))
                 logger.info("thought loop started")
+        if config.stance.enabled:
+            try:
+                await review_day(state)
+            except Exception:
+                logger.exception("stance startup catch-up failed")
+            stance_task = asyncio.create_task(run_stance_loop(state))
+            logger.info("stance loop started")
         app.state.arona = state  # type: ignore[attr-defined]
         yield
         if life_task is not None:
@@ -243,6 +258,12 @@ def create_app() -> FastAPI:
             thought_task.cancel()
             try:
                 await thought_task
+            except asyncio.CancelledError:
+                pass
+        if stance_task is not None:
+            stance_task.cancel()
+            try:
+                await stance_task
             except asyncio.CancelledError:
                 pass
         if loop_task is not None:
