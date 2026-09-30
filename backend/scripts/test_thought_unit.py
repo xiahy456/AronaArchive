@@ -495,6 +495,64 @@ def test_thought_tick_logs_without_writing() -> None:
     print("  ok")
 
 
+def test_late_night_offline_uses_night_gap() -> None:
+    print("== late night offline uses the night spontaneous gap ==")
+    thought_cfg = SimpleNamespace(
+        tick_sec=60,
+        revisit_after_sec=1200,
+        refractory_sec=180,
+        spontaneous_online_min_sec=240,
+        spontaneous_online_max_sec=240,
+        spontaneous_away_min_sec=900,
+        spontaneous_away_max_sec=900,
+        spontaneous_night_min_sec=1800,
+        spontaneous_night_max_sec=1800,
+    )
+    sessions: list[tuple[str, None]] = []
+
+    def _state(day: str) -> SimpleNamespace:
+        return SimpleNamespace(
+            config=SimpleNamespace(life=SimpleNamespace(thought=thought_cfg)),
+            life=SimpleNamespace(state=InnerState()),
+            thought=ThoughtLedger(consolidated_day=day),
+            hub=SimpleNamespace(all_sessions=lambda: list(sessions), any_busy=lambda: False),
+            scheduler=None,
+            listen_uncommitted=False,
+        )
+
+    async def _gap_at(state: SimpleNamespace, at: datetime) -> tuple[str, float, str]:
+        decision = await thought_tick_once(state, at)
+        holder = state.thought_spontaneous_gap
+        return decision.kind, holder.gap_sec, holder.band
+
+    late = datetime(2026, 9, 24, 2, 0, 0)
+    alone = _state("2026-09-24")
+    kind, gap, band = asyncio.run(_gap_at(alone, late))
+    if kind != "spontaneous" or gap != 1800 or band != "night":
+        _fail(f"late night offline should use the night gap, got {kind} {gap} {band}")
+    sessions.append(("s", None))
+    kind, gap, band = asyncio.run(_gap_at(alone, late))
+    if kind != "spontaneous" or gap != 240 or band != "online":
+        _fail(f"a connected late night should stay online, got {kind} {gap} {band}")
+    sessions.clear()
+    night = datetime(2026, 9, 23, 23, 10, 0)
+    evening = _state("2026-09-23")
+    kind, gap, band = asyncio.run(_gap_at(evening, night))
+    if kind != "spontaneous" or gap != 900 or band != "away":
+        _fail(f"23:00 offline should stay on the away gap, got {kind} {gap} {band}")
+
+    cross = _state("2026-09-23")
+    before = datetime(2026, 9, 23, 23, 50, 0)
+    after = datetime(2026, 9, 24, 0, 10, 0)
+    kind, gap, band = asyncio.run(_gap_at(cross, before))
+    if kind != "spontaneous" or gap != 900 or band != "away":
+        _fail(f"23:50 offline should roll the away gap, got {kind} {gap} {band}")
+    kind, gap, band = asyncio.run(_gap_at(cross, after))
+    if gap != 1800 or band != "night":
+        _fail(f"crossing midnight offline should re-roll the night gap, got {kind} {gap} {band}")
+    print("  ok")
+
+
 def test_sources_for_each_trigger() -> None:
     print("== thought sources by trigger ==")
     source = Path(__file__).resolve().parents[1] / "app" / "life" / "thought" / "sources.py"
@@ -3471,6 +3529,7 @@ def main() -> None:
     test_thought_rumination_does_not_drop_impulses()
     test_gate_priority_and_skips()
     test_thought_tick_logs_without_writing()
+    test_late_night_offline_uses_night_gap()
     test_sources_for_each_trigger()
     test_commit_boundaries()
     test_failed_call_writes_nothing()

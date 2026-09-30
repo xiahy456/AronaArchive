@@ -50,9 +50,10 @@ DEFAULT_TICK_SEC = 60.0
 
 @dataclass
 class SpontaneousGap:
-    """One rolled wait. Re-rolled when presence or the last thought time changes."""
+    """One rolled wait. Re-rolled when the band, presence, or last thought time changes."""
 
     online: bool | None = None
+    band: str = ""
     anchored_at: datetime | None = None
     gap_sec: float = 0.0
     rolled: bool = False
@@ -110,7 +111,13 @@ async def thought_tick_once(
         resting=_resting(at),
         consolidated_today=ledger.consolidated_day == at.date().isoformat(),
         teacher_just_spoke=_teacher_just_spoke(state, at),
-        spontaneous_gap_sec=_gap_sec(state, online=online, last_thought_at=ledger.last_thought_at, cfg=cfg),
+        spontaneous_gap_sec=_gap_sec(
+            state,
+            now=at,
+            online=online,
+            last_thought_at=ledger.last_thought_at,
+            cfg=cfg,
+        ),
     )
     clocks = ThoughtClocks(
         revisit_after_sec=float(cfg.revisit_after_sec),
@@ -272,26 +279,54 @@ def _accepts_system(caller: Any) -> bool:
     return any(item.kind == inspect.Parameter.VAR_KEYWORD for item in params.values())
 
 
-def _gap_sec(state: "AppState", *, online: bool, last_thought_at: datetime | None, cfg: object) -> float:
+def _gap_band(now: datetime, *, online: bool) -> str:
+    from ...proactive.slots import resolve_slot
+
+    if online:
+        return "online"
+    if resolve_slot(now).slot_id == "late_night":
+        return "night"
+    return "away"
+
+
+def _gap_limits(band: str, cfg: object) -> tuple[float, float]:
+    if band == "online":
+        lo = float(getattr(cfg, "spontaneous_online_min_sec", 240))
+        hi = float(getattr(cfg, "spontaneous_online_max_sec", 600))
+    elif band == "night":
+        lo = float(getattr(cfg, "spontaneous_night_min_sec", 1200))
+        hi = float(getattr(cfg, "spontaneous_night_max_sec", 2400))
+    else:
+        lo = float(getattr(cfg, "spontaneous_away_min_sec", 600))
+        hi = float(getattr(cfg, "spontaneous_away_max_sec", 1200))
+    if hi < lo:
+        lo, hi = hi, lo
+    return lo, hi
+
+
+def _gap_sec(
+    state: "AppState",
+    *,
+    now: datetime,
+    online: bool,
+    last_thought_at: datetime | None,
+    cfg: object,
+) -> float:
     holder = getattr(state, "thought_spontaneous_gap", None)
     if not isinstance(holder, SpontaneousGap):
         holder = SpontaneousGap()
         state.thought_spontaneous_gap = holder
+    band = _gap_band(now, online=online)
     if (
         not holder.rolled
         or holder.online != online
+        or holder.band != band
         or holder.anchored_at != last_thought_at
     ):
-        if online:
-            lo = float(getattr(cfg, "spontaneous_online_min_sec", 240))
-            hi = float(getattr(cfg, "spontaneous_online_max_sec", 600))
-        else:
-            lo = float(getattr(cfg, "spontaneous_away_min_sec", 600))
-            hi = float(getattr(cfg, "spontaneous_away_max_sec", 1200))
-        if hi < lo:
-            lo, hi = hi, lo
+        lo, hi = _gap_limits(band, cfg)
         holder.gap_sec = lo if lo == hi else random.uniform(lo, hi)
         holder.online = online
+        holder.band = band
         holder.anchored_at = last_thought_at
         holder.rolled = True
     return holder.gap_sec

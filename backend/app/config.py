@@ -257,6 +257,8 @@ class ThoughtConfig(BaseModel):
     spontaneous_online_max_sec: float = 600
     spontaneous_away_min_sec: float = 600
     spontaneous_away_max_sec: float = 1200
+    spontaneous_night_min_sec: float = 1200
+    spontaneous_night_max_sec: float = 2400
     refractory_sec: float = 180
     simmer_sec: float = 30
     impulse_priority: int = 30
