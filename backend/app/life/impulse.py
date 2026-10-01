@@ -32,7 +32,11 @@ from ..proactive.care import (
     care_window_specs,
     in_window,
 )
-from ..proactive.festival import needs_rest_followup
+from ..proactive.festival import (
+    birthday_from_profiles,
+    match_festival,
+    needs_rest_followup,
+)
 from ..proactive.scheduler import Motive
 from .events import world_event
 from .policy import LifeDecision
@@ -511,6 +515,13 @@ async def _speak_impulse(
                     festival_id=snapshot.source_id if snapshot.kind == "festival" else "",
                     due_soon=snapshot.due_soon,
                 )
+        # Thought/breakfast/idle may still say the festival blessing in plain text.
+        _note_festival_if_spoken(
+            scheduler,
+            snapshot,
+            orchestrator,
+            now=now,
+        )
         welcome = getattr(state, "welcome", None)
         if (
             snapshot.first_in_slot
@@ -549,6 +560,41 @@ async def _speak_impulse(
         return False
     logger.warning("impulse generate failed kind=%s (not marked)", impulse.kind)
     return spoke
+
+
+def _note_festival_if_spoken(
+    scheduler: Any,
+    snapshot: Impulse,
+    orchestrator: Any,
+    *,
+    now: datetime,
+) -> None:
+    """Mark today's festival done when the spoken line already blessed it."""
+    if scheduler is None or not hasattr(scheduler, "note_mentioned"):
+        return
+    done = list(getattr(getattr(scheduler, "state", None), "festival_done", []) or [])
+    birthday = ""
+    store = getattr(orchestrator, "memory_store", None) if orchestrator is not None else None
+    if store is not None and hasattr(store, "list_by_category"):
+        try:
+            birthday = birthday_from_profiles(store.list_by_category("profile"))
+        except Exception:
+            birthday = ""
+    hit = match_festival(now, birthday)
+    if hit is None or not hit.name or hit.id in done:
+        return
+    blob = "\n".join(
+        [
+            str(getattr(snapshot, "hint", "") or ""),
+            str(getattr(snapshot, "instruction", "") or ""),
+            str(getattr(orchestrator, "last_initiate_text", "") or "")
+            if orchestrator is not None
+            else "",
+        ]
+    )
+    if hit.name not in blob:
+        return
+    scheduler.note_mentioned("festival", now, festival_id=hit.id)
 
 
 def _enqueue_sleep_followup(state: Any, now: datetime) -> None:

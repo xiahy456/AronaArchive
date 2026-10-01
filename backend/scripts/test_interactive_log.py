@@ -6,26 +6,77 @@ Run from backend/:
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import sys
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BACKEND_DIR))
 
+from app.config import AppConfig  # noqa: E402
 from app.image_input import redact_image_fields  # noqa: E402
 from app.logging_utils import (  # noqa: E402
     begin_trace,
+    current_trace,
     format_interactive_log,
     format_llm_exchange,
     pretty_json,
     reset_trace,
     update_trace,
 )
+from app.orchestrator import Orchestrator  # noqa: E402
+from app.relationship.policy import Decision  # noqa: E402
 
 
 def _fail(msg: str) -> None:
     raise AssertionError(msg)
+
+
+class _CaptureHandler(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__()
+        self.messages: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.messages.append(record.getMessage())
+
+
+def _orchestrator() -> Orchestrator:
+    return Orchestrator(
+        AppConfig(),
+        model=MagicMock(),
+        conversations=MagicMock(),
+        memory_store=MagicMock(),
+        extractor=MagicMock(),
+        knowledge=MagicMock(),
+    )
+
+
+def _seed_qq_trace() -> str:
+    request = json.dumps(
+        {"type": "qq", "content": "老师在吗", "image_count": 1},
+        ensure_ascii=False,
+    )
+    begin_trace(started_at=1.0, request_json=request)
+    update_trace(
+        planner_prompt=[
+            {"role": "system", "content": "你是规划参谋"},
+            {"role": "user", "content": "【老师本轮消息】\n老师在吗"},
+        ],
+        planner_json=(
+            '{"draft":"在的，老师。","arona_emotion":"smile","followup_ok":false}'
+        ),
+        renderer_prompt=[
+            {"role": "system", "content": "你是阿洛娜"},
+            {"role": "user", "content": "【意图草稿】\n在的，老师。"},
+        ],
+        renderer_text="在的，老师。",
+    )
+    return request
+
 
 
 def test_pretty_json() -> None:
@@ -184,6 +235,144 @@ def test_format_renderer_disabled_is_none() -> None:
     print("  ok")
 
 
+def test_qq_request_json_in_interactive_log() -> None:
+    print("== QQ request_json pretty-prints in interactive information ==")
+    reset_trace()
+    request = _seed_qq_trace()
+    payload = {
+        "type": "chat_response",
+        "content": "在的，老师。",
+        "context_used": "planner+renderer",
+        "latency": 1.2,
+        "emotion": "smile",
+    }
+    block = format_interactive_log(payload, elapsed=1.25)
+    if "interactive information:" not in block:
+        _fail(f"missing interactive header:\n{block}")
+    if '"type": "qq"' not in block or '"image_count": 1' not in block:
+        _fail(f"QQ request should be pretty-printed:\n{block}")
+    if "老师在吗" not in block:
+        _fail(f"QQ request content missing:\n{block}")
+    if "planner_prompt:\n[" not in block:
+        _fail(f"planner_prompt should be indented JSON:\n{block}")
+    if json.loads(request)["type"] != "qq":
+        _fail("seed request should be type=qq")
+    reset_trace()
+    print("  ok")
+
+
+def test_qq_deliver_spoken_emits_interactive_log() -> None:
+    print("== QQ _deliver_spoken emits interactive log and resets trace ==")
+    reset_trace()
+    orch = _orchestrator()
+    link = MagicMock()
+    link.connected = True
+    link.send_text = AsyncMock(return_value=True)
+    orch.napcat = link
+
+    handler = _CaptureHandler()
+    handler.setLevel(logging.INFO)
+    logger = logging.getLogger("app.orchestrator")
+    prev_level = logger.level
+    logger.setLevel(logging.INFO)
+    logger.addHandler(handler)
+
+    async def _run() -> tuple[bool, object]:
+        _seed_qq_trace()
+        ok = await orch._deliver_spoken(
+            text="在的，老师。",
+            emotion="smile",
+            method="message",
+            send=AsyncMock(),
+            context_used="planner+renderer",
+            latency=1.2,
+            on_life_action=None,
+            client_online=False,
+            emit_emotion=False,
+        )
+        return ok, current_trace()
+
+    try:
+        ok, leftover = asyncio.run(_run())
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(prev_level)
+        reset_trace()
+
+    if not ok:
+        _fail("deliver should succeed when napcat connected")
+    link.send_text.assert_awaited()
+    blocks = [m for m in handler.messages if m.startswith("interactive information:")]
+    if len(blocks) != 1:
+        _fail(f"expected one interactive information block, got {len(blocks)}")
+    block = blocks[0]
+    if "planner_prompt:" not in block or '"role": "system"' not in block:
+        _fail(f"QQ deliver log missing planner_prompt:\n{block}")
+    if "renderer_text:\n在的，老师。" not in block:
+        _fail(f"QQ deliver log missing renderer_text:\n{block}")
+    if '"type": "qq"' not in block:
+        _fail(f"QQ deliver log missing request:\n{block}")
+    if leftover is not None:
+        _fail("trace should be reset after QQ interactive log")
+    print("  ok")
+
+
+def test_qq_skip_generation_emits_interactive_log() -> None:
+    print("== QQ _skip_generation emits interactive log and resets trace ==")
+    reset_trace()
+    orch = _orchestrator()
+    orch.conversations.append = MagicMock()
+    decision = Decision(
+        action="silence",
+        climate="steady",
+        stance="",
+        must_not=[],
+        tone_hint="",
+        user_act="other",
+    )
+
+    handler = _CaptureHandler()
+    handler.setLevel(logging.INFO)
+    logger = logging.getLogger("app.orchestrator")
+    prev_level = logger.level
+    logger.setLevel(logging.INFO)
+    logger.addHandler(handler)
+
+    async def _run() -> object:
+        _seed_qq_trace()
+        await orch._skip_generation(
+            session_id="qq",
+            user_text="老师在吗",
+            decision=decision,
+            send=AsyncMock(),
+            reason="reply_ok_false",
+            latency=0.5,
+            emotion="normal",
+            inbound_method="message",
+            client_online=False,
+        )
+        return current_trace()
+
+    try:
+        leftover = asyncio.run(_run())
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(prev_level)
+        reset_trace()
+
+    blocks = [m for m in handler.messages if m.startswith("interactive information:")]
+    if len(blocks) != 1:
+        _fail(f"expected one interactive information block, got {len(blocks)}")
+    block = blocks[0]
+    if "response:\n{" not in block:
+        _fail(f"QQ skip log missing response:\n{block}")
+    if "planner_prompt:" not in block:
+        _fail(f"QQ skip log missing planner_prompt:\n{block}")
+    if leftover is not None:
+        _fail("trace should be reset after QQ skip interactive log")
+    print("  ok")
+
+
 def test_format_llm_exchange_indent_and_sections() -> None:
     print("== format_llm_exchange indent / prompt / response ==")
     messages = [
@@ -282,6 +471,9 @@ def main() -> None:
         test_format_missing_fields_are_none()
         test_format_listen_transcript_request()
         test_format_renderer_disabled_is_none()
+        test_qq_request_json_in_interactive_log()
+        test_qq_deliver_spoken_emits_interactive_log()
+        test_qq_skip_generation_emits_interactive_log()
         test_format_llm_exchange_indent_and_sections()
         test_format_llm_exchange_optional_reasoning()
         test_format_llm_exchange_redacts_data_url()

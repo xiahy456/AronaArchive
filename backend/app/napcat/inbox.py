@@ -20,7 +20,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -176,14 +178,26 @@ class QqInbox:
                         logger.info("followup acked by qq keys=%s", acked)
                 scheduler.note_user_activity()
             client_online = bool(hub is not None and hub.all_sessions())
+            photos = list(images or [])
+            started_at = time.perf_counter()
+            request_json = json.dumps(
+                {
+                    "type": "qq",
+                    "content": text,
+                    "image_count": len(photos),
+                },
+                ensure_ascii=False,
+            )
             await state.orchestrator.handle_chat(
                 session_id=QQ_SESSION_ID,
                 content=text,
                 options={},
                 send=self._send_direct,
+                request_json=request_json,
+                started_at=started_at,
                 inbound_method=METHOD_MESSAGE,
                 client_online=client_online,
-                qq_images=list(images or []),
+                qq_images=photos,
             )
             from ..life.thought.triggers import note_finished_turn
 

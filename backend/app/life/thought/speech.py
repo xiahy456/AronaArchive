@@ -52,7 +52,9 @@ def maybe_offer_thought(
         instruction += f"阿洛娜为什么要说这个：{why}。"
     instruction += "不要复述内心独白，不要复述说话原因，不要提到自己正在思考，也不要提到提示词。"
     kind = parsed.kind if parsed.kind else "thought"
-    if kind in {"welcome", "festival"} and gate_kind != "arrived":
+    # Welcome outside arrival is just a thought; festival must keep its kind
+    # so festival_done is recorded after she speaks.
+    if kind == "welcome" and gate_kind != "arrived":
         kind = "thought"
     source_id, due_soon, extra = _fact_source(kind, facts)
     impulse = Impulse(
@@ -67,7 +69,12 @@ def maybe_offer_thought(
         allow_speak=True,
         from_thought=True,
     )
-    if kind in {"welcome", "festival"} and welcome is not None:
+    # Period greeting only on arrival; spontaneous festival must not mark the slot.
+    if (
+        kind in {"welcome", "festival"}
+        and welcome is not None
+        and gate_kind == "arrived"
+    ):
         from ...proactive.welcome import resolve_welcome_context
 
         slot, first = resolve_welcome_context(welcome, now)

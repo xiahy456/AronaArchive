@@ -59,7 +59,14 @@ from .knowledge import KnowledgeRetriever
 from .life.state import InnerState
 from .life.thought.schema import is_thought_history_marker
 from .life.turn import format_interrupt_block
-from .logging_utils import begin_trace, preview, preview_list, reset_trace, update_trace
+from .logging_utils import (
+    begin_trace,
+    format_interactive_log,
+    preview,
+    preview_list,
+    reset_trace,
+    update_trace,
+)
 from .memory.extractor import MemoryExtractor
 from .memory.store import MemoryStore
 from .memory.trigger import should_extract
@@ -286,27 +293,32 @@ class Orchestrator:
     ) -> bool:
         """Push one spoken line. False leaves the assistant line unstored."""
         spoken = (text or "").strip()
+        payload = msg_chat_response(
+            text,
+            context_used=context_used,
+            latency=round(latency, 4),
+            emotion=emotion,
+        )
         if method == "message":
             link = getattr(self, "napcat", None)
+            ok = False
             if link is None or not getattr(link, "connected", False) or not spoken:
                 logger.info("outbound undelivered method=message reason=napcat_down")
-                return False
-            emoji = lookup_emoji(emotion)
-            ok = await link.send_text(spoken, emoji=emoji)
-            if not ok:
-                logger.info("outbound undelivered method=message reason=send_failed")
+            else:
+                emoji = lookup_emoji(emotion)
+                ok = await link.send_text(spoken, emoji=emoji)
+                if not ok:
+                    logger.info(
+                        "outbound undelivered method=message reason=send_failed"
+                    )
+            # QQ bypasses ws_handler.send; emit the same interactive block here.
+            logger.info("%s", format_interactive_log(payload))
+            reset_trace()
             return bool(ok)
         if not client_online:
             logger.info("outbound undelivered method=direct reason=client_offline")
             return False
-        await send(
-            msg_chat_response(
-                text,
-                context_used=context_used,
-                latency=round(latency, 4),
-                emotion=emotion,
-            )
-        )
+        await send(payload)
         if emit_emotion:
             self._emit_life_action(on_life_action, "speak", emotion)
         return True
@@ -1453,15 +1465,18 @@ class Orchestrator:
         action = "silence" if reason == "reply_ok_false" else (
             decision.action if decision is not None else "silence"
         )
+        payload = msg_chat_response(
+            "",
+            context_used=action,
+            latency=round(latency, 4),
+            emotion=emotion,
+        )
         if inbound_method != "message" and client_online:
-            await send(
-                msg_chat_response(
-                    "",
-                    context_used=action,
-                    latency=round(latency, 4),
-                    emotion=emotion,
-                )
-            )
+            await send(payload)
+        elif inbound_method == "message":
+            # QQ silence/refuse never hits ws_handler.send.
+            logger.info("%s", format_interactive_log(payload))
+            reset_trace()
         if on_sent is not None:
             on_sent()
         key = "silence_count" if action == "silence" else "refuse_count"

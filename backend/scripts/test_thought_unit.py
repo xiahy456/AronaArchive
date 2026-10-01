@@ -3152,6 +3152,183 @@ def test_arrival_greeting_falls_back_only_on_failure() -> None:
             )
 
 
+def test_festival_speech_marks_done_outside_arrival() -> None:
+    print("== festival blessings mark festival_done even outside arrival ==")
+    from app.config import FestivalConfig, IdleConfig, CareConfig, GoalConfig, MoodFollowupConfig
+    from app.life.impulse import flush_impulse
+    from app.life.thought.schema import parse_inner
+    from app.proactive.scheduler import ProactiveScheduler, SituationFact
+    from app.proactive.welcome import WelcomeState
+
+    national_day = datetime(2026, 10, 1, 11, 47, 0)
+    facts = (
+        SituationFact(
+            kind="festival",
+            text="今天是国庆节，还没祝贺",
+            key="national",
+        ),
+    )
+
+    def _parsed(kind: str, about: str):
+        raw = json.dumps(
+            {
+                "focus": about,
+                "thought": "想说一句。",
+                "keep": "drop",
+                "urge": {
+                    "speak": True,
+                    "about": about,
+                    "kind": kind,
+                    "wait": "now",
+                    "why": "今天是国庆节",
+                },
+                "confidence": "high",
+            },
+            ensure_ascii=False,
+        )
+        parsed = parse_inner(raw)
+        if parsed is None:
+            _fail(f"festival urge should parse: {raw}")
+        return parsed
+
+    async def _send(_payload: dict) -> None:
+        return None
+
+    class _Hub:
+        def __init__(self) -> None:
+            self.busy = False
+
+        def all_sessions(self):
+            return [("s1", _send)]
+
+        def idle_sessions(self):
+            return [] if self.busy else [("s1", _send)]
+
+        def get(self, sid):
+            return _send if sid == "s1" else None
+
+        def is_busy(self, _sid):
+            return self.busy
+
+        def any_busy(self):
+            return self.busy
+
+        def set_busy(self, _sid, busy):
+            self.busy = busy
+
+    def _app(root: Path, label: str, spoken_line: str):
+        engine = LifeEngine.from_path(root / f"life-{label}.json", LifeSettings())
+        scheduler = ProactiveScheduler(
+            root / f"pro-{label}.json",
+            idle_cfg=IdleConfig(),
+            care_cfg=CareConfig(),
+            goal_cfg=GoalConfig(enabled=False),
+            festival_cfg=FestivalConfig(enabled=True),
+            mood_cfg=MoodFollowupConfig(enabled=False),
+        )
+        welcome = WelcomeState(None)
+
+        class _Orch:
+            last_initiate_text = spoken_line
+
+            async def handle_initiate(self, **_kwargs):
+                return "sent"
+
+        return SimpleNamespace(
+            life=engine,
+            hub=_Hub(),
+            scheduler=scheduler,
+            welcome=welcome,
+            journal=None,
+            arona_memory=None,
+            life_journal=None,
+            orchestrator=_Orch(),
+        )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+
+        spontaneous = _app(root, "spontaneous", "老师，国庆节快乐～")
+        if not maybe_offer_thought(
+            spontaneous.life,
+            _parsed("festival", "国庆节快乐"),
+            now=national_day,
+            facts=facts,
+            welcome=spontaneous.welcome,
+            gate_kind="spontaneous",
+        ):
+            _fail("a spontaneous festival blessing should enqueue")
+        impulse = spontaneous.life.state.pending_impulse
+        if impulse is None or impulse.kind != "festival" or impulse.source_id != "national":
+            _fail(f"spontaneous festival must keep festival kind and id, got {impulse}")
+        if impulse.first_in_slot or impulse.slot_id or impulse.date_key:
+            _fail("spontaneous festival must not attach welcome-period context")
+        if not asyncio.run(flush_impulse(spontaneous, now=national_day)):
+            _fail("the spontaneous festival line should speak")
+        if "national" not in spontaneous.scheduler.state.festival_done:
+            _fail(
+                f"spontaneous festival speech should mark festival_done, "
+                f"got {spontaneous.scheduler.state.festival_done}"
+            )
+        if spontaneous.welcome._period_greeted:
+            _fail("spontaneous festival must not mark the welcome period")
+        after = spontaneous.scheduler.situation_facts(national_day)
+        texts = [item.text for item in after if item.kind == "festival"]
+        if texts != ["今天是国庆节，已经祝贺"]:
+            _fail(f"situation facts should flip to 已经祝贺, got {texts}")
+
+        breakfast = _app(root, "breakfast", "老师，国庆节快乐～早饭窗口开了哦")
+        if not maybe_offer_thought(
+            breakfast.life,
+            _parsed("breakfast", "国庆节快乐，还有早饭窗口到了"),
+            now=national_day,
+            facts=facts
+            + (
+                SituationFact(
+                    kind="breakfast",
+                    text="现在处于早饭窗口，今天还没提过早饭",
+                ),
+            ),
+            welcome=breakfast.welcome,
+            gate_kind="spontaneous",
+        ):
+            _fail("a breakfast line that also blesses the festival should enqueue")
+        meal = breakfast.life.state.pending_impulse
+        if meal is None or meal.kind != "breakfast":
+            _fail(f"breakfast kind should stay breakfast, got {meal}")
+        if not asyncio.run(flush_impulse(breakfast, now=national_day)):
+            _fail("the breakfast festival line should speak")
+        if "national" not in breakfast.scheduler.state.festival_done:
+            _fail(
+                f"festival wording inside breakfast should mark festival_done, "
+                f"got {breakfast.scheduler.state.festival_done}"
+            )
+        if "breakfast" not in breakfast.scheduler.state.care_done:
+            _fail("breakfast speech should still mark care_done")
+
+        thought_only = _app(root, "thought", "老师，国庆节快乐呀！")
+        if not maybe_offer_thought(
+            thought_only.life,
+            _parsed("thought", "跟老师说一声国庆节快乐"),
+            now=national_day,
+            facts=facts,
+            welcome=thought_only.welcome,
+            gate_kind="spontaneous",
+        ):
+            _fail("a thought-kind festival blessing should enqueue")
+        plain = thought_only.life.state.pending_impulse
+        if plain is None or plain.kind != "thought":
+            _fail(f"thought kind should stay thought, got {plain}")
+        if not asyncio.run(flush_impulse(thought_only, now=national_day)):
+            _fail("the thought festival line should speak")
+        if "national" not in thought_only.scheduler.state.festival_done:
+            _fail(
+                f"festival wording inside thought should mark festival_done, "
+                f"got {thought_only.scheduler.state.festival_done}"
+            )
+    print("  ok")
+
+
 def test_aftertaste_restarts_from_the_latest_turn() -> None:
     print("== a new turn replaces the waiting aftertaste ==")
     from app.life.thought.triggers import note_finished_turn
@@ -3542,6 +3719,7 @@ def main() -> None:
     test_rest_consolidate()
     test_situation_facts_do_not_enqueue()
     test_arrival_greeting_falls_back_only_on_failure()
+    test_festival_speech_marks_done_outside_arrival()
     test_live_inner_model()
     test_live_secure_play()
     test_live_dialogue_scenes()
