@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import sys
+import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -28,7 +29,10 @@ from app.logging_utils import (  # noqa: E402
     update_trace,
 )
 from app.orchestrator import Orchestrator  # noqa: E402
+from app.planner.schema import IntentCard  # noqa: E402
+from app.relationship.engine import RelationshipEngine, RelationshipSettings  # noqa: E402
 from app.relationship.policy import Decision  # noqa: E402
+from app.relationship.store import RelationshipStore  # noqa: E402
 
 
 def _fail(msg: str) -> None:
@@ -464,6 +468,75 @@ def test_format_llm_exchange_redacts_data_url() -> None:
     print("  ok")
 
 
+def test_qq_undelivered_skips_relationship_commit() -> None:
+    print("== QQ undelivered chat does not commit relationship Δ ==")
+
+    async def _run() -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "rel.json"
+            settings = RelationshipSettings(beta=0.02)
+            engine = RelationshipEngine.from_path(path, settings)
+            engine.state.trust = 0.80
+            engine.state.dependence = 0.50
+            engine.state.tension = 0.40
+            engine.store.save(engine.state)
+            before = engine.state.snapshot()
+
+            cfg = AppConfig()
+            cfg.proactive.relationship.enabled = True
+            cfg.knowledge.enabled = False
+            orch = Orchestrator(
+                cfg,
+                model=MagicMock(),
+                conversations=MagicMock(),
+                memory_store=MagicMock(),
+                extractor=MagicMock(),
+                knowledge=MagicMock(),
+            )
+            orch.relationship = engine
+            orch.conversations.get_history.return_value = []
+            orch.conversations.append = MagicMock()
+            orch.conversations.turn_count.return_value = 0
+            orch.conversations.extract_buffer_turn_count.return_value = 0
+            orch.knowledge.enabled = False
+            orch.planner = MagicMock()
+            orch.planner.enabled = True
+            orch.planner.plan = AsyncMock(
+                return_value=IntentCard(
+                    draft="在的，老师。",
+                    arona_emotion="smile",
+                    followup_ok=False,
+                    reply_ok=True,
+                    user_act="other",
+                    method="message",
+                )
+            )
+            orch._deliver_spoken = AsyncMock(return_value=False)
+
+            await orch.handle_chat(
+                session_id="qq",
+                content="你好啊",
+                options={"use_rag": False, "use_memory": False},
+                send=AsyncMock(),
+                inbound_method="message",
+                client_online=False,
+            )
+
+            reloaded = RelationshipStore(path).load()
+            if (
+                reloaded.trust != before["trust"]
+                or reloaded.dependence != before["dependence"]
+                or reloaded.tension != before["tension"]
+            ):
+                _fail(
+                    f"undelivered must not change A/B/C: before={before} "
+                    f"after={reloaded.snapshot()}"
+                )
+
+    asyncio.run(_run())
+    print("  ok")
+
+
 def main() -> None:
     try:
         test_pretty_json()
@@ -474,6 +547,7 @@ def main() -> None:
         test_qq_request_json_in_interactive_log()
         test_qq_deliver_spoken_emits_interactive_log()
         test_qq_skip_generation_emits_interactive_log()
+        test_qq_undelivered_skips_relationship_commit()
         test_format_llm_exchange_indent_and_sections()
         test_format_llm_exchange_optional_reasoning()
         test_format_llm_exchange_redacts_data_url()

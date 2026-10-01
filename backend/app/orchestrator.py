@@ -671,14 +671,13 @@ class Orchestrator:
             client_online=client_online,
             emit_emotion=True,
         )
-        _commit_relationship()
-
-        self.conversations.append(session_id, "user", user_text, method=inbound_method)
-        if delivered:
-            self.conversations.append(session_id, "assistant", full, method=method)
-        _committed()
 
         if not delivered:
+            # Keep relationship at pre-turn state: no user Δ without a delivered reply.
+            self.conversations.append(
+                session_id, "user", user_text, method=inbound_method
+            )
+            _committed()
             logger.info(
                 "chat undelivered session=%s method=%s request=%r",
                 session_id,
@@ -686,6 +685,11 @@ class Orchestrator:
                 user_text,
             )
             return True
+
+        _commit_relationship()
+        self.conversations.append(session_id, "user", user_text, method=inbound_method)
+        self.conversations.append(session_id, "assistant", full, method=method)
+        _committed()
 
         await self._maybe_extract(session_id, user_text)
         self._note_arona_relationship(decision, "speak")
@@ -713,6 +717,7 @@ class Orchestrator:
             interrupt_ctx=interrupt_ctx,
             on_life_action=on_life_action,
             client_online=client_online,
+            inbound_method=inbound_method,
         )
         return True
 
@@ -919,6 +924,7 @@ class Orchestrator:
         interrupt_ctx: InnerState | None = None,
         on_life_action: LifeActionFn | None = None,
         client_online: bool = True,
+        inbound_method: str = "",
     ) -> InitiateResult:
         """Generate a system-event line (welcome / idle / care / goal / continue / interact).
 
@@ -1129,7 +1135,7 @@ class Orchestrator:
 
         method = self._resolve_outbound(
             intent,
-            inbound="",
+            inbound=inbound_method,
             proactive=True,
             client_online=client_online,
         )
@@ -1364,6 +1370,7 @@ class Orchestrator:
         interrupt_ctx: InnerState | None = None,
         on_life_action: LifeActionFn | None = None,
         client_online: bool = True,
+        inbound_method: str = "",
     ) -> None:
         if intent is None or not intent.followup_ok:
             return
@@ -1398,6 +1405,7 @@ class Orchestrator:
             interrupt_ctx=interrupt_ctx,
             on_life_action=on_life_action,
             client_online=client_online,
+            inbound_method=inbound_method,
         )
 
     def _stance_args(self) -> dict[str, str]:

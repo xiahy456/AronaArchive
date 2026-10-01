@@ -47,10 +47,11 @@ def default_outbound_method(
     client_online: bool = False,
 ) -> str:
     """Used only when the model omits method or writes something illegal."""
-    if proactive:
-        return METHOD_DIRECT if client_online else METHOD_MESSAGE
+    # QQ-originated turns (including continue) stay on QQ unless the model chooses.
     if normalize_method(inbound) == METHOD_MESSAGE:
         return METHOD_MESSAGE
+    if proactive:
+        return METHOD_DIRECT if client_online else METHOD_MESSAGE
     return METHOD_DIRECT
 
 
@@ -62,6 +63,14 @@ def resolve_outbound_method(
     client_online: bool = False,
 ) -> str:
     chosen = normalize_method(raw)
+    # Teacher came from QQ but model picked face-to-face while desktop is offline:
+    # fall back to QQ so the line is not lost as undelivered.
+    if (
+        chosen == METHOD_DIRECT
+        and normalize_method(inbound) == METHOD_MESSAGE
+        and not client_online
+    ):
+        return METHOD_MESSAGE
     if chosen:
         return chosen
     return default_outbound_method(

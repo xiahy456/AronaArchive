@@ -77,9 +77,14 @@ class RelationshipState:
         """Apply Δ with inertia, regression, makeup, and daily cap.
 
         new = clamp(old + α*Δ - β*(old - baseline), -1, 1)
+
+        Zero Δ is a no-op: skip β regression and daily-cap accounting so empty
+        events (``other`` / ``crisis``) do not silently erode elevated values.
         """
-        self._roll_day(now)
         da, db, dc = delta
+        if da == 0.0 and db == 0.0 and dc == 0.0:
+            return (0.0, 0.0, 0.0)
+        self._roll_day(now)
         if self.tension > makeup_tension and da > 0:
             da *= makeup_trust_scale
 

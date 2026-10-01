@@ -28,12 +28,17 @@ from .events import UserAct
 _REJECT_RE = re.compile(
     r"(别烦|不要烦|闭嘴|你说得不对|说得不对|滚|烦死|走开|别烦我)"
 )
-_DEPART_RE = re.compile(
+# Strong leave-taking: match anywhere in a single utterance.
+_HARD_DEPART_RE = re.compile(
     r"(离开一会|离开一下|先走了|我得走|有事情要干|有事要忙|我先去忙|我去忙|"
     r"回头再聊|失陪|有个任务|任务需要完成|我先去办|"
-    r"去做别的|做别的事|稍等|等一下|等我一下|"
-    r"马上回来|马上就回|一会就回|一会儿就回)"
+    r"去做别的|做别的事)"
 )
+# Soft wait / brief pause: only short utterances count as depart.
+_SOFT_WAIT_RE = re.compile(
+    r"(稍等|等一下|等我一下|马上回来|马上就回|一会就回|一会儿就回)"
+)
+_SOFT_WAIT_MAX_COMPACT = 24
 _WORRY_BOND_RE = re.compile(
     r"(会不会感到厌烦|会不会厌烦|嫌弃|打扰到你|烦到你|你会不会厌|是不是烦)"
 )
@@ -59,36 +64,68 @@ _SHORT_ACK_RE = re.compile(
 )
 
 
-def classify_user_act(text: str) -> UserAct:
-    raw = (text or "").strip()
-    if not raw:
-        return "other"
-    compact = re.sub(r"[\s!~！。？?~～…,.，、]+", "", raw)
+def _compact(text: str) -> str:
+    return re.sub(r"[\s!~！。？?~～…,.，、]+", "", text)
 
-    if is_crisis_text(raw):
+
+def _classify_single(raw: str) -> UserAct:
+    """Classify one utterance (no newline coalescing)."""
+    text = (raw or "").strip()
+    if not text:
+        return "other"
+    compact = _compact(text)
+
+    if is_crisis_text(text):
         return CRISIS_USER_ACT  # type: ignore[return-value]
-    if _REJECT_RE.search(raw):
+    if _REJECT_RE.search(text):
         return "reject"
-    if _DEPART_RE.search(raw):
+    if _HARD_DEPART_RE.search(text):
         return "depart"
-    if _WORRY_BOND_RE.search(raw):
+    if _SOFT_WAIT_RE.search(text) and len(compact) <= _SOFT_WAIT_MAX_COMPACT:
+        return "depart"
+    if _WORRY_BOND_RE.search(text):
         return "worry_bond"
-    if _AFFECTION_RE.search(raw):
+    if _AFFECTION_RE.search(text):
         return "affection"
-    if _GRATITUDE_RE.search(raw):
+    if _GRATITUDE_RE.search(text):
         return "gratitude"
-    if _VALIDATION_RE.search(raw):
+    if _VALIDATION_RE.search(text):
         return "seek_validation"
-    if _FATIGUE_RE.search(raw):
+    if _FATIGUE_RE.search(text):
         return "fatigue"
-    if _TEASE_RE.search(raw):
+    if _TEASE_RE.search(text):
         return "play_tease"
-    if _INSTRUMENTAL_RE.search(raw):
+    if _INSTRUMENTAL_RE.search(text):
         return "instrumental"
-    if _DISCLOSE_RE.search(raw):
+    if _DISCLOSE_RE.search(text):
         return "self_disclose"
     if len(compact) <= 6 and _SHORT_ACK_RE.match(compact):
         return "short_ack"
     if len(compact) <= 2 and compact in {"嗯", "哦", "啊", "好", "行"}:
         return "short_ack"
+    return "other"
+
+
+def classify_user_act(text: str) -> UserAct:
+    raw = (text or "").strip()
+    if not raw:
+        return "other"
+
+    lines = [line.strip() for line in raw.splitlines() if line.strip()]
+    if len(lines) <= 1:
+        return _classify_single(raw)
+
+    # QQ coalesce joins bursts with \\n. Only treat as depart when the last
+    # line (or a majority of lines) is leave-taking; otherwise keep the
+    # strongest non-depart intent from the burst.
+    acts = [_classify_single(line) for line in lines]
+    depart_count = sum(1 for act in acts if act == "depart")
+    if acts[-1] == "depart" or depart_count > len(acts) / 2:
+        return "depart"
+    for act in reversed(acts):
+        if act not in {"depart", "other"}:
+            return act
+    for act in reversed(acts):
+        if act != "depart":
+            return act
     return "other"

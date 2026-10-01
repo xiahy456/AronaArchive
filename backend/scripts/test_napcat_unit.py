@@ -15,7 +15,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from app.channel import method_label  # noqa: E402
+from app.channel import (  # noqa: E402
+    METHOD_DIRECT,
+    METHOD_MESSAGE,
+    default_outbound_method,
+    method_label,
+    resolve_outbound_method,
+)
 from app.config import NapcatConfig, load_config  # noqa: E402
 from app.conversation import ConversationManager, DialogueEntry, _format_transcript  # noqa: E402
 from app.life.impulse import _speak_impulse  # noqa: E402
@@ -587,6 +593,36 @@ async def test_get_file_roundtrip() -> None:
     print("get_file ok")
 
 
+def test_outbound_qq_fallback() -> None:
+    # inbound QQ + model picked direct while desktop offline → stay on QQ
+    got = resolve_outbound_method(
+        METHOD_DIRECT,
+        inbound=METHOD_MESSAGE,
+        proactive=False,
+        client_online=False,
+    )
+    if got != METHOD_MESSAGE:
+        _fail(f"offline QQ inbound must fall back to message, got {got}")
+    # desktop online: honor explicit direct
+    got_online = resolve_outbound_method(
+        METHOD_DIRECT,
+        inbound=METHOD_MESSAGE,
+        proactive=False,
+        client_online=True,
+    )
+    if got_online != METHOD_DIRECT:
+        _fail(f"online client may keep direct, got {got_online}")
+    # continue after QQ: default stays on message even if client online
+    cont = default_outbound_method(
+        inbound=METHOD_MESSAGE,
+        proactive=True,
+        client_online=True,
+    )
+    if cont != METHOD_MESSAGE:
+        _fail(f"QQ continue default must be message, got {cont}")
+    print("outbound qq fallback ok")
+
+
 def test_config() -> None:
     cfg = NapcatConfig(user_qq_id=10001, napcat_ws_path="arona", napcat_token=" tok ")
     if cfg.user_qq_id != "10001" or cfg.napcat_ws_path != "/arona" or cfg.napcat_token != "tok":
@@ -603,6 +639,7 @@ def main() -> None:
     test_prompt_method()
     test_emoji_catalog()
     test_qq_images()
+    test_outbound_qq_fallback()
     test_config()
     asyncio.run(test_link_send())
     asyncio.run(test_emoji_send())

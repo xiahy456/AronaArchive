@@ -461,8 +461,8 @@ def map_arona_act(
         return None
     if user_act == "crisis":
         return None
-    if climate in {"cling_risk", "fragile"}:
-        return "gave_space"
+    # cling_risk / fragile silence still maps to gave_space above; spoken
+    # replies are normal follow-ups so every QQ turn does not drain dependence.
     if user_act == "depart":
         return "gave_space"
     if user_act == "play_tease":

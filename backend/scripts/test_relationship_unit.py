@@ -63,6 +63,29 @@ def test_apply_delta_formula() -> None:
     print("  ok")
 
 
+def test_zero_delta_skips_beta() -> None:
+    print("== zero Δ skips β regression ==")
+    state = RelationshipState(trust=0.80, dependence=0.50, tension=0.40, day="2026-08-13")
+    applied = state.apply_delta(
+        (0.0, 0.0, 0.0),
+        alpha=0.3,
+        beta=0.02,
+        baseline=(0.55, 0.30, 0.25),
+        daily_abs_cap=1.0,
+        now=datetime(2026, 8, 13, 12, 0, 0),
+    )
+    if applied != (0.0, 0.0, 0.0):
+        _fail(f"zero Δ should apply nothing, got {applied}")
+    if state.trust != 0.80 or state.dependence != 0.50 or state.tension != 0.40:
+        _fail(
+            f"zero Δ must not regress: "
+            f"trust={state.trust} dependence={state.dependence} tension={state.tension}"
+        )
+    if state.day_abs_trust != 0.0:
+        _fail("zero Δ must not consume daily cap")
+    print("  ok")
+
+
 def test_makeup_amplifies_positive_trust() -> None:
     print("== makeup when tension high ==")
     high = RelationshipState(trust=0.40, dependence=0.30, tension=0.80, day="2026-08-13")
@@ -197,6 +220,21 @@ def test_classify_and_events() -> None:
     assert classify_user_act("啊，阿洛娜，抱歉，刚刚我去做别的事情了") == "depart"
     assert classify_user_act("嗯，稍等一下哦，我马上就回来") == "depart"
     assert classify_user_act("好") == "short_ack"
+    # Soft wait inside a long utterance must not force depart.
+    assert (
+        classify_user_act(
+            "今天我们讨论一下项目进度，等一下我把文件发给你，然后你看看接口设计"
+        )
+        == "other"
+    )
+    # QQ coalesce: incidental wait mid-burst, last line is content.
+    assert (
+        classify_user_act("等一下\n今天天气不错呢") == "other"
+    )
+    # QQ coalesce: last line leave-taking wins.
+    assert (
+        classify_user_act("今天天气不错呢\n我先去忙了") == "depart"
+    )
     if USER_DELTAS["seek_validation"][1] <= 0:
         _fail("seek_validation should raise dependence")
     if USER_DELTAS["depart"][1] >= 0:
@@ -327,6 +365,12 @@ def test_welcome_not_teased_and_speak_not_ratchet() -> None:
         _fail("play_tease speak should be teased")
     if map_arona_act("speak", "secure_play", "depart") != "gave_space":
         _fail("depart speak should be gave_space")
+    if map_arona_act("speak", "cling_risk", "other") != "followed_up":
+        _fail("cling_risk speak should be followed_up, not gave_space")
+    if map_arona_act("continue", "fragile", "other") != "followed_up":
+        _fail("fragile continue should be followed_up, not gave_space")
+    if map_arona_act("silence", "cling_risk", "short_ack") != "gave_space":
+        _fail("cling_risk silence should still be gave_space")
     if ARONA_DELTAS["greeted"][2] != 0.0:
         _fail("greeted should not raise tension")
     if ARONA_DELTAS["followed_up"][2] >= ARONA_DELTAS["teased"][2]:
@@ -817,6 +861,7 @@ def test_config_loads() -> None:
 
 def main() -> None:
     test_apply_delta_formula()
+    test_zero_delta_skips_beta()
     test_makeup_amplifies_positive_trust()
     test_daily_cap_and_cross_day()
     test_climate_zones()
