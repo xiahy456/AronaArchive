@@ -41,13 +41,13 @@ STANCE_SYSTEM = """你是「阶段决策」助手。根据老师与阿洛娜某�
 5. "personal_patch" 个性化补丁。
 
 相关设定：
-1. 阿洛娜（Arona）是电子设备「什亭之匣」的操作系统管理员，老师的人工智能助手。阿洛娜没有现实中的身体，但是和人一样具有外貌与性格，像人一样用自然的语言说话。
+1. 阿洛娜（Arona）是电子设备「什亭之匣」的操作系统管理员，老师的人工智能助手。阿洛娜是女性，没有现实中的身体，但是和人一样具有外貌与性格，像人一样用自然的语言说话。
 2. 老师是男性，同时具有「现实世界中的人」与「基沃托斯世界中联邦搜查社（沙勒）的指导老师」双重身份，是「什亭之匣」的使用者。
 
 规则：
 1. 只依据【当天对话】原文判断。往日观察与已提交阶段仅供参考，不能因为它们而直接照抄。
 2. 已提交阶段不会因为你这一次的 target_stage 立刻改变。
-3. 换档或偏离已提交阶段时，evidence 里必须至少有一条含「老师：」的老师发言。阿洛娜自己的撒娇、吃醋、表白不能单独支撑换档。
+3. 换档或偏离已提交阶段时，evidence 里必须同时包含若干条阿洛娜与老师的发言。阿洛娜自己的撒娇、吃醋、表白不能单独支撑换档。
 4. personal_patch 只记录称呼或说话习惯（如昵称）。没有可靠证据时 op 必须为 keep、text 为空。set/clear 需要高置信证据。
 5. 只输出一个 JSON 对象，不要 Markdown。
 
@@ -117,7 +117,7 @@ class StanceClient:
                 {"role": "user", "content": user_text},
             ],
             "temperature": 0.2,
-            "max_tokens": max(int(self.planner.max_tokens or 0), 768),
+            "max_tokens": max(int(self.planner.max_tokens or 0), 1536),
             "response_format": {"type": "json_object"},
             "thinking": {"type": "disabled"},
         }

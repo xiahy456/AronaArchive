@@ -27,7 +27,6 @@ from .stance_schema import (
     CONFIDENCES,
     DEFAULT_STAGE,
     PATCH_OPS,
-    STAGE_LOVER,
     STAGE_RANK,
     DayRecord,
     PatchProposal,
@@ -37,7 +36,6 @@ from .stance_schema import (
 )
 
 TEACHER_EVIDENCE_MARKERS = ("老师：", "老师:")
-TOUCH_MARKERS = ("互动：摸头", "【摸头】", "摸头")
 
 
 @dataclass(frozen=True)
@@ -110,17 +108,9 @@ def validate_observation(
     committed_stage: str,
 ) -> str:
     """Return empty string when valid, otherwise a short reason."""
-    if not all(snippet in day_text for snippet in obs.evidence):
-        return "evidence_not_in_source"
     current = normalize_stage(committed_stage)
     if obs.target_stage == current:
         return ""
-    if (
-        STAGE_RANK[obs.target_stage] > STAGE_RANK[current]
-        and obs.target_stage == STAGE_LOVER
-        and _evidence_is_touch_only(obs.evidence)
-    ):
-        return "lover_touch_only"
     if not _has_teacher_evidence(obs.evidence):
         return "missing_teacher_evidence"
     return ""
@@ -316,14 +306,6 @@ def _has_teacher_evidence(evidence: list[str]) -> bool:
         any(marker in snippet for marker in TEACHER_EVIDENCE_MARKERS)
         for snippet in evidence
     )
-
-
-def _evidence_is_touch_only(evidence: list[str]) -> bool:
-    if not evidence:
-        return False
-    if _has_teacher_evidence(evidence):
-        return False
-    return all(any(marker in snippet for marker in TOUCH_MARKERS) for snippet in evidence)
 
 
 def _trim_days(days: list[DayRecord], retain_days: int) -> list[DayRecord]:

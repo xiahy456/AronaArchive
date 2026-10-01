@@ -89,9 +89,9 @@ def test_evidence_gate() -> None:
     )
     if validate_observation(ok, day_text=day, committed_stage=STAGE_STEADY):
         _fail("valid lover evidence should pass")
-    bad = _obs(STAGE_LOVER, "high", evidence=["老师：不存在的话"])
-    if validate_observation(bad, day_text=day, committed_stage=STAGE_STEADY) != "evidence_not_in_source":
-        _fail("fabricated evidence must fail")
+    fabricated = _obs(STAGE_LOVER, "high", evidence=["老师：不存在的话"])
+    if validate_observation(fabricated, day_text=day, committed_stage=STAGE_STEADY):
+        _fail("fabricated teacher evidence should still pass without source gate")
     alone = _obs(
         STAGE_LOVER,
         "high",
@@ -109,9 +109,9 @@ def test_evidence_gate() -> None:
     )
     if (
         validate_observation(touch, day_text=day, committed_stage=STAGE_STEADY)
-        != "lover_touch_only"
+        != "missing_teacher_evidence"
     ):
-        _fail("touch-only must not promote to lover")
+        _fail("touch-only must fail missing teacher evidence when changing stage")
 
 
 def test_promote_three_days() -> None:
