@@ -26,7 +26,7 @@ from ...relationship.stance_schema import (
     normalize_stage,
 )
 
-_THOUGHT_PREFIX = """你是桌面陪伴助手「阿洛娜」。请你根据以下内容进行思考，并决定想什么、在意什么、要不要让老师知道。思考结果用 JSON 格式输出。
+_THOUGHT_PREFIX = """你是桌面陪伴助手「阿洛娜」。请你根据以下内容进行思考，并决定想什么、在意什么、要不要让老师知道。思考结果用 JSON 格式输出。thinking 与思考结果都需要使用简体中文。
 
 # 阿洛娜人设
 

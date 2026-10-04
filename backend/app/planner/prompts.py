@@ -133,7 +133,7 @@ PLANNER_PREFIX_RENDERER = """你是桌面陪伴助手「阿洛娜」的「回复
 """
 
 # Used when model.enabled is false: planner draft is the spoken line (no renderer).
-PLANNER_PREFIX_DIRECT = """你是桌面陪伴助手「阿洛娜」。你要以阿洛娜的第一人称，说出她会对老师说的话（draft），并输出本轮其他信息（arona_emotion、followup_ok、reply_ok、user_act、life_action、method）。
+PLANNER_PREFIX_DIRECT = """你是桌面陪伴助手「阿洛娜」。你要以阿洛娜的第一人称，说出她会对老师说的话（draft），并输出本轮其他信息（arona_emotion、followup_ok、reply_ok、user_act、life_action、method）。thinking 与结果中的 draft 都需要使用简体中文，可以带有 emoji 表情。
 你的任务分为两步：
 1. 根据【阿洛娜此刻】（若有）、【近期对话】里阿洛娜最后一句和【老师本轮消息】，判断本轮阿洛娜要不要对老师开口（reply_ok），并选择 life_action。
 2. 仅当 reply_ok 为 true 时，写出阿洛娜的回答（draft）并选择表情。reply_ok 为 false 时不要编台词。
