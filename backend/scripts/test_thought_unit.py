@@ -1032,6 +1032,34 @@ def test_failed_call_writes_nothing() -> None:
     print("  ok")
 
 
+def test_thought_thinking_config() -> None:
+    print("== thought thinking toggles deep thinking ==")
+    from app.config import PlannerConfig, ThoughtConfig
+    from app.life.thought.client import ThoughtClient
+
+    default_client = ThoughtClient(PlannerConfig(max_tokens=512))
+    if default_client.thought.thinking is not False:
+        _fail(f"default thought.thinking={default_client.thought.thinking}")
+    if default_client._thinking_body() != {"type": "disabled"}:
+        _fail(f"default thinking body={default_client._thinking_body()}")
+    if default_client._complete_max_tokens() != 1024:
+        _fail(f"default thought max_tokens={default_client._complete_max_tokens()}")
+    off = ThoughtClient(PlannerConfig(max_tokens=512), thought=ThoughtConfig(thinking=False))
+    if off._thinking_body() != {"type": "disabled"}:
+        _fail(f"explicit false thinking body={off._thinking_body()}")
+    on = ThoughtClient(PlannerConfig(max_tokens=512), thought=ThoughtConfig(thinking=True))
+    if on._thinking_body() != {"type": "enabled"}:
+        _fail(f"explicit true thinking body={on._thinking_body()}")
+    if on._complete_max_tokens() != 8192:
+        _fail(f"thinking max_tokens={on._complete_max_tokens()}")
+    high = ThoughtClient(
+        PlannerConfig(max_tokens=16384), thought=ThoughtConfig(thinking=True)
+    )
+    if high._complete_max_tokens() != 16384:
+        _fail(f"high thinking max_tokens={high._complete_max_tokens()}")
+    print("  ok")
+
+
 def test_live_inner_model() -> None:
     print("== live inner model ==")
     from app.config import get_config
@@ -3706,6 +3734,7 @@ def main() -> None:
     test_sources_for_each_trigger()
     test_commit_boundaries()
     test_failed_call_writes_nothing()
+    test_thought_thinking_config()
     test_second_hop()
     test_event_triggers()
     test_glance_refusal_forgets_sources()

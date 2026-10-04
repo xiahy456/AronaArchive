@@ -8,9 +8,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.config import load_config
+from app.config import PlannerConfig, load_config
 from app.conversation import ConversationManager
 from app.planner import EMOTION_WHITELIST, normalize_emotion, parse_and_gate_intent, resolve_life_action
+from app.planner.client import PlannerClient
 from app.planner.prompts import (
     PLANNER_PREFIX_DIRECT,
     PLANNER_PREFIX_RENDERER,
@@ -397,5 +398,19 @@ def main() -> None:
     print("ok")
 
 
+def test_planner_thinking_config() -> None:
+    default_cfg = PlannerConfig()
+    assert default_cfg.thinking is False
+    off = PlannerClient(PlannerConfig(thinking=False, max_tokens=512))
+    assert off._thinking_body() == {"type": "disabled"}
+    assert off._plan_max_tokens() == 512
+    on = PlannerClient(PlannerConfig(thinking=True, max_tokens=512))
+    assert on._thinking_body() == {"type": "enabled"}
+    assert on._plan_max_tokens() == 8192
+    high = PlannerClient(PlannerConfig(thinking=True, max_tokens=16384))
+    assert high._plan_max_tokens() == 16384
+
+
 if __name__ == "__main__":
     main()
+    test_planner_thinking_config()

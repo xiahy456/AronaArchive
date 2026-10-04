@@ -38,6 +38,8 @@ from .schema import IntentCard, parse_and_gate_intent
 
 logger = logging.getLogger(__name__)
 
+_THINKING_MIN_TOKENS = 8192
+
 
 def qq_image_content(user_payload: str, images: list[str | ImagePayload]) -> list[dict[str, Any]]:
     """One text part, then each QQ image as an image_url (https or data URL)."""
@@ -65,6 +67,15 @@ class PlannerClient:
             and key
             and key != "YOUR_DEEPSEEK_API_KEY"
         )
+
+    def _thinking_body(self) -> dict[str, str]:
+        return {"type": "enabled" if self.config.thinking else "disabled"}
+
+    def _plan_max_tokens(self) -> int:
+        n = int(self.config.max_tokens or 0)
+        if self.config.thinking:
+            return max(n, _THINKING_MIN_TOKENS)
+        return n
 
     async def plan(
         self,
@@ -141,9 +152,9 @@ class PlannerClient:
                 {"role": "user", "content": user_content},
             ],
             "temperature": self.config.temperature,
-            "max_tokens": self.config.max_tokens,
+            "max_tokens": self._plan_max_tokens(),
             "response_format": {"type": "json_object"},
-            "thinking": {"type": "disabled"},
+            "thinking": self._thinking_body(),
         }
         update_trace(planner_prompt=redact_image_fields(payload["messages"]))
         headers = {

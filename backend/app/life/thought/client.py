@@ -24,23 +24,39 @@ from typing import Any
 
 import httpx
 
-from ...config import PlannerConfig
+from ...config import PlannerConfig, ThoughtConfig
 from ...logging_utils import format_llm_exchange
 from .prompt import THOUGHT_SYSTEM
 
 logger = logging.getLogger(__name__)
 
 _MIN_TOKENS = 1024
+_THINKING_MIN_TOKENS = 8192
 
 
 class ThoughtClient:
-    def __init__(self, config: PlannerConfig) -> None:
+    def __init__(
+        self, config: PlannerConfig, thought: ThoughtConfig | None = None
+    ) -> None:
         self.config = config
+        self.thought = thought or ThoughtConfig()
 
     @property
     def enabled(self) -> bool:
         key = (self.config.api_key or "").strip()
         return bool(self.config.enabled and key and key != "YOUR_DEEPSEEK_API_KEY")
+
+    def _thinking_enabled(self) -> bool:
+        return bool(self.thought.thinking)
+
+    def _thinking_body(self) -> dict[str, str]:
+        return {"type": "enabled" if self._thinking_enabled() else "disabled"}
+
+    def _complete_max_tokens(self) -> int:
+        n = max(int(self.config.max_tokens or 0), _MIN_TOKENS)
+        if self._thinking_enabled():
+            return max(n, _THINKING_MIN_TOKENS)
+        return n
 
     async def complete(self, user_text: str, *, system: str | None = None) -> str | None:
         """Return the raw model text, or None on timeout or transport failure."""
@@ -55,9 +71,9 @@ class ThoughtClient:
                 {"role": "user", "content": user_text},
             ],
             "temperature": self.config.temperature,
-            "max_tokens": max(int(self.config.max_tokens or 0), _MIN_TOKENS),
+            "max_tokens": self._complete_max_tokens(),
             "response_format": {"type": "json_object"},
-            "thinking": {"type": "disabled"},
+            "thinking": self._thinking_body(),
         }
         headers = {
             "Authorization": f"Bearer {self.config.api_key}",

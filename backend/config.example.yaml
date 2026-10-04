@@ -94,6 +94,7 @@ planner:
   timeout_sec: 20
   temperature: 0.8
   max_tokens: 512
+  thinking: false
   vision_model: "deepseek-flash"
   router_enabled: true
   router_timeout_sec: 3
@@ -173,6 +174,7 @@ life:
   glance_interval_sec: 1200
   thought:
     enabled: true
+    thinking: false
     persist_path: "data/memory/thought.json"
     notes_max: 8
     notes_max_age_hours: 24
@@ -202,7 +204,7 @@ computer_use:
   max_steps: 64
   route_timeout_sec: 10
   vision_timeout_sec: 240
-  vision_max_tokens: 141072
+  vision_max_tokens: 32768
   vision_thinking: true
 
 token_budget:

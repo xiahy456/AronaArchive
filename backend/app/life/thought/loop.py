@@ -168,10 +168,15 @@ async def _think(
     caller = complete
     if caller is None:
         planner = getattr(getattr(state, "config", None), "planner", None)
-        if planner is None or not ThoughtClient(planner).enabled:
+        if planner is None:
             logger.info("thought model skipped reason=disabled_or_no_key")
             return "failed"
-        caller = ThoughtClient(planner).complete
+        thought_cfg = getattr(getattr(getattr(state, "config", None), "life", None), "thought", None)
+        client = ThoughtClient(planner, thought=thought_cfg)
+        if not client.enabled:
+            logger.info("thought model skipped reason=disabled_or_no_key")
+            return "failed"
+        caller = client.complete
     system = _thought_system(state)
     raw = await _invoke(caller, sources.text, system=system)
     parsed = parse_inner(raw)

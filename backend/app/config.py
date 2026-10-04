@@ -161,6 +161,7 @@ class PlannerConfig(BaseModel):
     timeout_sec: float = 20
     temperature: float = 0.3
     max_tokens: int = 512
+    thinking: bool = False
     vision_model: str = "deepseek-flash"
     router_enabled: bool = False
     router_timeout_sec: float = 3.0
@@ -248,6 +249,7 @@ class ThoughtConfig(BaseModel):
     """Thought ledger and the step-2 gate clock. Later steps add their own fields."""
 
     enabled: bool = True
+    thinking: bool = False
     persist_path: str = "data/memory/thought.json"
     notes_max: int = 8
     notes_max_age_hours: float = 24

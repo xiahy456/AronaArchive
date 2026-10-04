@@ -560,6 +560,7 @@ python scripts/ingest_knowledge.py --rebuild
 | `timeout_sec`        | `20`                       | Planner 请求超时（秒）                                               |
 | `temperature`        | `0.3`                      | Planner 采样温度                                                  |
 | `max_tokens`         | `512`                      | Planner 输出上限                                                  |
+| `thinking`           | `false`                    | 意图规划是否开启思考；开启后 `max_tokens` 不足 8192 时抬到 8192               |
 | `vision_model`       | `deepseek-flash`           | 有截图或电脑操作时使用的多模态模型名；为空则回落 `model`                              |
 | `router_enabled`     | `true`                     | 连续听写时，规则拿不准再调短超时 LLM 判断 ignore / wait / reply                 |
 | `router_timeout_sec` | `3`                        | 路由器超时（秒）；不复用 Planner 的 20s 超时                                 |
@@ -599,6 +600,7 @@ python scripts/ingest_knowledge.py --rebuild
 | `look_hold_sec` | `60` | 老师相关事件后保持「看着老师」的秒数 |
 | `think_hold_sec` | `120` | 「想某件事」活动最多持续秒数；心事条目本身保留 |
 | `glance_interval_sec` | `1200` | 两次瞥屏的最短间隔（秒）；听写不缩短 |
+| `thought.thinking` | `false` | 内心思考 LLM 是否开启思考；开启后输出上限不足 8192 时抬到 8192 |
 
 
 
