@@ -84,13 +84,16 @@ class ThoughtClient:
                 resp = await client.post(url, headers=headers, json=payload)
                 resp.raise_for_status()
                 data = resp.json()
-            content = str(data["choices"][0]["message"]["content"] or "")
+            message = data["choices"][0]["message"] or {}
+            content = str(message.get("content") or "")
+            reasoning = str(message.get("reasoning_content") or "").strip()
             logger.info(
                 "%s",
                 format_llm_exchange(
                     title="thought",
                     prompt=payload["messages"],
                     response=content,
+                    reasoning=reasoning or None,
                     extra={
                         "model": payload["model"],
                         "temperature": payload["temperature"],

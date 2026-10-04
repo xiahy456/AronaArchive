@@ -167,12 +167,20 @@ class PlannerClient:
                 resp = await client.post(url, headers=headers, json=payload)
                 resp.raise_for_status()
                 data = resp.json()
-            content = data["choices"][0]["message"]["content"] or ""
-            update_trace(planner_json=content)
+            message = data["choices"][0]["message"] or {}
+            content = message.get("content") or ""
+            reasoning = str(message.get("reasoning_content") or "").strip()
+            update_trace(planner_json=content, planner_reasoning=reasoning or None)
+            if reasoning:
+                logger.info("planner reasoning=%s", reasoning)
             logger.info("planner raw json=%s", content)
             card = parse_and_gate_intent(content)
             if card is None:
-                logger.warning("planner parse/gate failed raw=%s", content)
+                logger.warning(
+                    "planner parse/gate failed raw=%s reasoning=%s",
+                    content,
+                    reasoning or "(none)",
+                )
                 return None
             logger.info(
                 "planner ok model=%s emotion=%s reply_ok=%s user_act=%s followup_ok=%s",

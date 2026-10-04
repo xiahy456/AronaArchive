@@ -131,6 +131,7 @@ def test_format_interactive_log_block() -> None:
         "interactive information:",
         "request:",
         "planner_prompt:",
+        "planner_reasoning:",
         "planner_json:",
         "renderer_prompt:",
         "renderer_text:",
@@ -149,8 +150,10 @@ def test_format_interactive_log_block() -> None:
         _fail("renderer_text should appear")
     if "\n\nplanner_prompt:\n" not in block:
         _fail("blank line between request and planner_prompt")
+    if "\n\nplanner_reasoning:\n" not in block:
+        _fail("blank line between planner_prompt and planner_reasoning")
     if "\n\nplanner_json:\n" not in block:
-        _fail("blank line between planner_prompt and planner_json")
+        _fail("blank line between planner_reasoning and planner_json")
     if "\n\nrenderer_prompt:\n" not in block:
         _fail("blank line before renderer_prompt")
     if "\n\nrenderer_text:\n" not in block:
@@ -159,6 +162,28 @@ def test_format_interactive_log_block() -> None:
         _fail("blank line before response")
     if "\n\nelapsed: 2.157s" not in block:
         _fail("blank line before elapsed")
+    reset_trace()
+    print("  ok")
+
+
+def test_format_planner_reasoning_in_interactive_log() -> None:
+    print("== planner_reasoning sits between prompt and json ==")
+    reset_trace()
+    begin_trace(started_at=1.0, request_json='{"type":"chat","content":"好"}')
+    update_trace(
+        planner_prompt=[{"role": "system", "content": "你是规划参谋"}],
+        planner_reasoning="老师在打招呼，直接回一句就好。",
+        planner_json='{"draft":"老师好。","arona_emotion":"smile","followup_ok":false}',
+    )
+    block = format_interactive_log(
+        {"type": "chat_response", "content": "老师好。"},
+        elapsed=0.2,
+    )
+    marker = (
+        "planner_reasoning:\n老师在打招呼，直接回一句就好。\n\nplanner_json:\n"
+    )
+    if marker not in block:
+        _fail(f"reasoning should sit between prompt and json:\n{block}")
     reset_trace()
     print("  ok")
 
@@ -541,6 +566,7 @@ def main() -> None:
     try:
         test_pretty_json()
         test_format_interactive_log_block()
+        test_format_planner_reasoning_in_interactive_log()
         test_format_missing_fields_are_none()
         test_format_listen_transcript_request()
         test_format_renderer_disabled_is_none()

@@ -31,6 +31,7 @@ INTERACTIVE_PREFIX = "interactive information:"
 SECTION_HEADERS = (
     "request",
     "planner_prompt",
+    "planner_reasoning",
     "planner_json",
     "renderer_prompt",
     "renderer_text",

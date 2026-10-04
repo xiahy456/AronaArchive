@@ -62,6 +62,7 @@ class InteractionTrace:
     started_at: float = 0.0
     request_json: str | None = None
     planner_prompt: Any = None
+    planner_reasoning: str | None = None
     planner_json: str | None = None
     renderer_prompt: Any = None
     renderer_text: str | None = None
@@ -159,6 +160,7 @@ def format_interactive_log(
         "interactive information:\n"
         f"request:\n{pretty_json(trace.request_json if trace else None)}\n\n"
         f"planner_prompt:\n{pretty_json(trace.planner_prompt if trace else None)}\n\n"
+        f"planner_reasoning:\n{pretty_json(trace.planner_reasoning if trace else None)}\n\n"
         f"planner_json:\n{pretty_json(trace.planner_json if trace else None)}\n\n"
         f"renderer_prompt:\n{pretty_json(trace.renderer_prompt if trace else None)}\n\n"
         f"renderer_text:\n{renderer_text}\n\n"
