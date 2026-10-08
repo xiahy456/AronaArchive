@@ -328,6 +328,146 @@ async def test_coalesce() -> None:
     print("coalesce ok")
 
 
+class _GateChat:
+    """handle_chat that blocks on a per-call gate so tests can barge in."""
+
+    def __init__(self) -> None:
+        self.texts: list[str] = []
+        self.gates: list[asyncio.Event] = []
+        self.calls = 0
+
+    async def handle_chat(self, **kwargs):
+        self.calls += 1
+        if kwargs.get("inbound_method") != "message":
+            _fail("qq turns must be marked message")
+        gate = asyncio.Event()
+        self.gates.append(gate)
+        await gate.wait()
+        abort_check = kwargs.get("abort_check")
+        on_reply_ready = kwargs.get("on_reply_ready")
+        if abort_check is not None and abort_check():
+            return False
+        if on_reply_ready is not None:
+            on_reply_ready()
+        if abort_check is not None and abort_check():
+            return False
+        self.texts.append(kwargs["content"])
+        return True
+
+
+async def _wait_gates(orch: object, count: int, *, timeout: float = 2.0) -> None:
+    gates = getattr(orch, "gates")
+    deadline = time.monotonic() + timeout
+    while len(gates) < count:
+        if time.monotonic() >= deadline:
+            _fail(f"expected {count} chat gates, got {len(gates)}")
+        await asyncio.sleep(0.01)
+
+
+async def test_barge_in_merges() -> None:
+    orch = _GateChat()
+    state = _State(_Orch("sent", "message"), _Engine(_impulse()), _Hub(), None)
+    state.orchestrator = orch
+    state.generation_kind = ""
+    state.generation_owner = ""
+    state.generation_interrupts = {}
+    inbox = QqInbox(state, coalesce_sec=0.05)
+    await inbox.push("第一句")
+    await _wait_gates(orch, 1)
+    await inbox.push("第二句")
+    await _wait_gates(orch, 2)
+    orch.gates[-1].set()
+    deadline = time.monotonic() + 2.0
+    while not orch.texts and time.monotonic() < deadline:
+        await asyncio.sleep(0.01)
+    if orch.texts != ["第一句\n第二句"]:
+        _fail(f"barge-in merge got {orch.texts} calls={orch.calls}")
+    print("barge-in merge ok")
+
+
+async def test_after_ready_holds() -> None:
+    orch = _GateChat()
+    state = _State(_Orch("sent", "message"), _Engine(_impulse()), _Hub(), None)
+    state.orchestrator = orch
+    state.generation_kind = ""
+    state.generation_owner = ""
+    state.generation_interrupts = {}
+    inbox = QqInbox(state, coalesce_sec=0.05)
+    await inbox.push("第一句")
+    await _wait_gates(orch, 1)
+    # Seal before finishing so a late message must wait for the next window.
+    ready = orch.gates[0]
+    # Drive seal by finishing the first turn's abort-check path via on_reply_ready:
+    # release the gate; handle_chat seals then records the text.
+    ready.set()
+    deadline = time.monotonic() + 2.0
+    while not orch.texts and time.monotonic() < deadline:
+        await asyncio.sleep(0.01)
+    if orch.texts != ["第一句"]:
+        _fail(f"first turn should complete, got {orch.texts}")
+    # After the first turn finishes, _held from a mid-deliver push would release.
+    # Push while reply_ready during deliver: seal happens inside handle_chat before
+    # return, then _running clears. Push after completion starts a new coalesce.
+    await inbox.push("第二句")
+    await _wait_gates(orch, 2)
+    orch.gates[1].set()
+    deadline = time.monotonic() + 2.0
+    while len(orch.texts) < 2 and time.monotonic() < deadline:
+        await asyncio.sleep(0.01)
+    if orch.texts != ["第一句", "第二句"]:
+        _fail(f"after-ready next window got {orch.texts}")
+    print("after-ready hold ok")
+
+
+async def test_barge_in_after_seal_keeps_reply() -> None:
+    """Once on_reply_ready fires, a new message must not discard that reply."""
+
+    class _SealThenHoldChat:
+        def __init__(self) -> None:
+            self.texts: list[str] = []
+            self.gates: list[asyncio.Event] = []
+            self.calls = 0
+
+        async def handle_chat(self, **kwargs):
+            self.calls += 1
+            abort_check = kwargs.get("abort_check")
+            on_reply_ready = kwargs.get("on_reply_ready")
+            if on_reply_ready is not None:
+                on_reply_ready()
+            gate = asyncio.Event()
+            self.gates.append(gate)
+            await gate.wait()
+            if abort_check is not None and abort_check():
+                return False
+            self.texts.append(kwargs["content"])
+            return True
+
+    orch = _SealThenHoldChat()
+    state = _State(_Orch("sent", "message"), _Engine(_impulse()), _Hub(), None)
+    state.orchestrator = orch
+    state.generation_kind = ""
+    state.generation_owner = ""
+    state.generation_interrupts = {}
+    inbox = QqInbox(state, coalesce_sec=0.05)
+    await inbox.push("第一句")
+    await _wait_gates(orch, 1)
+    await inbox.push("第二句")
+    orch.gates[0].set()
+    deadline = time.monotonic() + 2.0
+    while not orch.texts and time.monotonic() < deadline:
+        await asyncio.sleep(0.01)
+    if orch.texts != ["第一句"]:
+        _fail(f"sealed reply must be kept, got {orch.texts} calls={orch.calls}")
+    await _wait_gates(orch, 2)
+    orch.gates[1].set()
+    deadline = time.monotonic() + 2.0
+    while len(orch.texts) < 2 and time.monotonic() < deadline:
+        await asyncio.sleep(0.01)
+    if orch.texts != ["第一句", "第二句"]:
+        _fail(f"held message should follow, got {orch.texts}")
+    print("after-seal keep reply ok")
+
+
 def test_emoji_catalog() -> None:
     known = lookup_emoji("4b9ca94171d02f28e7829afa28709c45")
     if known is None or known.description != "抽到了":
@@ -680,6 +820,9 @@ def main() -> None:
     asyncio.run(test_get_file_roundtrip())
     asyncio.run(test_offline_impulse())
     asyncio.run(test_coalesce())
+    asyncio.run(test_barge_in_merges())
+    asyncio.run(test_after_ready_holds())
+    asyncio.run(test_barge_in_after_seal_keeps_reply())
     print("napcat unit ok")
 
 

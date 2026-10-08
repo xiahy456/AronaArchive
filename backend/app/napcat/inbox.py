@@ -53,6 +53,9 @@ class QqInbox:
         self._held: list[_QqPiece] = []
         self._timer: asyncio.Task[None] | None = None
         self._running = False
+        self._reply_ready = False
+        self._generation_id = 0
+        self._chat_task: asyncio.Task[bool] | None = None
         self._lock = asyncio.Lock()
 
     async def push(self, text: str, images: Any = None) -> None:
@@ -62,12 +65,28 @@ class QqInbox:
             return
         piece = _QqPiece(cleaned, refs)
         await self._interrupt_hands()
+        to_cancel: asyncio.Task[bool] | None = None
         async with self._lock:
-            if self._running or self._blocked():
+            if self._running:
+                if self._reply_ready:
+                    self._held.append(piece)
+                    return
+                # Model still generating: barge in, merge into this round.
+                self._parts.append(piece)
+                self._generation_id += 1
+                if self._chat_task is not None and not self._chat_task.done():
+                    to_cancel = self._chat_task
+                logger.info("qq barge-in generation_id=%s", self._generation_id)
+                # Cancel outside the lock so the chat task can exit cleanly.
+            elif self._blocked():
                 self._held.append(piece)
                 return
-            self._parts.append(piece)
-            self._restart_timer_locked()
+            else:
+                self._parts.append(piece)
+                self._restart_timer_locked()
+                return
+        if to_cancel is not None:
+            to_cancel.cancel()
 
     def on_generation_idle(self) -> None:
         """Client generation finished. Release texts that arrived during it."""
@@ -110,6 +129,9 @@ class QqInbox:
             self._timer.cancel()
         self._timer = asyncio.create_task(self._wait_and_fire())
 
+    def _mark_reply_ready(self) -> None:
+        self._reply_ready = True
+
     async def _wait_and_fire(self) -> None:
         try:
             await asyncio.sleep(self._coalesce_sec)
@@ -124,6 +146,7 @@ class QqInbox:
             if not text and not images:
                 return
             self._running = True
+            self._reply_ready = False
         try:
             resolved = await self._resolve_images(images)
             if not text and not resolved:
@@ -132,6 +155,8 @@ class QqInbox:
         finally:
             async with self._lock:
                 self._running = False
+                self._reply_ready = False
+                self._chat_task = None
                 if self._held and not self._blocked():
                     self._parts.extend(self._held)
                     self._held.clear()
@@ -146,6 +171,9 @@ class QqInbox:
                     resolved.append(image.url)
                 continue
             if not isinstance(image, QqFileImage):
+                # Already-resolved URL string or ImagePayload from a prior attempt.
+                if image:
+                    resolved.append(image)
                 continue
             if link is None or not getattr(link, "connected", False):
                 logger.info("qq file image dropped reason=napcat_down")
@@ -157,6 +185,14 @@ class QqInbox:
                 continue
             resolved.append(payload)
         return resolved
+
+    async def _drain_barge_parts(self) -> list[_QqPiece]:
+        async with self._lock:
+            if not self._parts:
+                return []
+            drained = list(self._parts)
+            self._parts.clear()
+            return drained
 
     async def _generate(self, text: str, images: list[Any] | None = None) -> None:
         state = self.state
@@ -178,30 +214,91 @@ class QqInbox:
                         logger.info("followup acked by qq keys=%s", acked)
                 scheduler.note_user_activity()
             client_online = bool(hub is not None and hub.all_sessions())
-            photos = list(images or [])
-            started_at = time.perf_counter()
-            request_json = json.dumps(
-                {
-                    "type": "qq",
-                    "content": text,
-                    "image_count": len(photos),
-                },
-                ensure_ascii=False,
-            )
-            await state.orchestrator.handle_chat(
-                session_id=QQ_SESSION_ID,
-                content=text,
-                options={},
-                send=self._send_direct,
-                request_json=request_json,
-                started_at=started_at,
-                inbound_method=METHOD_MESSAGE,
-                client_online=client_online,
-                qq_images=photos,
-            )
+            pending_text = text
+            pending_images = list(images or [])
+            finished_text = pending_text
+
+            while True:
+                extra = await self._drain_barge_parts()
+                if extra:
+                    chunks = [pending_text] if pending_text.strip() else []
+                    raw_images: list[Any] = list(pending_images)
+                    for part in extra:
+                        if part.text.strip():
+                            chunks.append(part.text.strip())
+                        raw_images.extend(part.images)
+                    pending_text = "\n".join(chunks)
+                    pending_images = await self._resolve_images(raw_images)
+                if not pending_text.strip() and not pending_images:
+                    return
+
+                async with self._lock:
+                    self._reply_ready = False
+                    my_id = self._generation_id
+
+                started_at = time.perf_counter()
+                request_json = json.dumps(
+                    {
+                        "type": "qq",
+                        "content": pending_text,
+                        "image_count": len(pending_images),
+                    },
+                    ensure_ascii=False,
+                )
+
+                turn_text = pending_text
+                turn_images = list(pending_images)
+                turn_id = my_id
+
+                async def _run_chat() -> bool:
+                    return await state.orchestrator.handle_chat(
+                        session_id=QQ_SESSION_ID,
+                        content=turn_text,
+                        options={},
+                        send=self._send_direct,
+                        request_json=request_json,
+                        started_at=started_at,
+                        abort_check=lambda: self._generation_id != turn_id,
+                        on_reply_ready=self._mark_reply_ready,
+                        inbound_method=METHOD_MESSAGE,
+                        client_online=client_online,
+                        qq_images=turn_images,
+                    )
+
+                task = asyncio.create_task(_run_chat())
+                async with self._lock:
+                    self._chat_task = task
+                try:
+                    ok = await task
+                except asyncio.CancelledError:
+                    async with self._lock:
+                        has_more = bool(self._parts)
+                        self._chat_task = None
+                        self._reply_ready = False
+                    if has_more:
+                        logger.info("qq chat cancelled; retry with barge-in")
+                        continue
+                    raise
+                finally:
+                    async with self._lock:
+                        if self._chat_task is task:
+                            self._chat_task = None
+
+                if not ok:
+                    async with self._lock:
+                        has_more = bool(self._parts)
+                        self._reply_ready = False
+                    if has_more:
+                        logger.info("qq chat aborted; retry with barge-in")
+                        continue
+                    return
+
+                finished_text = pending_text
+                break
+
             from ..life.thought.triggers import note_finished_turn
 
-            note_finished_turn(state, text, now=datetime.now())
+            note_finished_turn(state, finished_text, now=datetime.now())
         except asyncio.CancelledError:
             raise
         except Exception:

@@ -341,6 +341,7 @@ class Orchestrator:
         started_at: float | None = None,
         abort_check: AbortCheck | None = None,
         on_committed: Callable[[], None] | None = None,
+        on_reply_ready: Callable[[], None] | None = None,
         image: ImagePayload | None = None,
         qq_images: list[str | ImagePayload] | None = None,
         interrupt_ctx: InnerState | None = None,
@@ -348,8 +349,27 @@ class Orchestrator:
         inbound_method: str = "direct",
         client_online: bool = True,
     ) -> bool:
+        sealed = False
+
         def _aborted() -> bool:
             return abort_check is not None and abort_check()
+
+        def _seal() -> None:
+            nonlocal sealed
+            if sealed:
+                return
+            sealed = True
+            if on_reply_ready is not None:
+                on_reply_ready()
+
+        def _discard_aborted() -> bool:
+            """True when abort wins before a sealed reply. Rolls journal back."""
+            if not _aborted():
+                return False
+            if not sealed:
+                self._drop_teacher_journal()
+            reset_trace()
+            return True
 
         def _committed() -> None:
             if on_committed is not None:
@@ -378,6 +398,7 @@ class Orchestrator:
                 start=time.perf_counter(),
                 abort_check=abort_check,
                 on_committed=on_committed,
+                on_reply_ready=on_reply_ready,
                 image=image,
                 qq_images=photos,
                 interrupt_ctx=interrupt_ctx,
@@ -386,354 +407,367 @@ class Orchestrator:
                 client_online=client_online,
             )
 
-        self._note_teacher_journal(user_text)
-        use_rag = bool(options.get("use_rag", self.config.knowledge.enabled))
-        use_memory = bool(options.get("use_memory", True))
+        try:
+            self._note_teacher_journal(user_text)
+            use_rag = bool(options.get("use_rag", self.config.knowledge.enabled))
+            use_memory = bool(options.get("use_memory", True))
 
-        start = time.perf_counter()
-        context_parts: list[str] = []
-        relationship_applied = False
-        intent: IntentCard | None = None
-        decision = self._preview_user_relationship(user_text)
+            start = time.perf_counter()
+            context_parts: list[str] = []
+            relationship_applied = False
+            intent: IntentCard | None = None
+            decision = self._preview_user_relationship(user_text)
 
-        def _commit_relationship() -> None:
-            nonlocal relationship_applied, decision
-            if relationship_applied:
-                return
-            applied = self._note_user_relationship(user_text)
-            if applied is not None:
-                decision = applied
-            relationship_applied = True
-            if intent is not None:
-                backfilled_act = self._note_planner_user_act(intent.user_act)
-                if backfilled_act is not None and decision is not None:
-                    decision = replace(decision, user_act=backfilled_act)
+            def _commit_relationship() -> None:
+                nonlocal relationship_applied, decision
+                if relationship_applied:
+                    return
+                applied = self._note_user_relationship(user_text)
+                if applied is not None:
+                    decision = applied
+                relationship_applied = True
+                if intent is not None:
+                    backfilled_act = self._note_planner_user_act(intent.user_act)
+                    if backfilled_act is not None and decision is not None:
+                        decision = replace(decision, user_act=backfilled_act)
 
-        if decision is not None:
-            context_parts.append("climate")
-        if decision is not None and decision.action in {"silence", "refuse"}:
-            if inbound_method != "message":
-                self._emit_life_action(on_life_action, "continue_activity")
-            await self._skip_generation(
-                session_id=session_id,
-                user_text=user_text,
-                decision=decision,
-                send=send,
-                latency=time.perf_counter() - start,
-                on_sent=_commit_relationship,
-                inbound_method=inbound_method,
-                client_online=client_online,
-            )
-            _committed()
-            return True
+            if decision is not None:
+                context_parts.append("climate")
+            if decision is not None and decision.action in {"silence", "refuse"}:
+                if inbound_method != "message":
+                    self._emit_life_action(on_life_action, "continue_activity")
+                _seal()
+                await self._skip_generation(
+                    session_id=session_id,
+                    user_text=user_text,
+                    decision=decision,
+                    send=send,
+                    latency=time.perf_counter() - start,
+                    on_sent=_commit_relationship,
+                    inbound_method=inbound_method,
+                    client_online=client_online,
+                )
+                _committed()
+                return True
 
-        logger.info(
-            "chat start session=%s use_rag=%s use_memory=%s request=%r",
-            session_id,
-            use_rag,
-            use_memory,
-            user_text,
-        )
-        if photos:
             logger.info(
-                "planner input 包含文本与QQ图片 session=%s count=%d",
+                "chat start session=%s use_rag=%s use_memory=%s request=%r",
                 session_id,
-                len(photos),
-            )
-        elif image is not None:
-            logger.info(
-                "planner input 包含文本与图片 session=%s bytes=%d mime=%s",
-                session_id,
-                len(image.data),
-                image.mime,
-            )
-        else:
-            logger.info("planner input 只含文本 session=%s", session_id)
-
-        need_rag = use_rag and self.knowledge.enabled
-        query_embedding: list[float] | None = None
-        time_query_embedding: list[float] | None = None
-        retrieve_now = datetime.now()
-        time_query = build_time_aware_query(user_text, retrieve_now)
-        if use_memory or need_rag:
-            t0 = time.perf_counter()
-            try:
-                embeddings = await asyncio.to_thread(
-                    self.memory_store.encode_queries, [user_text, time_query]
-                )
-                query_embedding = embeddings[0]
-                time_query_embedding = embeddings[1]
-                logger.info(
-                    "query embedding session=%s latency=%.3fs dim=%d time_query=%r",
-                    session_id,
-                    time.perf_counter() - t0,
-                    len(query_embedding),
-                    time_query,
-                )
-            except Exception:
-                logger.exception(
-                    "query embedding failed session=%s; retrieve will encode itself",
-                    session_id,
-                )
-                query_embedding = None
-                time_query_embedding = None
-
-        memories: list[str] = []
-        memory_block = ""
-        if use_memory:
-            t0 = time.perf_counter()
-            cand_k = max(1, int(self.config.memory.candidate_top_k))
-            entries = await asyncio.to_thread(
-                self.memory_store.retrieve_entries,
+                use_rag,
+                use_memory,
                 user_text,
-                cand_k,
-                query_embedding,
-                apply_inject_cooldown=True,
-                include_time=True,
-                time_query=time_query,
-                time_query_embedding=time_query_embedding,
-                now=retrieve_now,
             )
-            memories, memory_block = self._pack_memory_inject(entries)
-            logger.info(
-                "memory retrieve session=%s hits=%d latency=%.3fs items=%s",
-                session_id,
-                len(memories),
-                time.perf_counter() - t0,
-                preview_list(memories),
-            )
-            if memories:
-                context_parts.append("memory")
-        else:
-            logger.info("memory retrieve skipped session=%s", session_id)
-
-        knowledge_chunks: list[str] = []
-        if use_rag:
-            t0 = time.perf_counter()
-            knowledge_chunks = await asyncio.to_thread(
-                self.knowledge.retrieve,
-                user_text,
-                self.config.knowledge.retrieve_top_k,
-                query_embedding,
-                include_time=True,
-                time_query=time_query,
-                time_query_embedding=time_query_embedding,
-                now=retrieve_now,
-            )
-            logger.info(
-                "rag retrieve session=%s hits=%d latency=%.3fs items=%s",
-                session_id,
-                len(knowledge_chunks),
-                time.perf_counter() - t0,
-                preview_list(knowledge_chunks),
-            )
-            if knowledge_chunks:
-                context_parts.append("rag")
-            before_clip = len(knowledge_chunks)
-            knowledge_chunks = clip_knowledge_for_inject(self.config, knowledge_chunks)
-            if len(knowledge_chunks) < before_clip:
+            if photos:
                 logger.info(
-                    "rag inject clipped session=%s before=%d after=%d",
+                    "planner input 包含文本与QQ图片 session=%s count=%d",
                     session_id,
-                    before_clip,
-                    len(knowledge_chunks),
+                    len(photos),
                 )
-        else:
-            logger.info("rag retrieve skipped session=%s", session_id)
-
-        history = self.conversations.get_history(session_id)
-        planner_history = self.conversations.get_planner_history(session_id)
-        if history or planner_history:
-            context_parts.append("history")
-        logger.info(
-            "history session=%s turns=%d",
-            session_id,
-            len(history),
-        )
-        logger.info(
-            "planner_history session=%s within_hours=%.1f count=%d",
-            session_id,
-            self._planner_history_hours(),
-            len(planner_history),
-        )
-
-        use_dual = self.planner.enabled
-        if use_dual:
-            self.stats["dual_route_count"] += 1
-        else:
-            self.stats["local_route_count"] += 1
-
-        emotion = DEFAULT_EMOTION
-        if use_dual:
-            context_parts.append("planner")
-            t0 = time.perf_counter()
-            intent = await self.planner.plan(
-                user_text=user_text,
-                history=planner_history,
-                memories=memories,
-                knowledge=knowledge_chunks,
-                climate_block=self._climate_block(decision),
-                image=image,
-                qq_images=photos,
-                memory_block=memory_block,
-                life_block=self._life_block(interrupt_ctx),
-                day_block=self._day_block(),
-                teacher_method=inbound_method,
-                channels_block=self._channels_block(client_online=client_online),
-                **self._stance_args(),
-            )
-            logger.info(
-                "planner session=%s ok=%s latency=%.3fs",
-                session_id,
-                intent is not None,
-                time.perf_counter() - t0,
-            )
-            if intent is None:
-                self.stats["planner_fallbacks"] += 1
-                logger.info("planner fallback to local path session=%s", session_id)
+            elif image is not None:
+                logger.info(
+                    "planner input 包含文本与图片 session=%s bytes=%d mime=%s",
+                    session_id,
+                    len(image.data),
+                    image.mime,
+                )
             else:
-                self.stats["planner_hits"] += 1
-                if intent.user_act == CRISIS_USER_ACT:
+                logger.info("planner input 只含文本 session=%s", session_id)
+
+            need_rag = use_rag and self.knowledge.enabled
+            query_embedding: list[float] | None = None
+            time_query_embedding: list[float] | None = None
+            retrieve_now = datetime.now()
+            time_query = build_time_aware_query(user_text, retrieve_now)
+            if use_memory or need_rag:
+                t0 = time.perf_counter()
+                try:
+                    embeddings = await asyncio.to_thread(
+                        self.memory_store.encode_queries, [user_text, time_query]
+                    )
+                    query_embedding = embeddings[0]
+                    time_query_embedding = embeddings[1]
                     logger.info(
-                        "planner marked crisis; discard daily draft session=%s",
+                        "query embedding session=%s latency=%.3fs dim=%d time_query=%r",
+                        session_id,
+                        time.perf_counter() - t0,
+                        len(query_embedding),
+                        time_query,
+                    )
+                except Exception:
+                    logger.exception(
+                        "query embedding failed session=%s; retrieve will encode itself",
                         session_id,
                     )
-                    self._drop_teacher_journal()
-                    return await self._deliver_crisis(
-                        session_id=session_id,
-                        user_text=user_text,
-                        send=send,
-                        start=start,
-                        abort_check=abort_check,
-                        on_committed=on_committed,
-                        memories=memories,
-                        memory_block=memory_block,
-                        image=image,
-                        qq_images=photos,
-                        interrupt_ctx=interrupt_ctx,
-                        on_life_action=on_life_action,
-                        inbound_method=inbound_method,
-                        client_online=client_online,
-                    )
-                emotion = intent.arona_emotion
-                self._merge_decision_into_intent(intent, decision)
-                if not intent.reply_ok:
-                    action = resolve_life_action(intent)
-                    if inbound_method != "message":
-                        self._emit_life_action(on_life_action, action, emotion)
-                    await self._skip_generation(
-                        session_id=session_id,
-                        user_text=user_text,
-                        decision=decision,
-                        send=send,
-                        reason="reply_ok_false",
-                        latency=time.perf_counter() - start,
-                        emotion=emotion,
-                        on_sent=_commit_relationship,
-                        inbound_method=inbound_method,
-                        client_online=client_online,
-                    )
-                    _committed()
-                    return True
+                    query_embedding = None
+                    time_query_embedding = None
 
-        full, context_used = await self._compose_reply(
-            session_id=session_id,
-            intent=intent,
-            user_text=user_text,
-            history=history,
-            memories=memories,
-            knowledge=knowledge_chunks,
-            context_parts=context_parts,
-            extra_system=self._local_hint(decision),
-            emotion=emotion,
-            memory_block=memory_block,
-            inbound_method=inbound_method,
-        )
-        latency = time.perf_counter() - start
-        if full is None:
-            logger.warning(
-                "chat cannot generate session=%s reason=renderer_disabled_planner_miss",
-                session_id,
-            )
-            reset_trace()
-            await send(
-                msg_error(
-                    CODE_INTERNAL,
-                    "Planner failed and local renderer is disabled",
+            memories: list[str] = []
+            memory_block = ""
+            if use_memory:
+                t0 = time.perf_counter()
+                cand_k = max(1, int(self.config.memory.candidate_top_k))
+                entries = await asyncio.to_thread(
+                    self.memory_store.retrieve_entries,
+                    user_text,
+                    cand_k,
+                    query_embedding,
+                    apply_inject_cooldown=True,
+                    include_time=True,
+                    time_query=time_query,
+                    time_query_embedding=time_query_embedding,
+                    now=retrieve_now,
                 )
-            )
-            _committed()
-            return True
-        if _aborted():
-            logger.info("chat aborted before send session=%s", session_id)
-            reset_trace()
-            return False
-        method = self._resolve_outbound(
-            intent,
-            inbound=inbound_method,
-            proactive=False,
-            client_online=client_online,
-        )
-        delivered = await self._deliver_spoken(
-            text=full,
-            emotion=emotion,
-            method=method,
-            send=send,
-            context_used=context_used,
-            latency=latency,
-            on_life_action=on_life_action,
-            client_online=client_online,
-            emit_emotion=True,
-        )
+                memories, memory_block = self._pack_memory_inject(entries)
+                logger.info(
+                    "memory retrieve session=%s hits=%d latency=%.3fs items=%s",
+                    session_id,
+                    len(memories),
+                    time.perf_counter() - t0,
+                    preview_list(memories),
+                )
+                if memories:
+                    context_parts.append("memory")
+            else:
+                logger.info("memory retrieve skipped session=%s", session_id)
 
-        if not delivered:
-            # Keep relationship at pre-turn state: no user Δ without a delivered reply.
-            self.conversations.append(
-                session_id, "user", user_text, method=inbound_method
-            )
-            _committed()
+            knowledge_chunks: list[str] = []
+            if use_rag:
+                t0 = time.perf_counter()
+                knowledge_chunks = await asyncio.to_thread(
+                    self.knowledge.retrieve,
+                    user_text,
+                    self.config.knowledge.retrieve_top_k,
+                    query_embedding,
+                    include_time=True,
+                    time_query=time_query,
+                    time_query_embedding=time_query_embedding,
+                    now=retrieve_now,
+                )
+                logger.info(
+                    "rag retrieve session=%s hits=%d latency=%.3fs items=%s",
+                    session_id,
+                    len(knowledge_chunks),
+                    time.perf_counter() - t0,
+                    preview_list(knowledge_chunks),
+                )
+                if knowledge_chunks:
+                    context_parts.append("rag")
+                before_clip = len(knowledge_chunks)
+                knowledge_chunks = clip_knowledge_for_inject(self.config, knowledge_chunks)
+                if len(knowledge_chunks) < before_clip:
+                    logger.info(
+                        "rag inject clipped session=%s before=%d after=%d",
+                        session_id,
+                        before_clip,
+                        len(knowledge_chunks),
+                    )
+            else:
+                logger.info("rag retrieve skipped session=%s", session_id)
+
+            history = self.conversations.get_history(session_id)
+            planner_history = self.conversations.get_planner_history(session_id)
+            if history or planner_history:
+                context_parts.append("history")
             logger.info(
-                "chat undelivered session=%s method=%s request=%r",
+                "history session=%s turns=%d",
                 session_id,
+                len(history),
+            )
+            logger.info(
+                "planner_history session=%s within_hours=%.1f count=%d",
+                session_id,
+                self._planner_history_hours(),
+                len(planner_history),
+            )
+
+            use_dual = self.planner.enabled
+            if use_dual:
+                self.stats["dual_route_count"] += 1
+            else:
+                self.stats["local_route_count"] += 1
+
+            emotion = DEFAULT_EMOTION
+            if use_dual:
+                context_parts.append("planner")
+                t0 = time.perf_counter()
+                intent = await self.planner.plan(
+                    user_text=user_text,
+                    history=planner_history,
+                    memories=memories,
+                    knowledge=knowledge_chunks,
+                    climate_block=self._climate_block(decision),
+                    image=image,
+                    qq_images=photos,
+                    memory_block=memory_block,
+                    life_block=self._life_block(interrupt_ctx),
+                    day_block=self._day_block(),
+                    teacher_method=inbound_method,
+                    channels_block=self._channels_block(client_online=client_online),
+                    **self._stance_args(),
+                )
+                logger.info(
+                    "planner session=%s ok=%s latency=%.3fs",
+                    session_id,
+                    intent is not None,
+                    time.perf_counter() - t0,
+                )
+                if intent is None:
+                    self.stats["planner_fallbacks"] += 1
+                    logger.info("planner fallback to local path session=%s", session_id)
+                else:
+                    self.stats["planner_hits"] += 1
+                    if intent.user_act == CRISIS_USER_ACT:
+                        logger.info(
+                            "planner marked crisis; discard daily draft session=%s",
+                            session_id,
+                        )
+                        self._drop_teacher_journal()
+                        return await self._deliver_crisis(
+                            session_id=session_id,
+                            user_text=user_text,
+                            send=send,
+                            start=start,
+                            abort_check=abort_check,
+                            on_committed=on_committed,
+                            on_reply_ready=on_reply_ready,
+                            memories=memories,
+                            memory_block=memory_block,
+                            image=image,
+                            qq_images=photos,
+                            interrupt_ctx=interrupt_ctx,
+                            on_life_action=on_life_action,
+                            inbound_method=inbound_method,
+                            client_online=client_online,
+                        )
+                    emotion = intent.arona_emotion
+                    self._merge_decision_into_intent(intent, decision)
+                    if not intent.reply_ok:
+                        action = resolve_life_action(intent)
+                        if inbound_method != "message":
+                            self._emit_life_action(on_life_action, action, emotion)
+                        _seal()
+                        await self._skip_generation(
+                            session_id=session_id,
+                            user_text=user_text,
+                            decision=decision,
+                            send=send,
+                            reason="reply_ok_false",
+                            latency=time.perf_counter() - start,
+                            emotion=emotion,
+                            on_sent=_commit_relationship,
+                            inbound_method=inbound_method,
+                            client_online=client_online,
+                        )
+                        _committed()
+                        return True
+
+            full, context_used = await self._compose_reply(
+                session_id=session_id,
+                intent=intent,
+                user_text=user_text,
+                history=history,
+                memories=memories,
+                knowledge=knowledge_chunks,
+                context_parts=context_parts,
+                extra_system=self._local_hint(decision),
+                emotion=emotion,
+                memory_block=memory_block,
+                inbound_method=inbound_method,
+            )
+            latency = time.perf_counter() - start
+            if full is None:
+                logger.warning(
+                    "chat cannot generate session=%s reason=renderer_disabled_planner_miss",
+                    session_id,
+                )
+                _seal()
+                reset_trace()
+                await send(
+                    msg_error(
+                        CODE_INTERNAL,
+                        "Planner failed and local renderer is disabled",
+                    )
+                )
+                _committed()
+                return True
+            # Abort from barge-in during compose first (rollback journal, no seal).
+            # Then seal so QQ messages that arrive after the model returns are held
+            # instead of discarding this reply. No await between these two steps.
+            if _discard_aborted():
+                logger.info("chat aborted before send session=%s", session_id)
+                return False
+            _seal()
+            method = self._resolve_outbound(
+                intent,
+                inbound=inbound_method,
+                proactive=False,
+                client_online=client_online,
+            )
+            delivered = await self._deliver_spoken(
+                text=full,
+                emotion=emotion,
+                method=method,
+                send=send,
+                context_used=context_used,
+                latency=latency,
+                on_life_action=on_life_action,
+                client_online=client_online,
+                emit_emotion=True,
+            )
+
+            if not delivered:
+                # Keep relationship at pre-turn state: no user Δ without a delivered reply.
+                self.conversations.append(
+                    session_id, "user", user_text, method=inbound_method
+                )
+                _committed()
+                logger.info(
+                    "chat undelivered session=%s method=%s request=%r",
+                    session_id,
+                    method,
+                    user_text,
+                )
+                return True
+
+            _commit_relationship()
+            self.conversations.append(session_id, "user", user_text, method=inbound_method)
+            self.conversations.append(session_id, "assistant", full, method=method)
+            _committed()
+
+            await self._maybe_extract(session_id, user_text)
+            self._note_arona_relationship(decision, "speak")
+            self.stats["chat_count"] += 1
+            total_latency = time.perf_counter() - start
+            logger.info(
+                "chat done session=%s context=%s emotion=%s method=%s latency=%.3fs "
+                "request=%r response=%r",
+                session_id,
+                context_used,
+                emotion,
                 method,
+                total_latency,
                 user_text,
+                full,
+            )
+            await self._maybe_continue(
+                session_id=session_id,
+                intent=intent,
+                previous=full,
+                send=send,
+                climate=decision.climate if decision is not None else None,
+                decision=decision,
+                abort_check=abort_check,
+                interrupt_ctx=interrupt_ctx,
+                on_life_action=on_life_action,
+                client_online=client_online,
+                inbound_method=inbound_method,
             )
             return True
-
-        _commit_relationship()
-        self.conversations.append(session_id, "user", user_text, method=inbound_method)
-        self.conversations.append(session_id, "assistant", full, method=method)
-        _committed()
-
-        await self._maybe_extract(session_id, user_text)
-        self._note_arona_relationship(decision, "speak")
-        self.stats["chat_count"] += 1
-        total_latency = time.perf_counter() - start
-        logger.info(
-            "chat done session=%s context=%s emotion=%s method=%s latency=%.3fs "
-            "request=%r response=%r",
-            session_id,
-            context_used,
-            emotion,
-            method,
-            total_latency,
-            user_text,
-            full,
-        )
-        await self._maybe_continue(
-            session_id=session_id,
-            intent=intent,
-            previous=full,
-            send=send,
-            climate=decision.climate if decision is not None else None,
-            decision=decision,
-            abort_check=abort_check,
-            interrupt_ctx=interrupt_ctx,
-            on_life_action=on_life_action,
-            client_online=client_online,
-            inbound_method=inbound_method,
-        )
-        return True
+        except asyncio.CancelledError:
+            if not sealed:
+                self._drop_teacher_journal()
+                reset_trace()
+            raise
 
     async def _deliver_crisis(
         self,
@@ -744,6 +778,7 @@ class Orchestrator:
         start: float,
         abort_check: AbortCheck | None = None,
         on_committed: Callable[[], None] | None = None,
+        on_reply_ready: Callable[[], None] | None = None,
         memories: list[str] | None = None,
         memory_block: str = "",
         image: ImagePayload | None = None,
@@ -754,97 +789,115 @@ class Orchestrator:
         client_online: bool = True,
     ) -> bool:
         """Speak via crisis planner draft (no renderer); local Arona fallback."""
-        history = self.conversations.get_history(session_id)
-        planner_history = self.conversations.get_planner_history(session_id)
-        logger.info(
-            "planner_history session=%s within_hours=%.1f count=%d kind=crisis",
-            session_id,
-            self._planner_history_hours(),
-            len(planner_history),
-        )
-        intent: IntentCard | None = None
-        if self.planner.enabled:
-            t0 = time.perf_counter()
-            intent = await self.planner.plan(
-                user_text=user_text,
-                history=planner_history,
-                memories=list(memories or []),
-                knowledge=[],
-                climate_block=crisis_planner_climate_block(),
-                image=image,
-                qq_images=qq_images,
-                crisis=True,
-                memory_block=memory_block,
-                life_block=self._life_block(interrupt_ctx),
-                day_block=self._day_block(),
-                teacher_method=inbound_method,
-                channels_block=self._channels_block(client_online=client_online),
-            )
-            logger.info(
-                "crisis planner session=%s ok=%s latency=%.3fs",
-                session_id,
-                intent is not None,
-                time.perf_counter() - t0,
-            )
+        sealed = False
 
-        draft = ""
-        emotion = CRISIS_FALLBACK_EMOTION
-        context_used = "crisis_fallback"
-        if intent is not None:
-            spoken = intent.to_renderer_draft()
-            if spoken and intent.reply_ok:
-                draft = spoken
-                emotion = intent.arona_emotion
-                context_used = "crisis_planner"
-        if not draft:
-            draft = crisis_fallback_reply()
+        def _seal() -> None:
+            nonlocal sealed
+            if sealed:
+                return
+            sealed = True
+            if on_reply_ready is not None:
+                on_reply_ready()
+
+        try:
+            history = self.conversations.get_history(session_id)
+            planner_history = self.conversations.get_planner_history(session_id)
+            logger.info(
+                "planner_history session=%s within_hours=%.1f count=%d kind=crisis",
+                session_id,
+                self._planner_history_hours(),
+                len(planner_history),
+            )
+            intent: IntentCard | None = None
+            if self.planner.enabled:
+                t0 = time.perf_counter()
+                intent = await self.planner.plan(
+                    user_text=user_text,
+                    history=planner_history,
+                    memories=list(memories or []),
+                    knowledge=[],
+                    climate_block=crisis_planner_climate_block(),
+                    image=image,
+                    qq_images=qq_images,
+                    crisis=True,
+                    memory_block=memory_block,
+                    life_block=self._life_block(interrupt_ctx),
+                    day_block=self._day_block(),
+                    teacher_method=inbound_method,
+                    channels_block=self._channels_block(client_online=client_online),
+                )
+                logger.info(
+                    "crisis planner session=%s ok=%s latency=%.3fs",
+                    session_id,
+                    intent is not None,
+                    time.perf_counter() - t0,
+                )
+
+            draft = ""
             emotion = CRISIS_FALLBACK_EMOTION
             context_used = "crisis_fallback"
+            if intent is not None:
+                spoken = intent.to_renderer_draft()
+                if spoken and intent.reply_ok:
+                    draft = spoken
+                    emotion = intent.arona_emotion
+                    context_used = "crisis_planner"
+            if not draft:
+                draft = crisis_fallback_reply()
+                emotion = CRISIS_FALLBACK_EMOTION
+                context_used = "crisis_fallback"
 
-        if abort_check is not None and abort_check():
-            logger.info("crisis aborted before send session=%s", session_id)
-            reset_trace()
-            return False
+            if abort_check is not None and abort_check():
+                logger.info("crisis aborted before send session=%s", session_id)
+                self._drop_teacher_journal()
+                reset_trace()
+                return False
+            _seal()
 
-        latency = time.perf_counter() - start
-        method = self._resolve_outbound(
-            intent,
-            inbound=inbound_method,
-            proactive=False,
-            client_online=client_online,
-        )
-        delivered = await self._deliver_spoken(
-            text=draft,
-            emotion=emotion,
-            method=method,
-            send=send,
-            context_used=context_used,
-            latency=latency,
-            on_life_action=on_life_action,
-            client_online=client_online,
-            emit_emotion=True,
-        )
-        self._commit_crisis_relationship()
-        self.conversations.append(session_id, "user", user_text, method=inbound_method)
-        if delivered:
-            self.conversations.append(session_id, "assistant", draft, method=method)
-        if on_committed is not None:
-            on_committed()
-        self.conversations.clear_extract_buffer(session_id)
-        if delivered:
-            self.stats["chat_count"] += 1
-        logger.info(
-            "chat crisis session=%s context=%s emotion=%s method=%s delivered=%s "
-            "latency=%.3fs request=%r response=%r",
-            session_id,
-            context_used,
-            emotion,
-            method,
-            delivered,
-            time.perf_counter() - start,
-            user_text,
-            draft,
-        )
+            latency = time.perf_counter() - start
+            method = self._resolve_outbound(
+                intent,
+                inbound=inbound_method,
+                proactive=False,
+                client_online=client_online,
+            )
+            delivered = await self._deliver_spoken(
+                text=draft,
+                emotion=emotion,
+                method=method,
+                send=send,
+                context_used=context_used,
+                latency=latency,
+                on_life_action=on_life_action,
+                client_online=client_online,
+                emit_emotion=True,
+            )
+            self._commit_crisis_relationship()
+            self.conversations.append(session_id, "user", user_text, method=inbound_method)
+            if delivered:
+                self.conversations.append(session_id, "assistant", draft, method=method)
+            if on_committed is not None:
+                on_committed()
+            self.conversations.clear_extract_buffer(session_id)
+            if delivered:
+                self.stats["chat_count"] += 1
+            logger.info(
+                "chat crisis session=%s context=%s emotion=%s method=%s delivered=%s "
+                "latency=%.3fs request=%r response=%r",
+                session_id,
+                context_used,
+                emotion,
+                method,
+                delivered,
+                time.perf_counter() - start,
+                user_text,
+                draft,
+            )
+        except asyncio.CancelledError:
+            if not sealed:
+                self._drop_teacher_journal()
+                reset_trace()
+            raise
         return True
 
     def _commit_crisis_relationship(self) -> None:
