@@ -19,7 +19,7 @@
 
 from .endpoint import napcat_endpoint
 from .inbox import COALESCE_SEC, QqInbox
-from .link import CLAUSE_GAP_SEC, NapcatLink
+from .link import EMOJI_GAP_SEC, NapcatLink, clause_gap_sec
 from .protocol import (
     build_send_private,
     friend_recall_from_event,
@@ -29,11 +29,12 @@ from .protocol import (
 from .split import split_qq_clauses
 
 __all__ = [
-    "CLAUSE_GAP_SEC",
     "COALESCE_SEC",
+    "EMOJI_GAP_SEC",
     "NapcatLink",
     "QqInbox",
     "build_send_private",
+    "clause_gap_sec",
     "friend_recall_from_event",
     "napcat_endpoint",
     "private_inbound_from_event",

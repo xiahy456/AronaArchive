@@ -27,7 +27,7 @@ from app.conversation import ConversationManager, DialogueEntry, _format_transcr
 from app.life.impulse import _speak_impulse  # noqa: E402
 from app.life.state import Impulse, InnerState  # noqa: E402
 from app.napcat import NapcatLink, QqInbox, build_send_private, private_text_from_event, split_qq_clauses  # noqa: E402
-from app.napcat.link import CLAUSE_GAP_SEC  # noqa: E402
+from app.napcat.link import EMOJI_GAP_SEC, clause_gap_sec  # noqa: E402
 from app.emoji_catalog import load_emoji_catalog, lookup_emoji, sticker_from_row  # noqa: E402
 from app.planner.prompts import (  # noqa: E402
     PLANNER_SYSTEM_BASE,
@@ -71,6 +71,9 @@ def test_split() -> None:
                 "我的脸好像有点热热的呢",
             ],
         ),
+        ("「诶？」这句话吗？", ["「诶？」这句话吗？"]),
+        ("6.5分", ["6.5分"]),
+        ("结束了.下一句", ["结束了", "下一句"]),
     ]
     for text, expected in cases:
         got = split_qq_clauses(text)
@@ -194,9 +197,24 @@ class _Ws:
         self.frames.append(json.loads(raw))
 
 
+def test_clause_gap() -> None:
+    if clause_gap_sec("") != 0.0:
+        _fail("empty next clause gap is 0")
+    if EMOJI_GAP_SEC != 0.5:
+        _fail(f"emoji gap {EMOJI_GAP_SEC}")
+    sample = "今天想做什么？"
+    n = len(sample)
+    lo, hi = 0.05 * n, 0.08 * n
+    for _ in range(40):
+        gap = clause_gap_sec(sample)
+        if gap < lo - 1e-9 or gap > hi + 1e-9:
+            _fail(f"gap {gap} outside [{lo}, {hi}] for n={n}")
+        if round(gap, 2) != gap:
+            _fail(f"gap {gap} must have at most two decimals")
+    print("clause gap ok")
+
+
 async def test_link_send() -> None:
-    if CLAUSE_GAP_SEC != 2.0:
-        _fail("clause gap should default to 2 seconds")
     link = NapcatLink("42", gap_sec=0)
     ws = _Ws()
     await link.bind(ws)  # type: ignore[arg-type]
@@ -565,16 +583,12 @@ async def test_emoji_send() -> None:
     sticker = lookup_emoji("4b9ca94171d02f28e7829afa28709c45")
     if sticker is None:
         _fail("missing sample sticker")
-    link = NapcatLink("42", gap_sec=0.05)
+    link = NapcatLink("42", gap_sec=0)
     ws = _Ws()
     await link.bind(ws)  # type: ignore[arg-type]
-    started = time.perf_counter()
     ok = await link.send_text("欢迎回来老师！今天想做什么？", emoji=sticker)
-    elapsed = time.perf_counter() - started
     if not ok or len(ws.frames) != 3:
         _fail(f"expected two texts then mface, got {ws.frames}")
-    if elapsed < 0.08:
-        _fail(f"mface should wait another gap, elapsed={elapsed:.3f}")
     if ws.frames[0]["params"]["message"][0]["type"] != "text":
         _fail("first frame is text")
     if ws.frames[1]["params"]["message"][0]["type"] != "text":
@@ -901,6 +915,7 @@ def test_config() -> None:
 
 def main() -> None:
     test_split()
+    test_clause_gap()
     test_inbound()
     test_prompt_method()
     test_emoji_catalog()

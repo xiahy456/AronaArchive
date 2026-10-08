@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 import uuid
 from typing import Any
 
@@ -32,7 +33,15 @@ from .split import split_qq_clauses
 
 logger = logging.getLogger(__name__)
 
-CLAUSE_GAP_SEC = 2.0
+EMOJI_GAP_SEC = 0.5
+
+
+def clause_gap_sec(next_text: str) -> float:
+    """Seconds to wait before the next clause, from its character count."""
+    n = len(next_text or "")
+    if n <= 0:
+        return 0.0
+    return round(random.uniform(0.05 * n, 0.08 * n), 2)
 
 
 def _sticker_frame(user_qq_id: str, emoji: object) -> dict | None:
@@ -52,9 +61,10 @@ def _sticker_frame(user_qq_id: str, emoji: object) -> dict | None:
 
 
 class NapcatLink:
-    def __init__(self, user_qq_id: str, *, gap_sec: float = CLAUSE_GAP_SEC) -> None:
+    def __init__(self, user_qq_id: str, *, gap_sec: float | None = None) -> None:
+        """gap_sec=0 disables waits (tests). Any other value enables dynamic gaps."""
         self.user_qq_id = str(user_qq_id or "").strip()
-        self._gap_sec = max(0.0, float(gap_sec))
+        self._gaps_enabled = gap_sec is None or float(gap_sec) > 0
         self._ws: WebSocket | None = None
         self._send_lock = asyncio.Lock()
         self._pending: dict[str, asyncio.Future[dict[str, Any]]] = {}
@@ -139,14 +149,14 @@ class NapcatLink:
             if ws is None:
                 return False
             for index, clause in enumerate(clauses):
-                if index and self._gap_sec:
-                    await asyncio.sleep(self._gap_sec)
+                if index and self._gaps_enabled:
+                    await asyncio.sleep(clause_gap_sec(clause))
                 if not await self._send_frame(ws, build_send_private(self.user_qq_id, clause)):
                     return False
             if emoji is None:
                 return True
-            if self._gap_sec:
-                await asyncio.sleep(self._gap_sec)
+            if self._gaps_enabled:
+                await asyncio.sleep(EMOJI_GAP_SEC)
             sticker = _sticker_frame(self.user_qq_id, emoji)
             if sticker is None:
                 return True

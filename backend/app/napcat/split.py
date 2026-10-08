@@ -24,12 +24,23 @@ import unicodedata
 _END = frozenset("。.；;？?！!")
 _COMMA = frozenset("，,")
 _MIN_COMMA_WORDS = 3
+# Stack stores the expected closer for each open pair.
+_PAIR_OPEN = {
+    "「": "」",
+    "【": "】",
+    "{": "}",
+    "“": "”",
+    "‘": "’",
+    '"': '"',
+    "'": "'",
+}
 
 
 def split_qq_clauses(text: str) -> list[str]:
     """Split on sentence marks, and on a comma after at least three words.
 
     Ending `。` `.` `，` `,` are removed. `……`, `...`, `..`, `？`, and `！` stay.
+    Marks inside paired quotes/brackets do not split. A `.` between digits stays.
     """
     raw = text or ""
     if not raw.strip():
@@ -37,6 +48,7 @@ def split_qq_clauses(text: str) -> list[str]:
     clauses: list[str] = []
     buf: list[str] = []
     words = 0
+    pair_stack: list[str] = []
 
     def flush() -> None:
         nonlocal words
@@ -54,10 +66,23 @@ def split_qq_clauses(text: str) -> list[str]:
         elif _is_punct(ch):
             words = 0
 
+    def in_pair() -> bool:
+        return bool(pair_stack)
+
     i = 0
     n = len(raw)
     while i < n:
         ch = raw[i]
+        if pair_stack and ch == pair_stack[-1]:
+            pair_stack.pop()
+            append_char(ch)
+            i += 1
+            continue
+        if ch in _PAIR_OPEN:
+            pair_stack.append(_PAIR_OPEN[ch])
+            append_char(ch)
+            i += 1
+            continue
         if ch == "…":
             while i < n and raw[i] == "…":
                 buf.append(raw[i])
@@ -68,11 +93,31 @@ def split_qq_clauses(text: str) -> list[str]:
             j = i + 1
             while j < n and raw[j] == ".":
                 j += 1
-            if j - i >= 3:
+            count = j - i
+            if count >= 3:
                 buf.extend(raw[i:j])
                 i = j
                 words = 0
                 continue
+            if (
+                count == 1
+                and i > 0
+                and j < n
+                and raw[i - 1].isdigit()
+                and raw[j].isdigit()
+            ):
+                append_char(".")
+                i = j
+                continue
+            if in_pair():
+                buf.extend(raw[i:j])
+                i = j
+                words = 0
+                continue
+        if in_pair():
+            append_char(ch)
+            i += 1
+            continue
         if ch in _COMMA and words < _MIN_COMMA_WORDS:
             append_char(ch)
             i += 1
