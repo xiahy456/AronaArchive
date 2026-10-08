@@ -25,6 +25,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ..emoji_catalog import lookup_emoji
+
 logger = logging.getLogger(__name__)
 
 _IMAGE_SUFFIXES = frozenset({".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"})
@@ -49,19 +51,18 @@ class QqInbound:
 
 def private_text_from_event(event: object, user_qq_id: str) -> str | None:
     """Text of a private message from the configured teacher. Anything else is None."""
-    message = _teacher_message(event, user_qq_id)
-    if message is None:
+    inbound = private_inbound_from_event(event, user_qq_id)
+    if inbound is None:
         return None
-    return _text_from_segments(message) or None
+    return inbound.text or None
 
 
 def private_inbound_from_event(event: object, user_qq_id: str) -> QqInbound | None:
-    """Teacher private text plus photo refs. Stickers and empty events are None."""
+    """Teacher private text, mall stickers as text, and photo refs."""
     message = _teacher_message(event, user_qq_id)
     if message is None:
         return None
-    text = _text_from_segments(message)
-    images = _images_from_segments(message)
+    text, images = _parse_segments(message)
     if not text and not images:
         return None
     return QqInbound(text=text, images=tuple(images))
@@ -83,21 +84,9 @@ def _teacher_message(event: object, user_qq_id: str) -> list[Any] | None:
     return message
 
 
-def _text_from_segments(message: list[Any]) -> str:
+def _parse_segments(message: list[Any]) -> tuple[str, list[QqUrlImage | QqFileImage]]:
+    """Walk segments in order: text and mall stickers into text, photos into images."""
     parts: list[str] = []
-    for segment in message:
-        if not isinstance(segment, dict) or segment.get("type") != "text":
-            continue
-        data = segment.get("data")
-        if not isinstance(data, dict):
-            continue
-        text = str(data.get("text") or "")
-        if text:
-            parts.append(text)
-    return "".join(parts).strip()
-
-
-def _images_from_segments(message: list[Any]) -> list[QqUrlImage | QqFileImage]:
     images: list[QqUrlImage | QqFileImage] = []
     for segment in message:
         if not isinstance(segment, dict):
@@ -106,6 +95,11 @@ def _images_from_segments(message: list[Any]) -> list[QqUrlImage | QqFileImage]:
         data = segment.get("data")
         if not isinstance(data, dict):
             continue
+        if kind == "text":
+            text = str(data.get("text") or "")
+            if text:
+                parts.append(text)
+            continue
         if kind == "file":
             image = _file_image(data)
             if image is not None:
@@ -113,10 +107,31 @@ def _images_from_segments(message: list[Any]) -> list[QqUrlImage | QqFileImage]:
             continue
         if kind != "image":
             continue
+        sticker = _mall_sticker_text(data)
+        if sticker is not None:
+            parts.append(sticker)
+            continue
         image = _photo_image(data)
         if image is not None:
             images.append(image)
-    return images
+    return "".join(parts).strip(), images
+
+
+def _mall_sticker_text(data: dict[str, Any]) -> str | None:
+    """QQ mall sticker → （表情包：description）. Unknown ids are skipped."""
+    emoji_id = str(data.get("emoji_id") or "").strip()
+    package_id = str(data.get("emoji_package_id") or "").strip()
+    if not emoji_id and not package_id:
+        return None
+    if not emoji_id:
+        return None
+    sticker = lookup_emoji(emoji_id)
+    if sticker is None:
+        return None
+    description = (sticker.description or "").strip()
+    if not description:
+        return None
+    return f"（表情包：{description}）"
 
 
 def _file_image(data: dict[str, Any]) -> QqFileImage | None:

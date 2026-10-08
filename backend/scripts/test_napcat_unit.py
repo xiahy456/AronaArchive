@@ -461,12 +461,46 @@ def test_qq_images() -> None:
             "message": message,
         }
 
+    known_id = "d67b510a9eb2e41c31fbe3810eb06ee6"
     mall = event(
         [
             {
                 "type": "image",
                 "data": {
-                    "emoji_id": "abc",
+                    "emoji_id": known_id,
+                    "emoji_package_id": "235125",
+                    "summary": "[星星]",
+                    "url": "https://example.test/a.gif",
+                },
+            }
+        ]
+    )
+    mall_in = private_inbound_from_event(mall, "10001")
+    if mall_in is None or mall_in.text != "（表情包：好耶）" or mall_in.images:
+        _fail(f"known mall sticker {mall_in}")
+    mixed = event(
+        [
+            {"type": "text", "data": {"text": "看这个"}},
+            {
+                "type": "image",
+                "data": {
+                    "emoji_id": known_id,
+                    "emoji_package_id": "235125",
+                    "summary": "[星星]",
+                    "url": "https://example.test/a.gif",
+                },
+            },
+        ]
+    )
+    mixed_in = private_inbound_from_event(mixed, "10001")
+    if mixed_in is None or mixed_in.text != "看这个（表情包：好耶）" or mixed_in.images:
+        _fail(f"text plus mall sticker {mixed_in}")
+    unknown = event(
+        [
+            {
+                "type": "image",
+                "data": {
+                    "emoji_id": "not-in-catalog",
                     "emoji_package_id": "1",
                     "summary": "[期待]",
                     "url": "https://example.test/a.gif",
@@ -474,8 +508,8 @@ def test_qq_images() -> None:
             }
         ]
     )
-    if private_inbound_from_event(mall, "10001") is not None:
-        _fail("mall sticker must not enqueue")
+    if private_inbound_from_event(unknown, "10001") is not None:
+        _fail("unknown mall sticker must not enqueue")
     favorite = event(
         [
             {

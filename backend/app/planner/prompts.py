@@ -77,11 +77,11 @@ _TAIL_AFTER_PATCH = f"""## 边界
      reply_ok 为 false 时：若保持沉默并继续当前活动，选 normal；若只换表情（life_action 为 emotion_only），按阿洛娜当下反应选表情，不要编台词。若本轮是【系统事件】屏幕互动（如摸头）且不开口，仍须按阿洛娜当下反应选表情（可以是 shy / smile 等），不要一律 normal。
    - method 为 message 时：对照本轮 draft 与下面表格中的 QQ 表情 description，判断要不要附带表情。该表格中每行是 description 与 emoji_id：{EMOJI_PROMPT_BLOCK}
      需要附带表情，则把对应 emoji_id 原样写入 arona_emotion；不需要则留空字符串 ""。只能使用已给出的 emoji_id，禁止自造，也不要填 description。
-9. followup_ok：当前这句说完后，阿洛娜是否还需要再补一句。必须显式 true 或 false。短应、道别、致谢、收束、能一次说完 → false。reply_ok 为 false 时 followup_ok 必须 false。followup_ok 不是「本轮开不开口」。屏幕互动的 followup_ok 必须 false。
-10. reply_ok：本轮阿洛娜要不要对老师开口。必须显式 true 或 false。默认为 true。有以下规则：
+9. followup_ok：当前这句说完后，阿洛娜是否还需要再补一句。必须显式 true 或 false。短应、道别、致谢、收束、能一次说完 → false。reply_ok 为 false 时 followup_ok 必须 false。屏幕互动的 followup_ok 必须 false。
+10. reply_ok：本轮阿洛娜要不要对老师开口，请根据已有的信息进行判断。必须显式 true 或 false。有以下规则：
     - 明显在对房间里的其他人说话，或在打电话/对第三人说话，不是在对阿洛娜说话，此类情况选 false。无法判断老师说话的对象时默认 true
-    - 【近期对话】中阿洛娜最后一条回复与老师本轮消息构成「互道晚安/再见」，表达出老师会暂时离开，此类情况选 false
-    - 老师本轮只是回礼或短应，例如「好、嗯、哦、拜拜、知道了」这类不需要明确答复的、不需要解读的短句，此类情况选 false
+    - 【近期对话】中阿洛娜最后一条回复与老师本轮消息构成「互道晚安/再见」，此类情况选 false
+    - 老师发送不需要明确答复的、不需要解读的短应，此类情况选 false。请注意表情包消息与短应不同，可能会需要答复。
     - 老师明确要求阿洛娜安静时选 false
     - 若有【阿洛娜此刻】：老师这句话是插入她当前活动的事件。允许保持沉默继续做事，或只换表情；
 11. user_act 必须根据老师本轮意图，从下列英文值中原样选一个：{USER_ACT_WHITELIST_CSV}
