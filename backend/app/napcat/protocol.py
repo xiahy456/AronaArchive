@@ -47,6 +47,7 @@ class QqFileImage:
 class QqInbound:
     text: str
     images: tuple[QqUrlImage | QqFileImage, ...]
+    message_id: str = ""
 
 
 def private_text_from_event(event: object, user_qq_id: str) -> str | None:
@@ -65,7 +66,25 @@ def private_inbound_from_event(event: object, user_qq_id: str) -> QqInbound | No
     text, images = _parse_segments(message)
     if not text and not images:
         return None
-    return QqInbound(text=text, images=tuple(images))
+    message_id = ""
+    if isinstance(event, dict):
+        message_id = str(event.get("message_id") or "").strip()
+    return QqInbound(text=text, images=tuple(images), message_id=message_id)
+
+
+def friend_recall_from_event(event: object, user_qq_id: str) -> str | None:
+    """message_id of a teacher friend_recall notice. Anything else is None."""
+    expected = str(user_qq_id or "").strip()
+    if not expected or not isinstance(event, dict):
+        return None
+    if event.get("post_type") != "notice":
+        return None
+    if event.get("notice_type") != "friend_recall":
+        return None
+    if str(event.get("user_id") or "").strip() != expected:
+        return None
+    message_id = str(event.get("message_id") or "").strip()
+    return message_id or None
 
 
 def _teacher_message(event: object, user_qq_id: str) -> list[Any] | None:

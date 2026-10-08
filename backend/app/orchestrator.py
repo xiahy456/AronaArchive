@@ -344,6 +344,7 @@ class Orchestrator:
         on_reply_ready: Callable[[], None] | None = None,
         image: ImagePayload | None = None,
         qq_images: list[str | ImagePayload] | None = None,
+        qq_parts: list[dict[str, str]] | None = None,
         interrupt_ctx: InnerState | None = None,
         on_life_action: LifeActionFn | None = None,
         inbound_method: str = "direct",
@@ -401,6 +402,7 @@ class Orchestrator:
                 on_reply_ready=on_reply_ready,
                 image=image,
                 qq_images=photos,
+                qq_parts=qq_parts,
                 interrupt_ctx=interrupt_ctx,
                 on_life_action=on_life_action,
                 inbound_method=inbound_method,
@@ -446,6 +448,7 @@ class Orchestrator:
                     on_sent=_commit_relationship,
                     inbound_method=inbound_method,
                     client_online=client_online,
+                    qq_parts=qq_parts,
                 )
                 _committed()
                 return True
@@ -634,6 +637,7 @@ class Orchestrator:
                             memory_block=memory_block,
                             image=image,
                             qq_images=photos,
+                            qq_parts=qq_parts,
                             interrupt_ctx=interrupt_ctx,
                             on_life_action=on_life_action,
                             inbound_method=inbound_method,
@@ -657,6 +661,7 @@ class Orchestrator:
                             on_sent=_commit_relationship,
                             inbound_method=inbound_method,
                             client_online=client_online,
+                            qq_parts=qq_parts,
                         )
                         _committed()
                         return True
@@ -718,7 +723,11 @@ class Orchestrator:
             if not delivered:
                 # Keep relationship at pre-turn state: no user Δ without a delivered reply.
                 self.conversations.append(
-                    session_id, "user", user_text, method=inbound_method
+                    session_id,
+                    "user",
+                    user_text,
+                    method=inbound_method,
+                    qq_parts=qq_parts,
                 )
                 _committed()
                 logger.info(
@@ -730,7 +739,13 @@ class Orchestrator:
                 return True
 
             _commit_relationship()
-            self.conversations.append(session_id, "user", user_text, method=inbound_method)
+            self.conversations.append(
+                session_id,
+                "user",
+                user_text,
+                method=inbound_method,
+                qq_parts=qq_parts,
+            )
             self.conversations.append(session_id, "assistant", full, method=method)
             _committed()
 
@@ -783,6 +798,7 @@ class Orchestrator:
         memory_block: str = "",
         image: ImagePayload | None = None,
         qq_images: list[str | ImagePayload] | None = None,
+        qq_parts: list[dict[str, str]] | None = None,
         interrupt_ctx: InnerState | None = None,
         on_life_action: LifeActionFn | None = None,
         inbound_method: str = "direct",
@@ -873,7 +889,13 @@ class Orchestrator:
                 emit_emotion=True,
             )
             self._commit_crisis_relationship()
-            self.conversations.append(session_id, "user", user_text, method=inbound_method)
+            self.conversations.append(
+                session_id,
+                "user",
+                user_text,
+                method=inbound_method,
+                qq_parts=qq_parts,
+            )
             if delivered:
                 self.conversations.append(session_id, "assistant", draft, method=method)
             if on_committed is not None:
@@ -1551,6 +1573,7 @@ class Orchestrator:
         on_sent: Callable[[], None] | None = None,
         inbound_method: str = "direct",
         client_online: bool = True,
+        qq_parts: list[dict[str, str]] | None = None,
     ) -> None:
         action = "silence" if reason == "reply_ok_false" else (
             decision.action if decision is not None else "silence"
@@ -1571,7 +1594,13 @@ class Orchestrator:
             on_sent()
         key = "silence_count" if action == "silence" else "refuse_count"
         self.stats[key] = int(self.stats.get(key, 0)) + 1
-        self.conversations.append(session_id, "user", user_text, method=inbound_method)
+        self.conversations.append(
+            session_id,
+            "user",
+            user_text,
+            method=inbound_method,
+            qq_parts=qq_parts,
+        )
         if decision is not None:
             self._note_arona_relationship(decision, action)
         logger.info(

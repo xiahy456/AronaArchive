@@ -35,7 +35,12 @@ from app.planner.prompts import (  # noqa: E402
     build_planner_user_message,
 )
 from app.image_input import image_payload_from_napcat_file  # noqa: E402
-from app.napcat.protocol import QqFileImage, QqUrlImage, private_inbound_from_event  # noqa: E402
+from app.napcat.protocol import (  # noqa: E402
+    QqFileImage,
+    QqUrlImage,
+    friend_recall_from_event,
+    private_inbound_from_event,
+)
 from app.planner.client import qq_image_content  # noqa: E402
 from app.planner.schema import parse_and_gate_intent  # noqa: E402
 
@@ -797,6 +802,93 @@ def test_outbound_qq_fallback() -> None:
     print("outbound qq fallback ok")
 
 
+def test_friend_recall_parse() -> None:
+    notice = {
+        "post_type": "notice",
+        "notice_type": "friend_recall",
+        "user_id": 10001,
+        "message_id": 4242,
+    }
+    if friend_recall_from_event(notice, "10001") != "4242":
+        _fail("friend_recall should yield message_id")
+    if friend_recall_from_event(notice, "10002") is not None:
+        _fail("other qq ids must ignore recall")
+    if friend_recall_from_event({"post_type": "message"}, "10001") is not None:
+        _fail("non-notice must ignore recall")
+    msg = {
+        "post_type": "message",
+        "message_type": "private",
+        "user_id": 10001,
+        "message_id": 99,
+        "message": [{"type": "text", "data": {"text": "嗨"}}],
+    }
+    inbound = private_inbound_from_event(msg, "10001")
+    if inbound is None or inbound.message_id != "99":
+        _fail(f"inbound must keep message_id {inbound}")
+    print("friend recall parse ok")
+
+
+def test_dialogue_recall() -> None:
+    store = ConversationManager(persist_path=None)
+    store.append(
+        "qq",
+        "user",
+        "第一句\n第二句",
+        method="message",
+        qq_parts=[
+            {"message_id": "1", "text": "第一句"},
+            {"message_id": "2", "text": "第二句"},
+        ],
+    )
+    store.append("qq", "assistant", "收到", method="message")
+    if not store.remove_qq_message("1"):
+        _fail("remove_qq_message should find id 1")
+    entries = store.entries()
+    users = [item for item in entries if item.role == "user"]
+    if len(users) != 1 or users[0].content != "第二句":
+        _fail(f"dialogue rewrite {users}")
+    if users[0].qq_parts != [{"message_id": "2", "text": "第二句"}]:
+        _fail(f"qq_parts {users[0].qq_parts}")
+    if not store.remove_qq_message("2"):
+        _fail("remove last part")
+    if any(item.role == "user" for item in store.entries()):
+        _fail("empty qq user row should be deleted")
+    if not any(item.role == "assistant" for item in store.entries()):
+        _fail("assistant reply stays")
+    print("dialogue recall ok")
+
+
+async def test_inbox_recall() -> None:
+    orch = _Chat()
+    state = _State(_Orch("sent", "message"), _Engine(_impulse()), _Hub(), None)
+    state.orchestrator = orch
+    state.generation_kind = ""
+    state.generation_owner = ""
+    state.generation_interrupts = {}
+    inbox = QqInbox(state, coalesce_sec=0.05)
+    await inbox.push("留下", message_id="keep")
+    await inbox.push("撤回我", message_id="drop")
+    await inbox.recall("drop")
+    await asyncio.sleep(0.2)
+    if orch.texts != ["留下"]:
+        _fail(f"buffered recall got {orch.texts}")
+
+    gate = _GateChat()
+    state.orchestrator = gate
+    inbox2 = QqInbox(state, coalesce_sec=0.05)
+    await inbox2.push("进行中", message_id="a")
+    await inbox2.push("也留下", message_id="b")
+    await _wait_gates(gate, 1)
+    await inbox2.recall("a")
+    await _wait_gates(gate, 2)
+    for event in gate.gates:
+        event.set()
+    await asyncio.sleep(0.2)
+    if not gate.texts or gate.texts[-1] != "也留下":
+        _fail(f"final turn after recall should be remaining only, got {gate.texts}")
+    print("inbox recall ok")
+
+
 def test_config() -> None:
     cfg = NapcatConfig(user_qq_id=10001, napcat_ws_path="arona", napcat_token=" tok ")
     if cfg.user_qq_id != "10001" or cfg.napcat_ws_path != "/arona" or cfg.napcat_token != "tok":
@@ -813,6 +905,8 @@ def main() -> None:
     test_prompt_method()
     test_emoji_catalog()
     test_qq_images()
+    test_friend_recall_parse()
+    test_dialogue_recall()
     test_outbound_qq_fallback()
     test_config()
     asyncio.run(test_link_send())
@@ -820,6 +914,7 @@ def main() -> None:
     asyncio.run(test_get_file_roundtrip())
     asyncio.run(test_offline_impulse())
     asyncio.run(test_coalesce())
+    asyncio.run(test_inbox_recall())
     asyncio.run(test_barge_in_merges())
     asyncio.run(test_after_ready_holds())
     asyncio.run(test_barge_in_after_seal_keeps_reply())

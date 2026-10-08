@@ -43,6 +43,7 @@ _BLOCK_KINDS = frozenset({"chat", "welcome", "qq"})
 class _QqPiece:
     text: str
     images: tuple[Any, ...]
+    message_id: str = ""
 
 
 class QqInbox:
@@ -51,6 +52,7 @@ class QqInbox:
         self._coalesce_sec = max(0.0, float(coalesce_sec))
         self._parts: list[_QqPiece] = []
         self._held: list[_QqPiece] = []
+        self._active: list[_QqPiece] = []
         self._timer: asyncio.Task[None] | None = None
         self._running = False
         self._reply_ready = False
@@ -58,12 +60,15 @@ class QqInbox:
         self._chat_task: asyncio.Task[bool] | None = None
         self._lock = asyncio.Lock()
 
-    async def push(self, text: str, images: Any = None) -> None:
+    async def push(
+        self, text: str, images: Any = None, *, message_id: str = ""
+    ) -> None:
         cleaned = (text or "").strip()
         refs = tuple(images or ())
+        mid = str(message_id or "").strip()
         if not cleaned and not refs:
             return
-        piece = _QqPiece(cleaned, refs)
+        piece = _QqPiece(cleaned, refs, mid)
         await self._interrupt_hands()
         to_cancel: asyncio.Task[bool] | None = None
         async with self._lock:
@@ -77,7 +82,6 @@ class QqInbox:
                 if self._chat_task is not None and not self._chat_task.done():
                     to_cancel = self._chat_task
                 logger.info("qq barge-in generation_id=%s", self._generation_id)
-                # Cancel outside the lock so the chat task can exit cleanly.
             elif self._blocked():
                 self._held.append(piece)
                 return
@@ -87,6 +91,37 @@ class QqInbox:
                 return
         if to_cancel is not None:
             to_cancel.cancel()
+
+    async def recall(self, message_id: str) -> None:
+        mid = str(message_id or "").strip()
+        if not mid:
+            return
+        to_cancel: asyncio.Task[bool] | None = None
+        async with self._lock:
+            self._parts = [part for part in self._parts if part.message_id != mid]
+            self._held = [part for part in self._held if part.message_id != mid]
+            hit_active = any(part.message_id == mid for part in self._active)
+            if hit_active:
+                self._active = [part for part in self._active if part.message_id != mid]
+                self._generation_id += 1
+                if self._chat_task is not None and not self._chat_task.done():
+                    to_cancel = self._chat_task
+                logger.info(
+                    "qq recall active message_id=%s generation_id=%s left=%d",
+                    mid,
+                    self._generation_id,
+                    len(self._active),
+                )
+            if not self._parts and self._timer is not None and not self._timer.done():
+                self._timer.cancel()
+                self._timer = None
+        if to_cancel is not None:
+            to_cancel.cancel()
+        orch = getattr(self.state, "orchestrator", None)
+        conversations = getattr(orch, "conversations", None) if orch is not None else None
+        if conversations is not None and hasattr(conversations, "remove_qq_message"):
+            if conversations.remove_qq_message(mid):
+                logger.info("qq recall dialogue message_id=%s", mid)
 
     def on_generation_idle(self) -> None:
         """Client generation finished. Release texts that arrived during it."""
@@ -140,23 +175,20 @@ class QqInbox:
         async with self._lock:
             if self._running or not self._parts:
                 return
-            text = "\n".join(part.text for part in self._parts if part.text.strip())
-            images = [image for part in self._parts for image in part.images]
+            self._active = list(self._parts)
             self._parts.clear()
-            if not text and not images:
+            if not self._active:
                 return
             self._running = True
             self._reply_ready = False
         try:
-            resolved = await self._resolve_images(images)
-            if not text and not resolved:
-                return
-            await self._generate(text, resolved)
+            await self._generate()
         finally:
             async with self._lock:
                 self._running = False
                 self._reply_ready = False
                 self._chat_task = None
+                self._active.clear()
                 if self._held and not self._blocked():
                     self._parts.extend(self._held)
                     self._held.clear()
@@ -194,60 +226,76 @@ class QqInbox:
             self._parts.clear()
             return drained
 
-    async def _generate(self, text: str, images: list[Any] | None = None) -> None:
+    def _qq_parts_payload(self, pieces: list[_QqPiece]) -> list[dict[str, str]]:
+        payload: list[dict[str, str]] = []
+        for part in pieces:
+            mid = (part.message_id or "").strip()
+            text = (part.text or "").strip()
+            if not mid and not text:
+                continue
+            payload.append({"message_id": mid, "text": text})
+        return payload
+
+    async def _generate(self) -> None:
         state = self.state
         hub = getattr(state, "hub", None)
         if hub is not None:
             hub.set_busy(QQ_SESSION_ID, True)
         state.generation_kind = "qq"
         state.generation_owner = QQ_SESSION_ID
+        finished_text = ""
         try:
             scheduler = getattr(state, "scheduler", None)
-            if scheduler is not None:
-                if wants_goal_mute(text):
-                    muted = scheduler.mute_last_followup()
-                    if muted:
-                        logger.info("followup muted by qq key=%s", muted)
-                else:
-                    acked = scheduler.ack_pending_followups()
-                    if acked:
-                        logger.info("followup acked by qq keys=%s", acked)
-                scheduler.note_user_activity()
             client_online = bool(hub is not None and hub.all_sessions())
-            pending_text = text
-            pending_images = list(images or [])
-            finished_text = pending_text
 
             while True:
                 extra = await self._drain_barge_parts()
                 if extra:
-                    chunks = [pending_text] if pending_text.strip() else []
-                    raw_images: list[Any] = list(pending_images)
-                    for part in extra:
-                        if part.text.strip():
-                            chunks.append(part.text.strip())
-                        raw_images.extend(part.images)
-                    pending_text = "\n".join(chunks)
-                    pending_images = await self._resolve_images(raw_images)
+                    async with self._lock:
+                        self._active.extend(extra)
+                async with self._lock:
+                    pieces = list(self._active)
+                pending_text = "\n".join(
+                    part.text for part in pieces if part.text.strip()
+                )
+                raw_images = [image for part in pieces for image in part.images]
+                pending_images = await self._resolve_images(raw_images)
                 if not pending_text.strip() and not pending_images:
                     return
+
+                if scheduler is not None:
+                    if wants_goal_mute(pending_text):
+                        muted = scheduler.mute_last_followup()
+                        if muted:
+                            logger.info("followup muted by qq key=%s", muted)
+                    else:
+                        acked = scheduler.ack_pending_followups()
+                        if acked:
+                            logger.info("followup acked by qq keys=%s", acked)
+                    scheduler.note_user_activity()
 
                 async with self._lock:
                     self._reply_ready = False
                     my_id = self._generation_id
+                    turn_pieces = list(self._active)
 
                 started_at = time.perf_counter()
+                turn_text = "\n".join(
+                    part.text for part in turn_pieces if part.text.strip()
+                )
+                turn_images = await self._resolve_images(
+                    [image for part in turn_pieces for image in part.images]
+                )
+                qq_parts = self._qq_parts_payload(turn_pieces)
                 request_json = json.dumps(
                     {
                         "type": "qq",
-                        "content": pending_text,
-                        "image_count": len(pending_images),
+                        "content": turn_text,
+                        "image_count": len(turn_images),
+                        "message_ids": [part.message_id for part in turn_pieces],
                     },
                     ensure_ascii=False,
                 )
-
-                turn_text = pending_text
-                turn_images = list(pending_images)
                 turn_id = my_id
 
                 async def _run_chat() -> bool:
@@ -263,6 +311,7 @@ class QqInbox:
                         inbound_method=METHOD_MESSAGE,
                         client_online=client_online,
                         qq_images=turn_images,
+                        qq_parts=qq_parts,
                     )
 
                 task = asyncio.create_task(_run_chat())
@@ -272,13 +321,13 @@ class QqInbox:
                     ok = await task
                 except asyncio.CancelledError:
                     async with self._lock:
-                        has_more = bool(self._parts)
+                        has_more = bool(self._parts) or bool(self._active)
                         self._chat_task = None
                         self._reply_ready = False
                     if has_more:
-                        logger.info("qq chat cancelled; retry with barge-in")
+                        logger.info("qq chat cancelled; retry with remaining")
                         continue
-                    raise
+                    return
                 finally:
                     async with self._lock:
                         if self._chat_task is task:
@@ -286,14 +335,14 @@ class QqInbox:
 
                 if not ok:
                     async with self._lock:
-                        has_more = bool(self._parts)
+                        has_more = bool(self._parts) or bool(self._active)
                         self._reply_ready = False
                     if has_more:
-                        logger.info("qq chat aborted; retry with barge-in")
+                        logger.info("qq chat aborted; retry with remaining")
                         continue
                     return
 
-                finished_text = pending_text
+                finished_text = turn_text
                 break
 
             from ..life.thought.triggers import note_finished_turn

@@ -24,6 +24,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from .channel import method_label
 from .life.thought.schema import is_thought_history_marker
@@ -38,6 +39,7 @@ _PROACTIVE_MARKERS = frozenset(
     {"【上线】", "【搭话】", "【提醒】", "【回访】", "【心情回访】", "【节日】"}
 )
 _PAT_HEAD = "【摸头】"
+_IMAGE_PLACEHOLDER = "（图片）"
 ARRIVE_TEXT = "老师接上"
 LEAVE_TEXT = "老师离开"
 
@@ -77,9 +79,10 @@ class DialogueEntry:
     time: str = ""
     session_id: str = ""
     method: str = ""
+    qq_parts: list[dict[str, str]] = field(default_factory=list)
 
-    def to_dict(self) -> dict[str, str]:
-        payload = {
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
             "role": self.role,
             "kind": self.kind,
             "content": self.content,
@@ -89,6 +92,8 @@ class DialogueEntry:
         }
         if self.method:
             payload["method"] = self.method
+        if self.qq_parts:
+            payload["qq_parts"] = list(self.qq_parts)
         return payload
 
     def history_line(self) -> dict[str, str]:
@@ -100,24 +105,51 @@ class DialogueEntry:
         }
 
 
+def _qq_parts_from_raw(raw: object) -> list[dict[str, str]]:
+    if not isinstance(raw, list):
+        return []
+    parts: list[dict[str, str]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        message_id = str(item.get("message_id") or "").strip()
+        text = str(item.get("text") or "").strip()
+        if not message_id and not text:
+            continue
+        parts.append({"message_id": message_id, "text": text})
+    return parts
+
+
+def _content_from_qq_parts(parts: list[dict[str, str]]) -> str:
+    texts = [str(part.get("text") or "").strip() for part in parts]
+    joined = "\n".join(text for text in texts if text)
+    if joined:
+        return joined
+    return _IMAGE_PLACEHOLDER if parts else ""
+
+
 def _entry_from_dict(raw: object) -> DialogueEntry | None:
     if not isinstance(raw, dict):
         return None
     role = str(raw.get("role") or "").strip()
     kind = str(raw.get("kind") or "").strip()
     content = str(raw.get("content") or "").strip()
-    if role not in _ROLES or kind not in _KINDS or not content:
+    qq_parts = _qq_parts_from_raw(raw.get("qq_parts"))
+    if role not in _ROLES or kind not in _KINDS:
         return None
-    if is_thought_history_marker(content) or content in _PROACTIVE_MARKERS:
+    if not content and not qq_parts:
+        return None
+    if content and (is_thought_history_marker(content) or content in _PROACTIVE_MARKERS):
         return None
     return DialogueEntry(
         role=role,
         kind=kind,
-        content=content,
+        content=content or _content_from_qq_parts(qq_parts),
         action=str(raw.get("action") or "").strip(),
         time=str(raw.get("time") or "").strip(),
         session_id=str(raw.get("session_id") or "").strip(),
         method=str(raw.get("method") or "").strip(),
+        qq_parts=qq_parts,
     )
 
 
@@ -166,6 +198,31 @@ class DialogueStore:
         if len(self.entries) > self.max_entries:
             self.entries = self.entries[-self.max_entries :]
         self.save()
+
+    def remove_qq_message(self, message_id: str) -> bool:
+        """Drop one QQ piece from the newest matching user row. True if changed."""
+        target = str(message_id or "").strip()
+        if not target:
+            return False
+        for index in range(len(self.entries) - 1, -1, -1):
+            entry = self.entries[index]
+            if entry.role != "user" or not entry.qq_parts:
+                continue
+            kept = [
+                part
+                for part in entry.qq_parts
+                if str(part.get("message_id") or "").strip() != target
+            ]
+            if len(kept) == len(entry.qq_parts):
+                continue
+            if not kept:
+                del self.entries[index]
+            else:
+                entry.qq_parts = kept
+                entry.content = _content_from_qq_parts(kept)
+            self.save()
+            return True
+        return False
 
     def clear(self) -> None:
         self.entries = []
@@ -244,8 +301,12 @@ class ConversationManager:
         kind: str = "",
         action: str = "",
         method: str = "direct",
+        qq_parts: list[dict[str, str]] | None = None,
     ) -> None:
+        parts = _qq_parts_from_raw(qq_parts or [])
         text = (content or "").strip()
+        if not text and parts:
+            text = _content_from_qq_parts(parts)
         if not text or is_thought_history_marker(text) or text in _PROACTIVE_MARKERS:
             return
         stored_role = role if role in _ROLES else "user"
@@ -270,10 +331,15 @@ class ConversationManager:
                 time=_stamp(at),
                 session_id=session_id or "",
                 method=stored_method,
+                qq_parts=parts if stored_method == "message" else [],
             )
         )
         if stored_role == "user":
             self._turn_counts[session_id] = self._turn_counts.get(session_id, 0) + 1
+
+    def remove_qq_message(self, message_id: str) -> bool:
+        assert self._store is not None
+        return self._store.remove_qq_message(message_id)
 
     def turn_count(self, session_id: str) -> int:
         return self._turn_counts.get(session_id, 0)

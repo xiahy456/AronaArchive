@@ -26,7 +26,7 @@ from typing import Any
 from fastapi import WebSocket, WebSocketDisconnect
 
 from ..ws_auth import reject_unauthorized
-from .protocol import private_inbound_from_event
+from .protocol import friend_recall_from_event, private_inbound_from_event
 
 logger = logging.getLogger(__name__)
 
@@ -54,15 +54,23 @@ async def napcat_endpoint(websocket: WebSocket, state: Any) -> None:
             ):
                 link.complete_echo(data)
                 continue
+            recall_id = friend_recall_from_event(data, link.user_qq_id)
+            if recall_id is not None:
+                logger.info("napcat friend_recall message_id=%s", recall_id)
+                await inbox.recall(recall_id)
+                continue
             inbound = private_inbound_from_event(data, link.user_qq_id)
             if inbound is None:
                 continue
             logger.info(
-                "napcat private text chars=%d images=%d",
+                "napcat private text chars=%d images=%d message_id=%s",
                 len(inbound.text),
                 len(inbound.images),
+                inbound.message_id or "-",
             )
-            await inbox.push(inbound.text, inbound.images)
+            await inbox.push(
+                inbound.text, inbound.images, message_id=inbound.message_id
+            )
     except WebSocketDisconnect:
         logger.info("napcat disconnected")
     except Exception:
