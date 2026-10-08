@@ -102,7 +102,9 @@ def test_reply_ok_false_sends_empty_silence() -> None:
         _fail(f"silence_count should be 1, got {orch.stats.get('silence_count')!r}")
     if orch.stats.get("chat_count") != 0:
         _fail("chat_count should stay 0 on skip")
-    orch.conversations.append.assert_called_once_with("s1", "user", "嗯")
+    orch.conversations.append.assert_called_once_with(
+        "s1", "user", "嗯", method="direct"
+    )
     orch.model.generate.assert_not_called()
     print("  ok")
 
@@ -131,7 +133,9 @@ def test_refuse_sends_empty_refuse() -> None:
         _fail(f"refuse_count should be 1, got {orch.stats.get('refuse_count')!r}")
     if orch.stats.get("silence_count") != 0:
         _fail("silence_count should stay 0 on refuse")
-    orch.conversations.append.assert_called_once_with("s1", "user", "走开")
+    orch.conversations.append.assert_called_once_with(
+        "s1", "user", "走开", method="direct"
+    )
     print("  ok")
 
 
@@ -184,6 +188,8 @@ def test_reply_ok_false_emits_life_action() -> None:
     print("== reply_ok=false empty ack and emotion_only ==")
     orch = _orchestrator()
     orch.conversations.get_history.return_value = []
+    orch.conversations.get_planner_history.return_value = []
+    orch.conversations.planner_history_hours = 6.0
     card = IntentCard(
         draft="",
         arona_emotion="smile",

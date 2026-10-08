@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.config import PlannerConfig, load_config
+from app.config import AppConfig, ConversationConfig, PlannerConfig, load_config
 from app.conversation import ConversationManager
 from app.planner import EMOTION_WHITELIST, normalize_emotion, parse_and_gate_intent, resolve_life_action
 from app.planner.client import PlannerClient
@@ -89,6 +89,70 @@ def main() -> None:
     )
     assert "[2026年8月24日 10:14:05 面对面交流] 老师：早上好" in from_store
     assert "[2026年8月24日 10:14:07 面对面交流] 阿洛娜：老师早上好。" in from_store
+
+    now = datetime(2026, 8, 24, 18, 0, 0)
+    # 6h 内已超过 2N：返回全部 6h 内消息（可超 2N）
+    over = ConversationManager(max_history_turns=2, planner_history_hours=6.0)
+    for i in range(5):
+        over.append(
+            "s1",
+            "user",
+            f"近窗老师{i}",
+            at=now - timedelta(hours=1, minutes=50 - i),
+        )
+        over.append(
+            "s1",
+            "assistant",
+            f"近窗阿洛娜{i}",
+            at=now - timedelta(hours=1, minutes=49 - i),
+        )
+    over_hist = over.get_planner_history("s1", now=now)
+    assert len(over_hist) == 10
+    assert over_hist[0]["content"] == "近窗老师0"
+    assert over_hist[-1]["content"] == "近窗阿洛娜4"
+    assert len(over.get_history("s1")) == 4
+
+    # 6h 内不足：向前补足到恰好 2N，顺序正确
+    pad = ConversationManager(max_history_turns=2, planner_history_hours=6.0)
+    pad.append("s1", "user", "旧老师A", at=now - timedelta(hours=10))
+    pad.append("s1", "assistant", "旧阿洛娜A", at=now - timedelta(hours=9, minutes=59))
+    pad.append("s1", "user", "旧老师B", at=now - timedelta(hours=8))
+    pad.append("s1", "assistant", "旧阿洛娜B", at=now - timedelta(hours=7, minutes=59))
+    pad.append("s1", "user", "近老师", at=now - timedelta(hours=1))
+    pad.append("s1", "assistant", "近阿洛娜", at=now - timedelta(minutes=50))
+    pad_hist = pad.get_planner_history("s1", now=now)
+    assert [m["content"] for m in pad_hist] == [
+        "旧老师B",
+        "旧阿洛娜B",
+        "近老师",
+        "近阿洛娜",
+    ]
+
+    # 总库存不足 2N：返回全部可得消息
+    short = ConversationManager(max_history_turns=3, planner_history_hours=6.0)
+    short.append("s1", "user", "唯一老师", at=now - timedelta(hours=1))
+    short.append("s1", "assistant", "唯一阿洛娜", at=now - timedelta(minutes=50))
+    short_hist = short.get_planner_history("s1", now=now)
+    assert [m["content"] for m in short_hist] == ["唯一老师", "唯一阿洛娜"]
+
+    # 无时间戳/坏时间戳：不进 6h 窗，仅作补足候选
+    bad = ConversationManager(max_history_turns=2, planner_history_hours=6.0)
+    bad.append("s1", "user", "坏时间老师", at=now - timedelta(hours=1))
+    bad.append("s1", "assistant", "坏时间阿洛娜", at=now - timedelta(minutes=50))
+    assert bad._store is not None
+    bad._store.entries[0].time = "not-a-time"
+    bad._store.entries[1].time = ""
+    bad.append("s1", "user", "近老师2", at=now - timedelta(minutes=30))
+    bad.append("s1", "assistant", "近阿洛娜2", at=now - timedelta(minutes=20))
+    bad_hist = bad.get_planner_history("s1", now=now)
+    assert [m["content"] for m in bad_hist] == [
+        "坏时间老师",
+        "坏时间阿洛娜",
+        "近老师2",
+        "近阿洛娜2",
+    ]
+    assert ConversationConfig().planner_history_hours == 6.0
+    assert AppConfig().conversation.planner_history_hours == 6.0
 
     assert normalize_emotion("SMILE") == "smile"
     assert normalize_emotion("nope") == "normal"

@@ -520,6 +520,8 @@ def test_qq_undelivered_skips_relationship_commit() -> None:
             )
             orch.relationship = engine
             orch.conversations.get_history.return_value = []
+            orch.conversations.get_planner_history.return_value = []
+            orch.conversations.planner_history_hours = 6.0
             orch.conversations.append = MagicMock()
             orch.conversations.turn_count.return_value = 0
             orch.conversations.extract_buffer_turn_count.return_value = 0

@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from .channel import method_label
@@ -53,6 +53,19 @@ def _format_transcript(messages: list[dict[str, str]]) -> str:
 
 def _stamp(at: datetime | None) -> str:
     return (at or datetime.now()).strftime(_DT_FMT)
+
+
+def _parse_entry_time(raw: str | None) -> datetime | None:
+    text = (raw or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        try:
+            return datetime.strptime(text, _DT_FMT)
+        except ValueError:
+            return None
 
 
 @dataclass
@@ -162,6 +175,7 @@ class DialogueStore:
 @dataclass
 class ConversationManager:
     max_history_turns: int = 6
+    planner_history_hours: float = 6.0
     persist_path: Path | None = None
     max_entries: int = MAX_DIALOGUE_ENTRIES
     _store: DialogueStore | None = field(default=None, init=False, repr=False)
@@ -170,6 +184,7 @@ class ConversationManager:
 
     def __post_init__(self) -> None:
         self._store = DialogueStore(self.persist_path, max_entries=self.max_entries)
+        self.planner_history_hours = max(0.0, float(self.planner_history_hours or 0.0))
 
     def entries(self) -> list[DialogueEntry]:
         assert self._store is not None
@@ -185,6 +200,39 @@ class ConversationManager:
         ]
         window = max(1, self.max_history_turns) * 2
         return spoken[-window:]
+
+    def get_planner_history(
+        self,
+        session_id: str = "",
+        *,
+        now: datetime | None = None,
+    ) -> list[dict[str, str]]:
+        """Recent window for Planner: all turns in the last N hours, pad back to 2N."""
+        del session_id
+        assert self._store is not None
+        spoken = [
+            item.history_line()
+            for item in self._store.entries
+            if item.role in {"user", "assistant"}
+        ]
+        if not spoken:
+            return []
+        target = max(1, self.max_history_turns) * 2
+        anchor = now or datetime.now()
+        hours = self.planner_history_hours
+        cutoff = anchor - timedelta(hours=hours) if hours > 0 else anchor
+        recent: list[dict[str, str]] = []
+        older: list[dict[str, str]] = []
+        for msg in spoken:
+            stamped = _parse_entry_time(msg.get("time"))
+            if stamped is not None and stamped >= cutoff:
+                recent.append(msg)
+            else:
+                older.append(msg)
+        if len(recent) >= target:
+            return recent
+        need = target - len(recent)
+        return older[-need:] + recent
 
     def append(
         self,

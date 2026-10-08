@@ -37,6 +37,7 @@ prompt:
 
 conversation:
   max_history_turns: 12
+  planner_history_hours: 6
   persist_path: "data/memory/dialogue.json"
   max_entries: 2048
 

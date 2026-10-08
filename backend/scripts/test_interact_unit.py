@@ -45,8 +45,12 @@ class _FakeConversations:
         _ = session_id
         return list(self.messages)
 
-    def append(self, session_id: str, role: str, content: str) -> None:
-        _ = session_id
+    def get_planner_history(self, session_id: str = "", *, now=None) -> list[dict[str, str]]:
+        _ = session_id, now
+        return list(self.messages)
+
+    def append(self, session_id: str, role: str, content: str, **kwargs) -> None:
+        _ = session_id, kwargs
         self.messages.append({"role": role, "content": content})
 
 

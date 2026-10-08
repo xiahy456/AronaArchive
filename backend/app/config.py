@@ -96,6 +96,7 @@ class PromptConfig(BaseModel):
 
 class ConversationConfig(BaseModel):
     max_history_turns: int = 6
+    planner_history_hours: float = 6.0
     persist_path: str = "data/memory/dialogue.json"
     max_entries: int = 2048
 

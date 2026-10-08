@@ -94,6 +94,7 @@ def create_app() -> FastAPI:
     model = get_model_loader()
     conversations = ConversationManager(
         max_history_turns=config.conversation.max_history_turns,
+        planner_history_hours=config.conversation.planner_history_hours,
         persist_path=config.dialogue_abs_path,
         max_entries=config.conversation.max_entries,
     )

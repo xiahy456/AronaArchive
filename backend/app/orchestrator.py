@@ -182,6 +182,13 @@ class Orchestrator:
             self.memory_store.mark_injected(injected.keys)
         return injected.contents, injected.block
 
+    def _planner_history_hours(self) -> float:
+        raw = getattr(self.conversations, "planner_history_hours", None)
+        try:
+            return float(raw) if raw is not None else 0.0
+        except (TypeError, ValueError):
+            return 0.0
+
     def _life_block(self, interrupt_ctx: InnerState | None) -> str:
         if interrupt_ctx is None:
             return ""
@@ -535,12 +542,19 @@ class Orchestrator:
             logger.info("rag retrieve skipped session=%s", session_id)
 
         history = self.conversations.get_history(session_id)
-        if history:
+        planner_history = self.conversations.get_planner_history(session_id)
+        if history or planner_history:
             context_parts.append("history")
         logger.info(
             "history session=%s turns=%d",
             session_id,
             len(history),
+        )
+        logger.info(
+            "planner_history session=%s within_hours=%.1f count=%d",
+            session_id,
+            self._planner_history_hours(),
+            len(planner_history),
         )
 
         use_dual = self.planner.enabled
@@ -555,7 +569,7 @@ class Orchestrator:
             t0 = time.perf_counter()
             intent = await self.planner.plan(
                 user_text=user_text,
-                history=history,
+                history=planner_history,
                 memories=memories,
                 knowledge=knowledge_chunks,
                 climate_block=self._climate_block(decision),
@@ -741,12 +755,19 @@ class Orchestrator:
     ) -> bool:
         """Speak via crisis planner draft (no renderer); local Arona fallback."""
         history = self.conversations.get_history(session_id)
+        planner_history = self.conversations.get_planner_history(session_id)
+        logger.info(
+            "planner_history session=%s within_hours=%.1f count=%d kind=crisis",
+            session_id,
+            self._planner_history_hours(),
+            len(planner_history),
+        )
         intent: IntentCard | None = None
         if self.planner.enabled:
             t0 = time.perf_counter()
             intent = await self.planner.plan(
                 user_text=user_text,
-                history=history,
+                history=planner_history,
                 memories=list(memories or []),
                 knowledge=[],
                 climate_block=crisis_planner_climate_block(),
@@ -994,8 +1015,16 @@ class Orchestrator:
             )
 
         history = self.conversations.get_history(session_id)
-        if history:
+        planner_history = self.conversations.get_planner_history(session_id)
+        if history or planner_history:
             context_parts.append("history")
+        logger.info(
+            "planner_history session=%s within_hours=%.1f count=%d kind=%s",
+            session_id,
+            self._planner_history_hours(),
+            len(planner_history),
+            kind,
+        )
 
         use_dual = self.planner.enabled
         if use_dual:
@@ -1011,7 +1040,7 @@ class Orchestrator:
             t0 = time.perf_counter()
             intent = await self.planner.plan(
                 user_text=user_text,
-                history=history,
+                history=planner_history,
                 memories=memories,
                 knowledge=[],
                 climate_block=block,
