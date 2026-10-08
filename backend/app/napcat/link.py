@@ -41,7 +41,7 @@ def clause_gap_sec(next_text: str) -> float:
     n = len(next_text or "")
     if n <= 0:
         return 0.0
-    return round(random.uniform(0.05 * n, 0.08 * n), 2)
+    return round(random.uniform(0.08 * n, 0.15 * n), 2)
 
 
 def _sticker_frame(user_qq_id: str, emoji: object) -> dict | None:

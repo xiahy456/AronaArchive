@@ -204,7 +204,7 @@ def test_clause_gap() -> None:
         _fail(f"emoji gap {EMOJI_GAP_SEC}")
     sample = "今天想做什么？"
     n = len(sample)
-    lo, hi = 0.05 * n, 0.08 * n
+    lo, hi = 0.08 * n, 0.15 * n
     for _ in range(40):
         gap = clause_gap_sec(sample)
         if gap < lo - 1e-9 or gap > hi + 1e-9:
