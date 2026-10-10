@@ -93,7 +93,7 @@ planner:
   api_key: "YOUR_DEEPSEEK_API_KEY"
   model: "deepseek-flash"
   timeout_sec: 20
-  temperature: 0.8
+  temperature: 0.7
   max_tokens: 512
   thinking: false
   vision_model: "deepseek-flash"
