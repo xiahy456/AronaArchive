@@ -1032,6 +1032,82 @@ def test_failed_call_writes_nothing() -> None:
     print("  ok")
 
 
+def test_failed_call_defers_trigger() -> None:
+    print("== a failed call keeps the trigger and postpones the next try ==")
+    now = _now()
+    backoff = 600
+
+    async def _none(_text: str):
+        return None
+
+    async def _bad(_text: str):
+        return "not-json"
+
+    def _run(complete) -> tuple[datetime | None, int, datetime | None]:
+        ledger = ThoughtLedger(
+            last_thought_at=now,
+            pending_triggers=[PendingTrigger(kind="aftertaste", not_before=now)],
+        )
+        inner = InnerState(rumination=[Rumination(id="imp-dinner", content="晚饭", created_at=now)])
+        with tempfile.TemporaryDirectory() as raw:
+            store = ThoughtStore(Path(raw) / "thought.json")
+            store.save(ledger)
+            calls = {"n": 0}
+
+            async def _counting(text: str):
+                calls["n"] += 1
+                return await complete(text)
+
+            state = SimpleNamespace(
+                config=SimpleNamespace(
+                    life=SimpleNamespace(
+                        thought=SimpleNamespace(
+                            tick_sec=60,
+                            revisit_after_sec=1200,
+                            refractory_sec=180,
+                            failure_backoff_sec=backoff,
+                            spontaneous_online_min_sec=240,
+                            spontaneous_online_max_sec=240,
+                            spontaneous_away_min_sec=900,
+                            spontaneous_away_max_sec=900,
+                        )
+                    )
+                ),
+                life=SimpleNamespace(state=inner),
+                thought=ledger,
+                thought_store=store,
+                hub=SimpleNamespace(all_sessions=lambda: [], any_busy=lambda: False),
+                scheduler=None,
+                listen_uncommitted=False,
+                thought_in_flight=False,
+            )
+
+            async def _twice() -> None:
+                await thought_tick_once(state, now, complete=_counting)
+                await thought_tick_once(state, now, complete=_counting)
+
+            asyncio.run(_twice())
+            if calls["n"] != 1:
+                _fail(f"the deferred trigger should not be called again, got {calls['n']}")
+            if ledger.last_thought_at != now:
+                _fail(f"a failed call must not stamp the ledger, got {ledger.last_thought_at}")
+            if [item.id for item in inner.rumination] != ["imp-dinner"]:
+                _fail("a failed call must not change rumination")
+            loaded = ThoughtStore(store.path).load()
+        trigger = ledger.pending_triggers[0]
+        saved = loaded.pending_triggers[0].not_before
+        return trigger.not_before, len(ledger.pending_triggers), saved
+
+    for complete in (_none, _bad):
+        due, count, saved = _run(complete)
+        if count != 1:
+            _fail(f"a failed call must keep the trigger queued, got {count}")
+        expected = now + timedelta(seconds=backoff)
+        if due != expected or saved != expected:
+            _fail(f"retry should wait {backoff}s, got {due} saved {saved}")
+    print("  ok")
+
+
 def test_thought_thinking_config() -> None:
     print("== thought thinking toggles deep thinking ==")
     from app.config import PlannerConfig, ThoughtConfig
@@ -1057,6 +1133,15 @@ def test_thought_thinking_config() -> None:
     )
     if high._complete_max_tokens() != 16384:
         _fail(f"high thinking max_tokens={high._complete_max_tokens()}")
+    planner = PlannerConfig(max_tokens=512, timeout_sec=20)
+    if on._timeout_sec() != 120:
+        _fail(f"thinking timeout={on._timeout_sec()}")
+    custom = ThoughtClient(planner, thought=ThoughtConfig(thinking=True, timeout_sec=90))
+    if custom._timeout_sec() != 90:
+        _fail(f"custom thinking timeout={custom._timeout_sec()}")
+    quiet = ThoughtClient(planner, thought=ThoughtConfig(thinking=False, timeout_sec=120))
+    if quiet._timeout_sec() != 20:
+        _fail(f"thinking off should keep the planner timeout, got {quiet._timeout_sec()}")
     print("  ok")
 
 
@@ -3734,6 +3819,7 @@ def main() -> None:
     test_sources_for_each_trigger()
     test_commit_boundaries()
     test_failed_call_writes_nothing()
+    test_failed_call_defers_trigger()
     test_thought_thinking_config()
     test_second_hop()
     test_event_triggers()

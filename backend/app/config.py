@@ -251,6 +251,8 @@ class ThoughtConfig(BaseModel):
 
     enabled: bool = True
     thinking: bool = False
+    timeout_sec: float = 120
+    failure_backoff_sec: float = 600
     persist_path: str = "data/memory/thought.json"
     notes_max: int = 8
     notes_max_age_hours: float = 24

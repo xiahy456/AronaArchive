@@ -24,7 +24,7 @@ import inspect
 import logging
 import random
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from ..journal import TEACHER_OPENED_SUMMARY
@@ -141,6 +141,8 @@ async def thought_tick_once(
             motive_pending=facts.motive_pending,
         )
         decision = replace(decision, outcome=outcome)
+        if outcome == "failed":
+            _defer_failed_trigger(state, at, decision)
     finally:
         state.thought_in_flight = False
     return decision
@@ -229,6 +231,21 @@ async def _think(
         gate_kind=decision.kind,
     )
     return "committed"
+
+
+def _defer_failed_trigger(state: "AppState", now: datetime, decision: ThoughtDecision) -> None:
+    """Keep a failed trigger queued, but do not call the model again on the next tick."""
+    queued = decision.queued
+    if queued is None:
+        return
+    cfg = getattr(getattr(getattr(state, "config", None), "life", None), "thought", None)
+    backoff = float(getattr(cfg, "failure_backoff_sec", 600) or 600)
+    queued.not_before = now + timedelta(seconds=max(0.0, backoff))
+    logger.info("thought retry deferred kind=%s sec=%s", queued.kind, int(backoff))
+    ledger = getattr(state, "thought", None)
+    store = getattr(state, "thought_store", None)
+    if store is not None and isinstance(ledger, ThoughtLedger):
+        store.save(ledger)
 
 
 def _hold_fresh_speech(state: "AppState", now: datetime, ctx: Any, live_spoke: Any) -> bool:

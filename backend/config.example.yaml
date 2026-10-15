@@ -176,6 +176,8 @@ life:
   thought:
     enabled: true
     thinking: false
+    timeout_sec: 120
+    failure_backoff_sec: 600
     persist_path: "data/memory/thought.json"
     notes_max: 8
     notes_max_age_hours: 24

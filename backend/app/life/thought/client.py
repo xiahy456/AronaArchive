@@ -58,6 +58,12 @@ class ThoughtClient:
             return max(n, _THINKING_MIN_TOKENS)
         return n
 
+    def _timeout_sec(self) -> float:
+        """Deep thinking holds the body until reasoning finishes, so it needs a longer read."""
+        if self._thinking_enabled():
+            return float(self.thought.timeout_sec)
+        return float(self.config.timeout_sec)
+
     async def complete(self, user_text: str, *, system: str | None = None) -> str | None:
         """Return the raw model text, or None on timeout or transport failure."""
         if not self.enabled:
@@ -80,7 +86,7 @@ class ThoughtClient:
             "Content-Type": "application/json",
         }
         try:
-            async with httpx.AsyncClient(timeout=self.config.timeout_sec) as client:
+            async with httpx.AsyncClient(timeout=self._timeout_sec()) as client:
                 resp = await client.post(url, headers=headers, json=payload)
                 resp.raise_for_status()
                 data = resp.json()
