@@ -280,7 +280,7 @@ def _today(
     if ctx.seconds_since_teacher is not None:
         rows.append(_keep(f"距老师上次说话{_ago(ctx.seconds_since_teacher)}", seen))
     if ctx.seconds_since_arona is not None:
-        rows.append(_keep(f"距她上次开口{_ago(ctx.seconds_since_arona)}", seen))
+        rows.append(_keep(f"距她上次与老师面对面说话{_ago(ctx.seconds_since_arona)}", seen))
     if kind == "consolidate":
         journal = list(ctx.journal)
     elif kind in {"spontaneous", "arrived"}:

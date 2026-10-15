@@ -627,6 +627,8 @@ def test_sources_for_each_trigger() -> None:
         _fail("the newest turn should remain")
     if "必须问候" in spontaneous.text or "系统事件" in spontaneous.text:
         _fail("status text must not read like an instruction")
+    if "距她上次与老师面对面说话5分钟" not in spontaneous.text or "距她上次开口" in spontaneous.text:
+        _fail(f"the face-to-face gap should name the channel, got {spontaneous.text}")
     if calls:
         _fail(f"a non-kivotos worry must not query knowledge, got {calls}")
 
