@@ -38,6 +38,7 @@ from ..proactive.festival import (
     needs_rest_followup,
 )
 from ..proactive.scheduler import Motive
+from ..relationship.engine import read_climate
 from .events import world_event
 from .policy import LifeDecision
 from .presence import schedule_presence
@@ -165,18 +166,7 @@ def clear_impulse(engine: Any) -> None:
 
 
 def _climate(state: Any) -> str | None:
-    relationship = getattr(getattr(state, "orchestrator", None), "relationship", None)
-    if relationship is None:
-        return None
-    rel_cfg = getattr(getattr(state, "config", None), "proactive", None)
-    rel_cfg = getattr(rel_cfg, "relationship", None) if rel_cfg is not None else None
-    if rel_cfg is not None and not getattr(rel_cfg, "enabled", True):
-        return None
-    try:
-        return relationship.peek_climate()
-    except Exception:
-        logger.exception("impulse peek_climate failed")
-        return None
+    return read_climate(state)
 
 
 def apply_impulse_due(engine: Any, *, now: datetime | None = None, climate: str | None = None) -> LifeDecision | None:

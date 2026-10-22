@@ -24,6 +24,7 @@ import logging
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from ..relationship.engine import read_climate
 from .glance import maybe_request_glance
 from .presence import schedule_presence
 from .impulse import expire_stale_care, schedule_impulse_delivery
@@ -40,20 +41,6 @@ def _tick_sec(state: "AppState") -> float:
     cfg = getattr(state.config, "life", None)
     raw = getattr(cfg, "tick_sec", DEFAULT_TICK_SEC) if cfg is not None else DEFAULT_TICK_SEC
     return max(0.2, float(raw))
-
-
-def _climate(state: "AppState") -> str | None:
-    relationship = getattr(state.orchestrator, "relationship", None)
-    if relationship is None:
-        return None
-    rel_cfg = getattr(state.config.proactive, "relationship", None)
-    if rel_cfg is not None and not getattr(rel_cfg, "enabled", True):
-        return None
-    try:
-        return relationship.peek_climate()
-    except Exception:
-        logger.exception("life peek_climate failed")
-        return None
 
 
 async def run_life_loop(state: "AppState") -> None:
@@ -74,7 +61,7 @@ def tick_once(state: "AppState", now: datetime | None = None) -> None:
         return
     at = now or datetime.now()
     expire_stale_care(state, at)
-    decision = engine.tick(at, climate=_climate(state))
+    decision = engine.tick(at, climate=read_climate(state))
     journal = getattr(state, "journal", None)
     if journal is not None:
         journal.note_inner(

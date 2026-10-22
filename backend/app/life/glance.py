@@ -26,6 +26,7 @@ from datetime import datetime
 from typing import Any
 
 from ..protocol import msg_glance_request
+from ..relationship.engine import read_climate
 
 logger = logging.getLogger(__name__)
 
@@ -78,15 +79,7 @@ def maybe_request_glance(state: Any, now: datetime | None = None) -> None:
     at = now or datetime.now()
     inner = engine.state
     interval = float(getattr(life_cfg, "glance_interval_sec", DEFAULT_INTERVAL_SEC))
-    climate = ""
-    relationship = getattr(getattr(state, "orchestrator", None), "relationship", None)
-    rel_cfg = getattr(getattr(getattr(state, "config", None), "proactive", None), "relationship", None)
-    rel_on = rel_cfg is None or bool(getattr(rel_cfg, "enabled", True))
-    if relationship is not None and rel_on:
-        try:
-            climate = str(relationship.peek_climate() or "")
-        except Exception:
-            climate = ""
+    climate = read_climate(state) or ""
     if not glance_allowed(
         now=at,
         last_at=journal.last_glance_at,

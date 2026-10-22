@@ -24,6 +24,7 @@ import random
 from datetime import datetime, timedelta
 from typing import Any
 
+from ...relationship.engine import relationship_enabled
 from ...relationship.policy import URGENT_CLIMATES
 from ...safety import is_crisis_text
 from .store import PendingTrigger, ThoughtLedger
@@ -98,6 +99,8 @@ def note_memory(state: Any, key: str, *, now: datetime) -> bool:
 
 def note_climate_enter(state: Any, before: str, after: str, *, now: datetime) -> bool:
     """Enqueue only when peek_climate enters an urgent band from outside one."""
+    if not relationship_enabled(state):
+        return False
     if before in URGENT_CLIMATES or after not in URGENT_CLIMATES:
         return False
     return _enqueue(state, PendingTrigger(kind="climate", not_before=_stamp(now)), now=now)

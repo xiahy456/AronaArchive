@@ -24,6 +24,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from ...proactive.care import care_window_specs
+from ...relationship.engine import read_climate, relationship_enabled
 from .sources import SourceContext
 from .schema import is_thought_history_marker
 from .store import PendingTrigger
@@ -77,15 +78,13 @@ def gather_context(
     sched_state = getattr(scheduler, "state", None)
     care_done = frozenset(getattr(sched_state, "care_done", []) or [])
     goal_acked = dict(getattr(sched_state, "goal_acked", {}) or {})
-    relationship = getattr(getattr(state, "orchestrator", None), "relationship", None)
     climate = ""
     last_act = ""
-    if relationship is not None:
-        try:
-            climate = str(relationship.peek_climate() or "")
-        except Exception:
-            logger.exception("thought climate read failed")
-        last_act = str(getattr(getattr(relationship, "state", None), "last_user_act", "") or "")
+    if relationship_enabled(state):
+        climate = read_climate(state) or ""
+        relationship = getattr(getattr(state, "orchestrator", None), "relationship", None)
+        if relationship is not None:
+            last_act = str(getattr(getattr(relationship, "state", None), "last_user_act", "") or "")
     windows = _windows(state)
     goals = _goals(state)
     _picked_glance = _glance_text(trigger, glance, glance_at)

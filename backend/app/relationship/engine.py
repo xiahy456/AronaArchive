@@ -285,3 +285,31 @@ class RelationshipEngine:
         )
         self._note_climate(before)
         return event
+
+
+def relationship_enabled(state: Any) -> bool:
+    """True unless proactive.relationship.enabled is explicitly false.
+
+    A missing relationship config counts as on, matching the life-loop default.
+    """
+    proactive = getattr(getattr(state, "config", None), "proactive", None)
+    rel_cfg = getattr(proactive, "relationship", None) if proactive is not None else None
+    if rel_cfg is not None and not bool(getattr(rel_cfg, "enabled", True)):
+        return False
+    return True
+
+
+def read_climate(state: Any) -> str | None:
+    """Climate for downstream readers. None when the switch is off or the engine is absent."""
+    if not relationship_enabled(state):
+        return None
+    relationship = getattr(getattr(state, "orchestrator", None), "relationship", None)
+    if relationship is None:
+        return None
+    try:
+        climate = relationship.peek_climate()
+    except Exception:
+        logger.exception("relationship peek_climate failed")
+        return None
+    text = str(climate or "").strip()
+    return text or None

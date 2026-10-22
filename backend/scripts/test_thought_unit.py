@@ -3809,6 +3809,77 @@ def test_thought_speech_marks_any_from_thought() -> None:
     print("  ok")
 
 
+def test_relationship_switch_hides_climate_from_thought() -> None:
+    print("== relationship switch hides climate from thought ==")
+    from app.life.thought.context import gather_context
+    from app.life.thought.sources import select_sources
+    from app.life.thought.triggers import note_climate_enter
+
+    now = _now()
+    relationship = SimpleNamespace(
+        peek_climate=lambda: "cling_risk",
+        state=SimpleNamespace(last_user_act="depart"),
+    )
+
+    def _facts(_now, *, climate=None, **_kwargs):
+        band = str(climate or "").strip()
+        if not band:
+            return []
+        return [SimpleNamespace(kind="thought", text=f"当前气候是{band}")]
+
+    def _state(enabled: bool | None) -> SimpleNamespace:
+        proactive = (
+            None
+            if enabled is None
+            else SimpleNamespace(relationship=SimpleNamespace(enabled=enabled))
+        )
+        return SimpleNamespace(
+            config=SimpleNamespace(
+                life=SimpleNamespace(thought=SimpleNamespace(enabled=True)),
+                proactive=proactive,
+            ),
+            thought=ThoughtLedger(),
+            thought_store=SimpleNamespace(save=lambda _ledger: None),
+            hub=SimpleNamespace(all_sessions=lambda: [("s", None)]),
+            orchestrator=SimpleNamespace(
+                relationship=relationship,
+                conversations=None,
+                memory_store=None,
+            ),
+            life=SimpleNamespace(state=InnerState()),
+            journal=None,
+            arona_memory=None,
+            scheduler=SimpleNamespace(situation_facts=_facts),
+            welcome=None,
+        )
+
+    def _material(state: SimpleNamespace) -> tuple[str, object]:
+        trigger = PendingTrigger(kind="spontaneous")
+        gathered = gather_context(state, now, trigger)
+        return select_sources(trigger, now, InnerState(), state.thought, gathered).text, gathered
+
+    off = _state(False)
+    off_text, off_ctx = _material(off)
+    if off_ctx.climate or off_ctx.last_user_act:
+        _fail(f"a disabled switch should hide relationship reads, got {off_ctx}")
+    if "气氛是" in off_text or "当前气候是" in off_text:
+        _fail(f"disabled thought material should omit climate, got {off_text}")
+    if note_climate_enter(off, "steady", "cling_risk", now=now):
+        _fail("a disabled relationship switch must not enqueue a climate thought")
+    if off.thought.pending_triggers:
+        _fail(f"disabled climate enter should leave the queue empty, got {off.thought.pending_triggers}")
+
+    missing = _state(None)
+    on_text, on_ctx = _material(missing)
+    if on_ctx.climate != "cling_risk" or on_ctx.last_user_act != "depart":
+        _fail(f"missing relationship config should still read climate, got {on_ctx}")
+    if "气氛是cling_risk" not in on_text or "当前气候是cling_risk" not in on_text:
+        _fail(f"missing config should keep climate in the material, got {on_text}")
+    if not note_climate_enter(missing, "steady", "cling_risk", now=now):
+        _fail("missing relationship config should still enqueue a climate thought")
+    print("  ok")
+
+
 def main() -> None:
     test_missing_empty_and_corrupt_ledger()
     test_ledger_roundtrip()
@@ -3825,6 +3896,7 @@ def main() -> None:
     test_thought_thinking_config()
     test_second_hop()
     test_event_triggers()
+    test_relationship_switch_hides_climate_from_thought()
     test_glance_refusal_forgets_sources()
     test_aftertaste_restarts_from_the_latest_turn()
     test_aftertaste_holds_speech_after_a_fresh_line()
