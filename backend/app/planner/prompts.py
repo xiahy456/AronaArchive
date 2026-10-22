@@ -74,7 +74,7 @@ _TAIL_AFTER_PATCH = f"""## 边界
 8. arona_emotion 按 method 填写：
    - method 为 direct 时，必须从下列英文值中原样选一个：{EMOTION_WHITELIST_CSV}
      reply_ok 为 true 时：依据阿洛娜说出该 draft 时，阿洛娜的表情。
-     reply_ok 为 false 时：若保持沉默并继续当前活动，选 normal；若只换表情（life_action 为 emotion_only），按阿洛娜当下反应选表情，不要编台词。若本轮是【系统事件】屏幕互动（如摸头）且不开口，仍须按阿洛娜当下反应选表情（可以是 shy / smile 等），不要一律 normal。
+     reply_ok 为 false 时：若保持沉默并继续当前活动，选 normal；若只换表情（life_action 为 emotion_only），按阿洛娜当下反应选表情，不要编台词。若本轮是【系统事件】、屏幕互动（如摸头）且不开口，仍须按阿洛娜当下反应选表情（可以是 shy / smile 等），不要一律 normal。
    - method 为 message 时：对照本轮 draft 与下面表格中的 QQ 表情 description，判断要不要附带表情。该表格中每行是 description 与 emoji_id：{EMOJI_PROMPT_BLOCK}
      需要附带表情，则把对应 emoji_id 原样写入 arona_emotion；不需要则留空字符串 ""。只能使用已给出的 emoji_id，禁止自造，也不要填 description。
 9. followup_ok：当前这句说完后，阿洛娜是否还需要再补一句。必须显式 true 或 false。短应、道别、致谢、收束、能一次说完 → false。reply_ok 为 false 时 followup_ok 必须 false。屏幕互动的 followup_ok 必须 false。
@@ -244,6 +244,42 @@ def _journal_bullets(day_block: str) -> list[str]:
     return bullets
 
 
+def build_thought_motive_block(about: str, why: str) -> str:
+    """Inner motive for a line she already decided to say. Not a teacher turn."""
+    point = (about or "").strip() or "（无）"
+    reason = (why or "").strip() or "（无）"
+    return (
+        "【输入性质】\n"
+        "你会收到【阿洛娜想说的事情】与【阿洛娜说这个的理由】。"
+        "它是你的内心动机/发言策略，不是必须被说出的台词。\n"
+        "你的任务不是逐条复述或翻译思考内容与元沟通，而是把它转化为角色此刻自然会说出口的话。\n"
+        "你可以省略、合并、改写思考中的元素；只保留能自然外显为自然口语的部分。\n"
+        "默认不要向用户解释“我为什么这样说”、“我这次发言的分寸是什么”。"
+        "例如“不催/不打扰/不是来…/只是想让您知道”。\n"
+        "【输出前自检】\n"
+        "在最终输出前，检查 draft 是否出现以下情况：\n"
+        "1. 这句话是不是在向老师解释“我为什么这样说/我这次不是来干什么/我的分寸是什么”？\n"
+        "2. 是不是把思考里的“不催/不打扰/不是来…/只是想让您知道”直接变成了台词？\n"
+        "3. 是不是在逐条覆盖思考内容，而不是像角色自然说话？\n"
+        "4. 删掉这些策略声明后，关心和陪伴是否仍然成立？\n"
+        "如果任一为是，重写为直接行为、直接情感或具体提醒，不要解释策略。\n"
+        "【示例】\n"
+        "思考：轻轻冒个头——不催老师正在进行的模块划分任务，只想让老师知道阿洛娜一直在，顺手提醒一句记得休息。\n"
+        "正确输出：\n"
+        "老师～阿洛娜来冒个泡。您先忙您的，我就在旁边待一会儿，如果工作累了的话，可以休息一下哦。\n"
+        "错误输出：\n"
+        "老师～我就轻轻冒个头，不催您那块模块划分哦，就是想让您知道阿洛娜一直在这儿陪着呢。"
+        "顺手提醒一句，累的话记得休息休息呀。\n"
+        "错误原因：\n"
+        "“不催您模块划分”“就是想让您知道”“顺手提醒一句”都是导演备注/沟通策略，不是角色自然台词。"
+        "它们把“我这次发言的意图”说给了用户听，属于元沟通泄露。\n"
+        "【阿洛娜想说的事情】\n"
+        f"{point}\n"
+        "【阿洛娜说这个的理由】\n"
+        f"{reason}"
+    )
+
+
 def build_planner_user_message(
     *,
     user_text: str,
@@ -259,6 +295,7 @@ def build_planner_user_message(
     day_block: str = "",
     teacher_method: str | None = None,
     channels_block: str = "",
+    motive_block: str = "",
 ) -> str:
     labeled = (memory_block or "").strip()
     if labeled:
@@ -292,6 +329,7 @@ def build_planner_user_message(
     if (climate_block or "").strip():
         climate_section = f"{climate_block.strip()}\n\n"
 
+    motive = (motive_block or "").strip()
     closing = (
         "注意：先判断 reply_ok，再写 draft。\n"
         "若 reply_ok 为 true 且有【关系气候】，按建议姿态写回复。\n"
@@ -299,14 +337,21 @@ def build_planner_user_message(
     life_section = ""
     if (life_block or "").strip():
         life_section = f"{life_block.strip()}\n\n"
-        closing += (
-            "【阿洛娜此刻】是她被老师这句话打断前的活动，不是旁白。"
-            "老师本轮消息是突然加入的事件。可以开口接上刚才在做的事，可以只换表情，"
-            "也可以保持沉默并继续当前活动。"
-            "若老师问起自己在做什么，则可以描述自己被打断前的活动与状态。"
-            "否则，非必要时，不要描述自己被打断前的活动与状态。"
-            "禁止把【阿洛娜此刻】或【未出口的心事】写进 draft。\n"
-        )
+        if motive:
+            closing += (
+                "【阿洛娜此刻】是她开口前的活动，不是旁白。"
+                "非必要时，不要描述自己当前的活动与状态。"
+                "禁止把【阿洛娜此刻】或【未出口的心事】写进 draft。\n"
+            )
+        else:
+            closing += (
+                "【阿洛娜此刻】是她被老师这句话打断前的活动，不是旁白。"
+                "老师本轮消息是突然加入的事件。可以开口接上刚才在做的事，可以只换表情，"
+                "也可以保持沉默并继续当前活动。"
+                "若老师问起自己在做什么，则可以描述自己被打断前的活动与状态。"
+                "否则，非必要时，不要描述自己被打断前的活动与状态。"
+                "禁止把【阿洛娜此刻】或【未出口的心事】写进 draft。\n"
+            )
     mem_section, arona_bullets = _split_arona_memory(mem_section)
     arona_bullets.extend(_journal_bullets(day_block))
     if not mem_section.strip():
@@ -326,12 +371,16 @@ def build_planner_user_message(
     if has_qq_images:
         closing += "本轮附带老师发来的图片，请结合图片和文字一起理解。\n"
     closing += "请输出唯一 JSON 对象。"
-    teacher_line = user_text.strip()
-    if teacher_method is not None:
-        teacher_line = f"[{method_label(teacher_method)}] {teacher_line}"
     channel_section = ""
     if (channels_block or "").strip():
         channel_section = f"{channels_block.strip()}\n\n"
+    if motive:
+        turn_section = f"{motive}\n\n"
+    else:
+        teacher_line = user_text.strip()
+        if teacher_method is not None:
+            teacher_line = f"[{method_label(teacher_method)}] {teacher_line}"
+        turn_section = f"【老师本轮消息】\n{teacher_line}\n\n"
     return (
         f"{climate_section}"
         f"{format_extract_now(now)}\n\n"
@@ -341,6 +390,6 @@ def build_planner_user_message(
         f"{day_section}"
         f"{life_section}"
         f"{channel_section}"
-        f"【老师本轮消息】\n{teacher_line}\n\n"
+        f"{turn_section}"
         f"{closing}"
     )

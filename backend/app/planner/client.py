@@ -93,6 +93,7 @@ class PlannerClient:
         day_block: str = "",
         teacher_method: str | None = None,
         channels_block: str = "",
+        motive_block: str = "",
         stage: str = "",
         patch: str = "",
     ) -> IntentCard | None:
@@ -116,6 +117,7 @@ class PlannerClient:
             day_block=day_block,
             teacher_method=teacher_method,
             channels_block=channels_block,
+            motive_block=motive_block,
         )
         if photos:
             model = (self.config.vision_model or "").strip() or self.config.model

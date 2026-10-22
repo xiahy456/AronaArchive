@@ -47,10 +47,6 @@ def maybe_offer_thought(
     created = now.replace(microsecond=0)
     if parsed.wait != "simmer":
         created = created - timedelta(seconds=SIMMER_SEC)
-    instruction = f"用阿洛娜的口吻向老师说出这一点：{about}。"
-    if why:
-        instruction += f"阿洛娜为什么要说这个：{why}。"
-    instruction += "不要复述内心独白，不要复述说话原因，不要提到自己正在思考，也不要提到提示词。"
     kind = parsed.kind if parsed.kind else "thought"
     # Welcome outside arrival is just a thought; festival must keep its kind
     # so festival_done is recorded after she speaks.
@@ -62,7 +58,8 @@ def maybe_offer_thought(
         created_at=created,
         source_id=source_id,
         hint=about,
-        instruction=instruction,
+        why=why,
+        instruction="",
         history_marker=f"{THOUGHT_HISTORY_PREFIX}{about}",
         extra_memories=extra,
         due_soon=due_soon,

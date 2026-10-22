@@ -139,6 +139,7 @@ class Impulse:
     created_at: datetime | None = None
     source_id: str = ""
     hint: str = ""
+    why: str = ""
     instruction: str = ""
     history_marker: str = ""
     retrieve_memory: bool = False
@@ -158,6 +159,7 @@ class Impulse:
             "created_at": format_life_dt(self.created_at),
             "source_id": self.source_id,
             "hint": self.hint,
+            "why": self.why,
             "instruction": self.instruction,
             "history_marker": self.history_marker,
             "retrieve_memory": self.retrieve_memory,
@@ -190,6 +192,7 @@ class Impulse:
             created_at=parse_life_dt(data.get("created_at")),
             source_id=str(data.get("source_id") or "").strip(),
             hint=str(data.get("hint") or "").strip(),
+            why=str(data.get("why") or "").strip(),
             instruction=str(data.get("instruction") or "").strip(),
             history_marker=str(data.get("history_marker") or "").strip(),
             retrieve_memory=bool(data.get("retrieve_memory", False)),
@@ -260,6 +263,7 @@ class InnerState:
                 created_at=impulse.created_at,
                 source_id=impulse.source_id,
                 hint=impulse.hint,
+                why=impulse.why,
                 instruction=impulse.instruction,
                 history_marker=impulse.history_marker,
                 retrieve_memory=impulse.retrieve_memory,

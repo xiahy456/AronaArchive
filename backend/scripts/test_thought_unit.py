@@ -37,7 +37,7 @@ from app.life.thought.gate import (  # noqa: E402
 from app.life.thought.loop import thought_tick_once  # noqa: E402
 from app.life.journal import LifeJournal  # noqa: E402
 from app.life.engine import LifeEngine  # noqa: E402
-from app.life.impulse import deliver_impulse  # noqa: E402
+from app.life.impulse import _thought_why, deliver_impulse  # noqa: E402
 from app.life.policy import SIMMER_SEC, LifeSettings, decide  # noqa: E402
 from app.life.thought.speech import maybe_offer_thought  # noqa: E402
 from app.life.presence import presence_emotion  # noqa: E402
@@ -1758,19 +1758,34 @@ def test_thought_speech_boundaries() -> None:
             _fail("wait=simmer should start the simmer from now")
         if "系统事件" in impulse.history_marker or "系统事件" in impulse.instruction:
             _fail("the marker must stay a fact")
-        if "阿洛娜为什么要说这个" in impulse.instruction:
-            _fail("an empty why should stay out of the instruction")
+        if impulse.why or impulse.instruction:
+            _fail("an empty why should stay off the impulse")
         reasoned = LifeEngine.from_path(root / "why.json", LifeSettings())
         if not maybe_offer_thought(reasoned, _urge(why="想确认老师还在"), now=now):
             _fail("a reason should still enqueue")
         reasoned_impulse = reasoned.state.pending_impulse
         if (
             reasoned_impulse is None
-            or "阿洛娜为什么要说这个：想确认老师还在。" not in reasoned_impulse.instruction
-            or "为什么是现在" in reasoned_impulse.instruction
+            or reasoned_impulse.why != "想确认老师还在"
+            or reasoned_impulse.instruction
             or reasoned_impulse.hint != "老师还在吗"
         ):
-            _fail(f"why should stay in the speech instruction, got {reasoned_impulse}")
+            _fail(f"why should stay on the impulse, got {reasoned_impulse}")
+        legacy = Impulse(
+            kind="thought",
+            hint="老师还在吗",
+            instruction=(
+                "用阿洛娜的口吻向老师说出这一点：老师还在吗。"
+                "阿洛娜为什么要说这个：想确认老师还在。"
+                "不要复述内心独白。"
+            ),
+            from_thought=True,
+        )
+        if _thought_why(legacy) != "想确认老师还在":
+            _fail(f"an older instruction should still yield why, got {_thought_why(legacy)}")
+        legacy.why = "已经记下"
+        if _thought_why(legacy) != "已经记下":
+            _fail("a stored why should win over the older instruction")
         if any(item.id.startswith("imp-thought") for item in engine.state.rumination):
             _fail("thought speech must not add an impulse concern")
         for climate in ("fragile", "rupture", "cold_tool", "cling_risk", "steady", "secure_play"):
@@ -1937,7 +1952,10 @@ def test_thought_speech_boundaries() -> None:
             proactive=SimpleNamespace(relationship=SimpleNamespace(enabled=False)),
         )
         orch.model = SimpleNamespace(generate=_generate)
-        orch.conversations = SimpleNamespace(get_history=lambda _sid: [])
+        orch.conversations = SimpleNamespace(
+            get_history=lambda _sid: [],
+            get_planner_history=lambda _sid: [],
+        )
         orch.planner = _Planner()
         orch.relationship = None
         orch.life_journal = None
@@ -1966,11 +1984,9 @@ def test_live_thought_speech() -> None:
     client = PlannerClient(config.planner, renderer_enabled=False)
     if not client.enabled:
         _fail("the configured planner key is required; this test does not skip")
-    instruction = (
-        "用阿洛娜的口吻向老师说出这一点：老师还在吗。"
-        "阿洛娜为什么要说这个：想确认老师还在。"
-        "不要复述内心独白，不要提到自己正在思考，也不要提到提示词。"
-    )
+    from app.planner.prompts import build_thought_motive_block
+
+    motive = build_thought_motive_block("老师还在吗", "想确认老师还在")
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     log_path = BACKEND_DIR / "logs" / f"thought-step5-{stamp}.json"
 
@@ -1989,10 +2005,11 @@ def test_live_thought_speech() -> None:
         planner_log.addHandler(grab)
         try:
             card = await client.plan(
-                user_text=instruction,
+                user_text="",
                 history=[],
                 memories=[],
                 knowledge=[],
+                motive_block=motive,
             )
         finally:
             planner_log.removeHandler(grab)
@@ -2011,7 +2028,7 @@ def test_live_thought_speech() -> None:
         context_used = "thought+planner" if client.enabled else "thought"
         return {
             "scene": "teacher-still-here",
-            "instruction": instruction,
+            "motive": motive,
             "raw": raw,
             "draft": draft,
             "reply_ok": reply_ok,
@@ -2207,7 +2224,7 @@ def test_second_hop() -> None:
     kept_impulse = kept.life.state.pending_impulse
     if kept.calls != 2 or kept_impulse is None or kept_impulse.hint != "老师还在吗":
         _fail(f"a failed second look should keep the first urge, got {kept.calls} {kept_impulse}")
-    if "想确认老师还在" not in kept_impulse.instruction:
+    if kept_impulse.why != "想确认老师还在":
         _fail("a failed second look should keep why")
     if not any(item.content == "老师还在吗" for item in kept.life.state.rumination):
         _fail("a failed second look should commit the first focus")

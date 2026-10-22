@@ -402,6 +402,21 @@ async def _noop_send(_payload: dict[str, Any]) -> None:
     return None
 
 
+_LEGACY_WHY_MARKER = "阿洛娜为什么要说这个："
+
+
+def _thought_why(impulse: Impulse) -> str:
+    """Prefer the stored reason. Older impulses kept it inside instruction."""
+    why = (getattr(impulse, "why", "") or "").strip()
+    if why:
+        return why
+    instruction = (getattr(impulse, "instruction", "") or "").strip()
+    if _LEGACY_WHY_MARKER not in instruction:
+        return ""
+    rest = instruction.split(_LEGACY_WHY_MARKER, 1)[1]
+    return rest.split("。", 1)[0].strip()
+
+
 async def _speak_impulse(
     state: Any,
     *,
@@ -441,6 +456,11 @@ async def _speak_impulse(
         busy_id = session_id
     climate = _climate(state)
     interrupt_ctx = engine.state.clone()
+    motive_block = ""
+    if impulse.from_thought:
+        from ..planner.prompts import build_thought_motive_block
+
+        motive_block = build_thought_motive_block(impulse.hint, _thought_why(impulse))
     if busy_id:
         hub.set_busy(busy_id, True)
     spoke = False
@@ -448,7 +468,7 @@ async def _speak_impulse(
         result = await orchestrator.handle_initiate(
             session_id=session_id,
             kind=impulse.kind,
-            instruction=impulse.instruction,
+            instruction="" if motive_block else impulse.instruction,
             history_marker=impulse.history_marker,
             send=send,
             retrieve_memory=impulse.retrieve_memory,
@@ -457,6 +477,7 @@ async def _speak_impulse(
             climate=climate,
             interrupt_ctx=interrupt_ctx,
             client_online=client_up,
+            motive_block=motive_block,
         )
     except asyncio.CancelledError:
         raise

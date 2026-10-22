@@ -1021,6 +1021,7 @@ class Orchestrator:
         on_life_action: LifeActionFn | None = None,
         client_online: bool = True,
         inbound_method: str = "",
+        motive_block: str = "",
     ) -> InitiateResult:
         """Generate a system-event line (welcome / idle / care / goal / continue / interact).
 
@@ -1030,6 +1031,7 @@ class Orchestrator:
         deferred: the chosen channel could not take the line. The impulse stays.
         """
         self.last_initiate_text = ""
+        motive = (motive_block or "").strip()
         user_text = instruction
         start = time.perf_counter()
         begin_trace(started_at=start)
@@ -1114,7 +1116,7 @@ class Orchestrator:
             context_parts.append("planner")
             t0 = time.perf_counter()
             intent = await self.planner.plan(
-                user_text=user_text,
+                user_text="" if motive else user_text,
                 history=planner_history,
                 memories=memories,
                 knowledge=[],
@@ -1123,6 +1125,7 @@ class Orchestrator:
                 life_block=self._life_block(interrupt_ctx),
                 day_block=self._day_block(),
                 channels_block=self._channels_block(client_online=client_online),
+                motive_block=motive,
                 **self._stance_args(),
             )
             logger.info(
@@ -1209,7 +1212,7 @@ class Orchestrator:
         full, context_used = await self._compose_reply(
             session_id=session_id,
             intent=intent,
-            user_text=user_text,
+            user_text=motive if motive else user_text,
             history=history,
             memories=memories,
             knowledge=[],

@@ -20,6 +20,7 @@ from app.planner.prompts import (
     PLANNER_SYSTEM_CRISIS,
     PLANNER_SYSTEM_DIRECT,
     build_planner_user_message,
+    build_thought_motive_block,
     select_planner_system,
 )
 from app.prompt import (
@@ -342,6 +343,28 @@ def main() -> None:
     assert life_msg.index("【阿洛娜此刻】") < life_msg.index("【老师本轮消息】")
     assert "突然加入的事件" in life_msg
     assert "禁止把【阿洛娜此刻】或【未出口的心事】写进 draft" in life_msg
+    motive = build_thought_motive_block("老师还在吗", "想确认老师还在")
+    motive_msg = build_planner_user_message(
+        user_text="这段不该出现",
+        history=[],
+        memories=[],
+        knowledge=[],
+        now=frozen,
+        life_block="【阿洛娜此刻】正在想事情",
+        motive_block=motive,
+    )
+    assert "【老师本轮消息】" not in motive_msg
+    assert "这段不该出现" not in motive_msg
+    assert "突然加入的事件" not in motive_msg
+    assert "若老师问起自己在做什么" not in motive_msg
+    assert "【输入性质】" in motive_msg
+    assert "【输出前自检】" in motive_msg
+    assert "【阿洛娜想说的事情】\n老师还在吗" in motive_msg
+    assert "【阿洛娜说这个的理由】\n想确认老师还在" in motive_msg
+    assert "【阿洛娜此刻】是她开口前的活动，不是旁白" in motive_msg
+    assert "禁止把【阿洛娜此刻】或【未出口的心事】写进 draft" in motive_msg
+    assert motive_msg.index("【阿洛娜此刻】") < motive_msg.index("【输入性质】")
+    assert "【阿洛娜说这个的理由】\n（无）" in build_thought_motive_block("老师还在吗", "")
 
     vision_msg = build_planner_user_message(
         user_text="屏幕上是什么？",
