@@ -108,10 +108,10 @@ listen:
 
 proactive:
   welcome:
-    enabled: true
+    enabled: false
     persist_path: "data/memory/welcome.json"
   relationship:
-    enabled: true
+    enabled: false
     persist_path: "data/memory/relationship.json"
     alpha: 0.3
     beta: 0.02
@@ -130,7 +130,7 @@ proactive:
     cooldown_sec: 3600
     max_per_day: 3
   care:
-    enabled: true
+    enabled: false
     persist_path: "data/memory/proactive.json"
     breakfast_start: "06:30"
     breakfast_end: "08:00"
