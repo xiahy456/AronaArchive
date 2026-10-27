@@ -137,7 +137,7 @@ class PlannerClient:
         if crisis:
             system_prompt = PLANNER_SYSTEM_CRISIS
         else:
-            from ..relationship.stance_schema import DEFAULT_STAGE
+            from ..stance.stance_schema import DEFAULT_STAGE
 
             system_prompt = select_planner_system(
                 renderer_enabled=self.renderer_enabled,

@@ -686,15 +686,9 @@ def test_journal_skips_crisis_and_teacher_text() -> None:
 
 
 def test_stale_care_rumination_expires() -> None:
-    print("== care rumination ends with the window and the day ==")
+    print("== care rumination ends with the calendar day ==")
     from app.life.impulse import without_stale_care
 
-    windows = {
-        "breakfast": ("06:30", "08:00"),
-        "lunch": ("11:30", "13:00"),
-        "dinner": ("17:30", "19:00"),
-        "sleep": ("23:00", "23:20"),
-    }
     yesterday = datetime(2026, 9, 21, 23, 18, 22)
     afternoon = datetime(2026, 9, 22, 15, 2, 0)
     stale = InnerState(
@@ -703,12 +697,12 @@ def test_stale_care_rumination_expires() -> None:
             Rumination(id="imp-goal", content="老师还有未完成的计划", created_at=yesterday),
         ]
     )
-    fresh = without_stale_care(stale, afternoon, windows)
+    fresh = without_stale_care(stale, afternoon)
     ids = [item.id for item in fresh.rumination]
     if "imp-sleep" in ids:
         _fail("yesterday's sleep worry should expire")
     if "imp-goal" not in ids:
-        _fail("goal rumination is not a care window")
+        _fail("goal rumination is not care")
     block = format_interrupt_block(fresh)
     if "老师睡觉窗口到了" in block:
         _fail("expired care worry must not reach the planner")
@@ -720,28 +714,20 @@ def test_stale_care_rumination_expires() -> None:
             ]
         ),
         during,
-        windows,
     )
     if not any(item.id == "imp-sleep" for item in live.rumination):
-        _fail("sleep worry should stay inside today's window")
-    after = datetime(2026, 9, 21, 23, 25, 0)
-    closed = without_stale_care(live, after, windows)
-    if closed.rumination:
-        _fail("sleep worry should end when the window closes")
+        _fail("sleep worry should stay through the day it was written")
+    later = datetime(2026, 9, 21, 23, 25, 0)
+    still = without_stale_care(live, later)
+    if not still.rumination:
+        _fail("the same calendar day should keep the sleep worry")
     print("  ok")
 
 
 def test_thought_speech_survives_closed_care_window() -> None:
-    print("== a thought she decided to say survives a closed care window ==")
-    from app.config import CareConfig
+    print("== a thought she decided to say survives the next day ==")
     from app.life.impulse import expire_stale_care, flush_impulse, without_stale_care
 
-    windows = {
-        "breakfast": ("06:30", "08:00"),
-        "lunch": ("11:30", "13:00"),
-        "dinner": ("17:30", "19:00"),
-        "sleep": ("23:00", "23:20"),
-    }
     at = datetime(2026, 9, 29, 19, 6, 0)
     created = at - timedelta(seconds=SIMMER_SEC)
     worry = Rumination(id="imp-dinner", content="老师晚饭窗口到了", created_at=created)
@@ -756,12 +742,17 @@ def test_thought_speech_survives_closed_care_window() -> None:
             ),
         ),
         at,
-        windows,
     )
-    if system.pending_impulse is not None:
-        _fail("a system dinner impulse should expire after the window")
-    if any(item.id == "imp-dinner" for item in system.rumination):
-        _fail("dinner rumination should expire with a system reminder")
+    if system.pending_impulse is None:
+        _fail("a same-day dinner impulse should stay")
+    next_day = without_stale_care(
+        system,
+        datetime(2026, 9, 30, 8, 0, 0),
+    )
+    if next_day.pending_impulse is not None:
+        _fail("a system dinner impulse should expire the next day")
+    if any(item.id == "imp-dinner" for item in next_day.rumination):
+        _fail("dinner rumination should expire the next day")
 
     spoken = Impulse(
         kind="dinner",
@@ -792,18 +783,16 @@ def test_thought_speech_survives_closed_care_window() -> None:
             life=engine,
             hub=_Hub(),
             orchestrator=SimpleNamespace(handle_initiate=_sent, relationship=None),
-            config=SimpleNamespace(
-                proactive=SimpleNamespace(care=CareConfig(), relationship=None)
-            ),
+            config=SimpleNamespace(proactive=None),
             journal=None,
             scheduler=None,
             napcat=None,
         )
-        expire_stale_care(app, at)
+        expire_stale_care(app, datetime(2026, 9, 30, 8, 0, 0))
         if engine.state.pending_impulse is None or not engine.state.pending_impulse.from_thought:
-            _fail("a thought she decided to say should stay after the window")
+            _fail("a thought she decided to say should stay the next day")
         if any(item.id == "imp-dinner" for item in engine.state.rumination):
-            _fail("dinner rumination should still expire")
+            _fail("dinner rumination should expire the next day")
         if not asyncio.run(flush_impulse(app, now=at)):
             _fail("the kept dinner thought should still speak")
     print("  ok")
@@ -838,8 +827,8 @@ def test_glance_gate_and_hands() -> None:
         **{k: v for k, v in common.items() if k not in {"activity", "attention"}},
     ):
         _fail("looking at teacher should block glance")
-    if glance_allowed(last_at=None, climate="fragile", **{k: v for k, v in common.items() if k != "climate"}):
-        _fail("fragile climate should block glance")
+    if not glance_allowed(last_at=None, climate="fragile", **{k: v for k, v in common.items() if k != "climate"}):
+        _fail("climate should not block glance")
     if glance_allowed(
         last_at=None,
         activity="using_computer",

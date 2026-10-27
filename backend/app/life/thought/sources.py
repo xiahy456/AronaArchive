@@ -24,9 +24,6 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from ...channel import method_label
-from ...proactive.care import in_window
-from ...proactive.festival import match_festival
-from ...proactive.goal import goal_is_due_soon
 from ...query_time import format_clock_stamp, format_full_datetime
 from ...safety import is_crisis_text
 from ..journal import ACTIVITY_SUMMARY
@@ -78,13 +75,6 @@ _ATTENTION = {
     "self": "自己",
     "rumination": "心事",
     "diffuse": "散着",
-}
-
-_CARE_LABEL = {
-    "breakfast": "早饭",
-    "lunch": "午饭",
-    "dinner": "晚饭",
-    "sleep": "睡觉",
 }
 
 _NEED_SECTION = {
@@ -351,54 +341,17 @@ def _knowledge(
     return [line for line in (_keep(row, seen) for row in found) if line]
 
 
-_STATUS_KINDS = frozenset({"arrived", "spontaneous", "revisit"})
-
-
 def _status(
     kind: str,
     now: datetime,
     ctx: SourceContext,
     seen: dict[str, bool],
 ) -> list[str]:
-    rows: list[str] = []
-    if kind in _STATUS_KINDS:
-        for fact in ctx.situation:
-            line = _keep(str(getattr(fact, "text", "") or ""), seen)
-            if line:
-                rows.append(line)
-    if kind != "arrived":
-        return [row for row in rows if row]
-    if ctx.situation:
-        if ctx.away_sec is not None:
-            rows.append(_keep(f"离开了{_ago(ctx.away_sec)}", seen))
-        if ctx.already_greeted:
-            rows.append(_keep("本时段已经问候过", seen))
-        return [row for row in rows if row]
-    if ctx.away_sec is not None:
-        rows.append(_keep(f"离开了{_ago(ctx.away_sec)}", seen))
-    if ctx.already_greeted:
-        rows.append(_keep("本时段已经问候过", seen))
-    for key, content in ctx.goals:
-        if not goal_is_due_soon(content, now, due_soon_sec=ctx.due_soon_sec):
-            continue
-        body = _keep(content, seen)
-        if not body:
-            continue
-        if _acked_today(key, ctx, now):
-            body = f"{body}。已经说过"
-        rows.append(body)
-    hit = match_festival(now, ctx.birthday_content)
-    if hit is not None and hit.name:
-        rows.append(_keep(f"今天是{hit.name}", seen))
-    for care_kind, start, end in ctx.care_windows:
-        if not in_window(now, start, end):
-            continue
-        label = _CARE_LABEL.get(care_kind, care_kind)
-        if care_kind in ctx.care_done:
-            rows.append(_keep(f"今天已经提过{label}", seen))
-        else:
-            rows.append(_keep(f"{label}窗口还没提过", seen))
-    return [row for row in rows if row]
+    del now
+    if kind != "arrived" or ctx.away_sec is None:
+        return []
+    line = _keep(f"离开了{_ago(ctx.away_sec)}", seen)
+    return [line] if line else []
 
 
 def _glance_rows(ctx: SourceContext, seen: dict[str, bool]) -> list[str]:

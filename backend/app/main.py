@@ -44,10 +44,10 @@ from .memory.store import MemoryStore
 from .model_loader import get_model_loader
 from .orchestrator import Orchestrator
 from .planner import PlannerClient
-from .proactive import ConnectionHub, ProactiveScheduler, WelcomeState, run_proactive_loop
+from .proactive import ConnectionHub, ProactiveScheduler, WelcomeState
 from .relationship import RelationshipEngine, RelationshipSettings
-from .relationship.stance_loop import review_day, run_stance_loop
-from .relationship.stance_store import StanceStore
+from .stance.stance_loop import review_day, run_stance_loop
+from .stance.stance_store import StanceStore
 from .napcat import NapcatLink, QqInbox, napcat_endpoint
 from .ws_auth import startup_token_error
 from .ws_handler import AppState, websocket_endpoint
@@ -190,18 +190,13 @@ def create_app() -> FastAPI:
     state.generation_owner = ""
     state.generation_interrupts = {}
     expire_stale_care(state)
-    from .life.thought.triggers import note_climate_enter, note_memory
+    from .life.thought.triggers import note_memory
 
     def _on_memory(key: str, category: str) -> None:
         del category
         note_memory(state, key, now=datetime.now())
 
     orchestrator.extractor.on_memory_upsert = _on_memory
-    if orchestrator.relationship is not None:
-        def _on_urgent(before: str, after: str) -> None:
-            note_climate_enter(state, before, after, now=datetime.now())
-
-        orchestrator.relationship.on_urgent_enter = _on_urgent
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -222,18 +217,9 @@ def create_app() -> FastAPI:
             except Exception:
                 logger.exception("Knowledge warmup failed; RAG will retry on first use")
         await extractor.start()
-        loop_task = None
         life_task = None
         thought_task = None
         stance_task = None
-        if (
-            config.proactive.idle.enabled
-            or config.proactive.care.enabled
-            or config.proactive.goal.enabled
-            or config.proactive.festival.enabled
-        ):
-            loop_task = asyncio.create_task(run_proactive_loop(state))
-            logger.info("proactive loop started")
         if life is not None:
             life_task = asyncio.create_task(run_life_loop(state))
             logger.info("life loop started")
@@ -265,12 +251,6 @@ def create_app() -> FastAPI:
             stance_task.cancel()
             try:
                 await stance_task
-            except asyncio.CancelledError:
-                pass
-        if loop_task is not None:
-            loop_task.cancel()
-            try:
-                await loop_task
             except asyncio.CancelledError:
                 pass
         await extractor.stop()

@@ -26,8 +26,8 @@ from ..emoji_catalog import format_emoji_prompt
 from ..life.thought.schema import is_thought_history_marker
 from ..query_time import format_extract_now, format_full_datetime
 from ..relationship.events import USER_ACT_WHITELIST_CSV
-from ..relationship.overlay_loader import format_overlay_block
-from ..relationship.stance_schema import (
+from ..stance.overlay_loader import format_overlay_block
+from ..stance.stance_schema import (
     DEFAULT_STAGE,
     EMPTY_PATCH_NOTE,
     normalize_stage,

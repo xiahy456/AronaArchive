@@ -15,7 +15,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Process-level ticker. It delivers a queued impulse and does not author one."""
+"""Legacy ticker. Life delivers its own impulses."""
 
 from __future__ import annotations
 
@@ -55,16 +55,6 @@ async def run_proactive_loop(state: "AppState") -> None:
 
 
 async def tick_once(state: "AppState", now: datetime | None = None) -> bool:
-    """Deliver an impulse thought already queued. Motives are facts, not speech.
-
-    Returns True if a line was sent. Listening does not skip the tick.
-    """
-    from ..life.impulse import flush_impulse
-
-    if not state.hub.all_sessions():
-        return False
-    engine = getattr(state, "life", None)
-    if engine is None or engine.state.pending_impulse is None:
-        return False
-    dt = now or datetime.now()
-    return await flush_impulse(state, now=dt)
+    """Do not deliver life impulses. The life loop speaks on its own."""
+    del state, now
+    return False

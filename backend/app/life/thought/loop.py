@@ -28,7 +28,7 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from ..journal import TEACHER_OPENED_SUMMARY
-from ..policy import SIMMER_SEC
+from ..policy import SIMMER_SEC, in_rest_hours
 from ..state import InnerState
 from .client import ThoughtClient
 from .commit import commit_inner
@@ -317,11 +317,9 @@ def _accepts_system(caller: Any) -> bool:
 
 
 def _gap_band(now: datetime, *, online: bool) -> str:
-    from ...proactive.slots import resolve_slot
-
     if online:
         return "online"
-    if resolve_slot(now).slot_id == "late_night":
+    if in_rest_hours(now):
         return "night"
     return "away"
 
@@ -392,31 +390,21 @@ async def greet_on_connect(
     now: datetime | None = None,
     complete=None,
 ) -> None:
-    """Think once on arrival. Fall back to today's welcome only if that produces nothing."""
-    from ...proactive.welcome import offer_arrival_fallback
-
+    """Think once on arrival. Silence stays silence when that produces nothing."""
+    del session_id
     at = now or datetime.now()
     cfg = getattr(getattr(state.config, "life", None), "thought", None)
     limit = float(getattr(cfg, "arrived_fallback_sec", 2) or 2)
-    decision: ThoughtDecision | None
     try:
-        decision = await asyncio.wait_for(
+        await asyncio.wait_for(
             thought_tick_once(state, at, complete=complete),
             timeout=max(0.1, limit),
         )
     except asyncio.TimeoutError:
-        decision = None
-    engine = getattr(state, "life", None)
-    if engine is not None and engine.state.pending_impulse is not None:
         return
-    if decision is not None and decision.outcome != "failed":
-        return
-    await offer_arrival_fallback(state, session_id=session_id, now=at)
 
 
 def _resting(now: datetime) -> bool:
-    from ...proactive.slots import REST_SLOTS, resolve_slot
-
-    return resolve_slot(now).slot_id in REST_SLOTS
+    return in_rest_hours(now)
 
 

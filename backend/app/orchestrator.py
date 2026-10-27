@@ -193,13 +193,8 @@ class Orchestrator:
         if interrupt_ctx is None:
             return ""
         from .life.impulse import without_stale_care
-        from .proactive.care import care_window_specs
 
-        windows = {
-            kind: (start, end)
-            for kind, start, end in care_window_specs(self.config.proactive.care)
-        }
-        fresh = without_stale_care(interrupt_ctx, datetime.now(), windows)
+        fresh = without_stale_care(interrupt_ctx, datetime.now())
         return format_interrupt_block(fresh)
 
     def _day_block(self) -> str:

@@ -26,11 +26,9 @@ from datetime import datetime
 from typing import Any
 
 from ..protocol import msg_glance_request
-from ..relationship.engine import read_climate
 
 logger = logging.getLogger(__name__)
 
-BLOCK_CLIMATES = frozenset({"fragile", "rupture", "cling_risk"})
 DEFAULT_INTERVAL_SEC = 1200.0
 
 
@@ -54,8 +52,7 @@ def glance_allowed(
         return False
     if attention == "teacher":
         return False
-    if climate in BLOCK_CLIMATES:
-        return False
+    del climate
     wait = max(1.0, float(interval_sec))
     if last_at is not None and (now - last_at).total_seconds() < wait:
         return False
@@ -79,14 +76,13 @@ def maybe_request_glance(state: Any, now: datetime | None = None) -> None:
     at = now or datetime.now()
     inner = engine.state
     interval = float(getattr(life_cfg, "glance_interval_sec", DEFAULT_INTERVAL_SEC))
-    climate = read_climate(state) or ""
     if not glance_allowed(
         now=at,
         last_at=journal.last_glance_at,
         interval_sec=interval,
         activity=inner.activity,
         attention=inner.attention,
-        climate=climate,
+        climate="",
         busy=bool(hub.any_busy()),
         listening=bool(inner.can_hear),
         pending=bool(getattr(state, "glance_request_id", "")),

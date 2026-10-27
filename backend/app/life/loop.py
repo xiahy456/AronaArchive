@@ -24,7 +24,6 @@ import logging
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from ..relationship.engine import read_climate
 from .glance import maybe_request_glance
 from .presence import schedule_presence
 from .impulse import expire_stale_care, schedule_impulse_delivery
@@ -61,7 +60,7 @@ def tick_once(state: "AppState", now: datetime | None = None) -> None:
         return
     at = now or datetime.now()
     expire_stale_care(state, at)
-    decision = engine.tick(at, climate=read_climate(state))
+    decision = engine.tick(at)
     journal = getattr(state, "journal", None)
     if journal is not None:
         journal.note_inner(

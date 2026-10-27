@@ -47,9 +47,8 @@ def maybe_offer_thought(
     created = now.replace(microsecond=0)
     if parsed.wait != "simmer":
         created = created - timedelta(seconds=SIMMER_SEC)
+    del welcome
     kind = parsed.kind if parsed.kind else "thought"
-    # Welcome outside arrival is just a thought; festival must keep its kind
-    # so festival_done is recorded after she speaks.
     if kind == "welcome" and gate_kind != "arrived":
         kind = "thought"
     source_id, due_soon, extra = _fact_source(kind, facts)
@@ -66,18 +65,6 @@ def maybe_offer_thought(
         allow_speak=True,
         from_thought=True,
     )
-    # Period greeting only on arrival; spontaneous festival must not mark the slot.
-    if (
-        kind in {"welcome", "festival"}
-        and welcome is not None
-        and gate_kind == "arrived"
-    ):
-        from ...proactive.welcome import resolve_welcome_context
-
-        slot, first = resolve_welcome_context(welcome, now)
-        impulse.first_in_slot = first
-        impulse.slot_id = str(slot.slot_id)
-        impulse.date_key = slot.date_key
     return offer_impulse(engine, impulse)
 
 

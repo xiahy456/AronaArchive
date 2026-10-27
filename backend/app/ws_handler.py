@@ -64,15 +64,12 @@ from .input_filter import (
 )
 from .interact import parse_duration_ms, resolve_interact_action
 from .life import (
-    Impulse,
     InnerState,
     LifeEngine,
     PresenceGate,
     WorldKind,
     apply_turn_action,
-    flush_impulse,
     note_teacher_turn,
-    offer_impulse,
     publish_presence,
     schedule_presence,
     world_event,
@@ -81,19 +78,8 @@ from .life.glance import apply_glance_refusal
 from .life.hands import begin_hands, end_hands, teacher_turn_aborts_hands
 from .logging_utils import begin_trace, format_interactive_log, preview, reset_trace
 from .orchestrator import Orchestrator
-from .proactive import (
-    ConnectionHub,
-    HISTORY_FESTIVAL_MARKER,
-    HISTORY_USER_MARKER,
-    ProactiveScheduler,
-    WelcomeState,
-    build_festival_instruction,
-    build_welcome_instruction,
-    pick_welcome_closing_hint,
-    resolve_welcome_context,
-)
+from .proactive import ConnectionHub, ProactiveScheduler, WelcomeState
 from .proactive.goal import wants_goal_mute
-from .proactive.loop import load_birthday_content
 from .protocol import (
     CODE_BAD_REQUEST,
     CODE_INTERNAL,
@@ -793,109 +779,6 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
             wait_extended = True
         commit_task = asyncio.create_task(_commit_after(max(0.05, delay_ms / 1000.0)))
 
-    async def _run_welcome() -> None:
-        nonlocal inflight_kind
-        inflight_kind = "welcome"
-        _mark_generation(state, session_id, "welcome")
-        try:
-            slot, first = resolve_welcome_context(state.welcome)
-            logger.info(
-                "welcome trigger session=%s slot=%s first=%s date=%s",
-                session_id,
-                slot.slot_id,
-                first,
-                slot.date_key,
-            )
-            engine = state.life
-            if engine is None:
-                logger.info("welcome skipped session=%s reason=no_life_engine", session_id)
-                return
-            climate = None
-            relationship = state.orchestrator.relationship
-            if (
-                relationship is not None
-                and state.config.proactive.relationship.enabled
-            ):
-                climate = relationship.peek_climate()
-
-            now = datetime.now()
-            hit = None
-            if state.scheduler is not None:
-                birthday = await load_birthday_content(state)
-                hit = state.scheduler.pending_festival(birthday_content=birthday)
-            if hit is not None:
-                allow_speak = True
-                if (
-                    relationship is not None
-                    and state.config.proactive.relationship.enabled
-                ):
-                    gate = relationship.decide_proactive("festival")
-                    allow_speak = gate.action == "initiate"
-                    if not allow_speak:
-                        logger.info(
-                            "festival welcome withheld by climate climate=%s action=%s",
-                            gate.climate,
-                            gate.action,
-                        )
-                extras = (hit.extra_memory,) if hit.extra_memory else ()
-                offer_impulse(
-                    engine,
-                    Impulse(
-                        kind="festival",
-                        created_at=now.replace(microsecond=0),
-                        source_id=hit.id,
-                        instruction=build_festival_instruction(hit, climate),
-                        history_marker=HISTORY_FESTIVAL_MARKER,
-                        extra_memories=extras,
-                        allow_speak=allow_speak,
-                        first_in_slot=first,
-                        slot_id=str(slot.slot_id),
-                        date_key=slot.date_key,
-                    ),
-                )
-            else:
-                closing_hint = pick_welcome_closing_hint()
-                offer_impulse(
-                    engine,
-                    Impulse(
-                        kind="welcome",
-                        created_at=now.replace(microsecond=0),
-                        instruction=build_welcome_instruction(
-                            slot,
-                            first_in_slot=first,
-                            climate=climate,
-                            closing_hint=closing_hint,
-                        ),
-                        history_marker=HISTORY_USER_MARKER,
-                        allow_speak=True,
-                        first_in_slot=first,
-                        slot_id=str(slot.slot_id),
-                        date_key=slot.date_key,
-                    ),
-                )
-            ok = await flush_impulse(state, now=now, session_id=session_id)
-            if not ok:
-                pending = engine.state.pending_impulse
-                if pending is not None:
-                    logger.warning(
-                        "welcome impulse deferred session=%s pending=%s",
-                        session_id,
-                        pending.kind,
-                    )
-                else:
-                    logger.info(
-                        "welcome impulse withheld session=%s",
-                        session_id,
-                    )
-        except asyncio.CancelledError:
-            logger.info("welcome cancelled session=%s", session_id)
-            raise
-        except Exception:
-            logger.exception("welcome error session=%s", session_id)
-        finally:
-            inflight_kind = None
-            _mark_generation(state, session_id, None)
-
     async def _run_interact(action: str, duration_ms: int) -> None:
         nonlocal inflight_kind
         inflight_kind = "interact"
@@ -928,7 +811,7 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
             state.hub.set_busy(session_id, False)
 
     thought_cfg = getattr(getattr(state.config, "life", None), "thought", None)
-    if state.config.proactive.welcome.enabled and getattr(thought_cfg, "enabled", False):
+    if getattr(thought_cfg, "enabled", False):
         from .life.thought.loop import greet_on_connect
 
         async def _run_arrival_thought() -> None:
@@ -947,10 +830,8 @@ async def websocket_endpoint(websocket: WebSocket, state: AppState) -> None:
                 _mark_generation(state, session_id, None)
 
         chat_task = asyncio.create_task(_run_arrival_thought())
-    elif state.config.proactive.welcome.enabled:
-        chat_task = asyncio.create_task(_run_welcome())
     else:
-        logger.info("welcome skipped session=%s reason=disabled", session_id)
+        logger.info("welcome skipped session=%s reason=thought_disabled", session_id)
 
     try:
         while True:

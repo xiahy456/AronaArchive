@@ -23,7 +23,6 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Literal
 
-from ..proactive.slots import REST_SLOTS, resolve_slot
 from .events import TEACHER_PRESENCE_KINDS, WorldEvent
 from .state import (
     DEFAULT_ACTIVITY,
@@ -88,8 +87,14 @@ def _teacher_hold_active(
     return _elapsed_sec(state.last_event_at, now) < look_hold_sec
 
 
+def in_rest_hours(now: datetime) -> bool:
+    """Hours before 06:00 and from 23:00. Life's own clock."""
+    hour = now.hour
+    return hour < 6 or hour >= 23
+
+
 def _in_rest_slot(now: datetime) -> bool:
-    return resolve_slot(now).slot_id in REST_SLOTS
+    return in_rest_hours(now)
 
 
 def _shift(

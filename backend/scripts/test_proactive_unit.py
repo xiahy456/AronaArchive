@@ -714,10 +714,8 @@ def test_welcome_impulse_flush_speaks() -> None:
             _fail(kwargs.get("kind"))
         if engine.state.pending_impulse is not None:
             _fail("spoken welcome should clear impulse")
-        scheduler.note_proactive.assert_called()
-        fake.welcome.mark_period_greeted.assert_called_with(
-            "2026-08-13", "afternoon"
-        )
+        scheduler.note_proactive.assert_not_called()
+        fake.welcome.mark_period_greeted.assert_not_called()
     print("  ok")
 
 

@@ -9,6 +9,7 @@
 | `backend/app/` | FastAPI + WebSocket。入口 `main.py`，编排 `orchestrator.py` |
 | `backend/app/life/` | 内状态、墙钟、冲动、心事、自己的一天、瞥屏、可打断的电脑操作 |
 | `backend/app/relationship/` | 信任 / 依赖 / 张力、分类、气候分区与姿态 |
+| `backend/app/stance/` | 阶段、口吻与午夜复盘。生命循环继续使用它，不读取 relationship 气候 |
 | `backend/app/planner/` | DeepSeek 意图卡。关闭或失败时回落本地单模型 |
 | `backend/app/proactive/` | 欢迎、搭话、照料、回访、节日。只产生冲动，不自己开口 |
 | `backend/app/memory/` | 老师的长期事实：SQLite + FTS5 + Chroma |
@@ -25,6 +26,7 @@
 - 本项目不支持使用过于冗杂的死逻辑来追求轻量、快速但不成熟、勉强的实现。请勿为减少项目大小而引入过多的功能耦合，请勿使用正则来应对一切问题而不考虑 LLM 调用。
 
 - 后端的 `proactive` 模块即将从系统中解耦，开发时不要与它们耦合。
+- 生命循环不读取 relationship 气候。阶段与口吻走 `backend/app/stance/`。
 
 ## 不要碰
 

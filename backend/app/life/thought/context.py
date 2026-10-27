@@ -23,8 +23,6 @@ import logging
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from ...proactive.care import care_window_specs
-from ...relationship.engine import read_climate, relationship_enabled
 from .sources import SourceContext
 from .schema import is_thought_history_marker
 from .store import PendingTrigger
@@ -74,31 +72,10 @@ def gather_context(
     last_spoke = getattr(inner, "last_spoke_at", None)
     if isinstance(last_spoke, datetime):
         since_arona = max(0.0, (now - last_spoke).total_seconds())
-    scheduler = getattr(state, "scheduler", None)
-    sched_state = getattr(scheduler, "state", None)
-    care_done = frozenset(getattr(sched_state, "care_done", []) or [])
-    goal_acked = dict(getattr(sched_state, "goal_acked", {}) or {})
-    climate = ""
-    last_act = ""
-    if relationship_enabled(state):
-        climate = read_climate(state) or ""
-        relationship = getattr(getattr(state, "orchestrator", None), "relationship", None)
-        if relationship is not None:
-            last_act = str(getattr(getattr(relationship, "state", None), "last_user_act", "") or "")
-    windows = _windows(state)
     goals = _goals(state)
     _picked_glance = _glance_text(trigger, glance, glance_at)
-    situation = _situation(
-        state,
-        now,
-        goals=goals,
-        last_user_act=last_act,
-        climate=climate,
-        quiet_sec=since_teacher,
-    )
     return SourceContext(
         teacher_online=bool(state.hub.all_sessions()),
-        climate=climate,
         seconds_since_teacher=since_teacher,
         seconds_since_arona=since_arona,
         journal=tuple(summaries),
@@ -106,17 +83,11 @@ def gather_context(
         turns=turns,
         ended_turns=turns[-4:],
         goals=goals,
-        care_done=care_done,
-        goal_acked=goal_acked,
-        last_user_act=last_act,
         glance_text=_picked_glance[0],
         glance_at=_picked_glance[1],
         memory_key=trigger.memory_key,
         memory_content=_memory_text(state, trigger),
-        already_greeted=_already_greeted(state, now),
-        care_windows=windows,
         knowledge=_knowledge(state),
-        situation=situation,
     )
 
 
@@ -154,20 +125,6 @@ def _memory_text(state: "AppState", trigger: PendingTrigger) -> str:
         if content:
             return content
     return ""
-
-
-def _already_greeted(state: "AppState", now: datetime) -> bool:
-    welcome = getattr(state, "welcome", None)
-    if welcome is None:
-        return False
-    try:
-        from ...proactive.slots import resolve_slot
-
-        slot = resolve_slot(now)
-        return not welcome.is_first_period_greeting(slot.date_key, slot.slot_id)
-    except Exception:
-        logger.exception("thought welcome read failed")
-        return False
 
 
 def _turns(state: "AppState") -> tuple[tuple, ...]:
@@ -221,19 +178,6 @@ def _message_time(msg: dict) -> datetime | None:
         return None
 
 
-def _windows(state: "AppState") -> tuple[tuple[str, str, str], ...]:
-    care = getattr(getattr(getattr(state, "config", None), "proactive", None), "care", None)
-    if care is None:
-        return ()
-    try:
-        return tuple(
-            (kind, start, end) for kind, start, end in care_window_specs(care)
-        )
-    except Exception:
-        logger.exception("thought care windows failed")
-        return ()
-
-
 def _goals(state: "AppState") -> tuple[tuple[str, str], ...]:
     memory = getattr(getattr(state, "orchestrator", None), "memory_store", None)
     if memory is None:
@@ -252,47 +196,6 @@ def _goals(state: "AppState") -> tuple[tuple[str, str], ...]:
         if key and content:
             found.append((key, content))
     return tuple(found)
-
-
-def _situation(
-    state: "AppState",
-    now: datetime,
-    *,
-    goals: tuple[tuple[str, str], ...],
-    last_user_act: str,
-    climate: str,
-    quiet_sec: float | None,
-) -> tuple:
-    scheduler = getattr(state, "scheduler", None)
-    if scheduler is None or not hasattr(scheduler, "situation_facts"):
-        return ()
-    try:
-        from ...proactive.festival import birthday_from_profiles
-
-        birthday = ""
-        memory = getattr(getattr(state, "orchestrator", None), "memory_store", None)
-        if memory is not None and getattr(getattr(scheduler, "festival_cfg", None), "enabled", False):
-            birthday = birthday_from_profiles(memory.list_by_category("profile"))
-        moods: list[dict] = []
-        if memory is not None and getattr(getattr(scheduler, "mood_cfg", None), "enabled", False):
-            moods = [
-                row
-                for row in (memory.list_by_category("emotional") or [])
-                if isinstance(row, dict)
-            ]
-        facts = scheduler.situation_facts(
-            now,
-            last_user_act=last_user_act,
-            climate=climate,
-            goals=[{"key": key, "content": content} for key, content in goals],
-            moods=moods,
-            birthday_content=birthday,
-            quiet_sec=quiet_sec,
-        )
-    except Exception:
-        logger.exception("thought situation read failed")
-        return ()
-    return tuple(facts)
 
 
 def _knowledge(state: "AppState"):

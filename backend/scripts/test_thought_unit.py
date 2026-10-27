@@ -538,18 +538,18 @@ def test_late_night_offline_uses_night_gap() -> None:
     night = datetime(2026, 9, 23, 23, 10, 0)
     evening = _state("2026-09-23")
     kind, gap, band = asyncio.run(_gap_at(evening, night))
-    if kind != "spontaneous" or gap != 900 or band != "away":
-        _fail(f"23:00 offline should stay on the away gap, got {kind} {gap} {band}")
+    if kind != "spontaneous" or gap != 1800 or band != "night":
+        _fail(f"23:00 offline should use the night gap, got {kind} {gap} {band}")
 
     cross = _state("2026-09-23")
-    before = datetime(2026, 9, 23, 23, 50, 0)
-    after = datetime(2026, 9, 24, 0, 10, 0)
+    before = datetime(2026, 9, 23, 22, 50, 0)
+    after = datetime(2026, 9, 23, 23, 10, 0)
     kind, gap, band = asyncio.run(_gap_at(cross, before))
     if kind != "spontaneous" or gap != 900 or band != "away":
-        _fail(f"23:50 offline should roll the away gap, got {kind} {gap} {band}")
+        _fail(f"22:50 offline should roll the away gap, got {kind} {gap} {band}")
     kind, gap, band = asyncio.run(_gap_at(cross, after))
     if gap != 1800 or band != "night":
-        _fail(f"crossing midnight offline should re-roll the night gap, got {kind} {gap} {band}")
+        _fail(f"entering rest hours should re-roll the night gap, got {kind} {gap} {band}")
     print("  ok")
 
 
@@ -729,10 +729,8 @@ def test_sources_for_each_trigger() -> None:
     arrived = _one("arrived")
     if "【现状】" not in arrived.text or "离开了2小时" not in arrived.text:
         _fail(f"arrived should state how long she was away, got {arrived.text}")
-    if "已经说过" not in arrived.text or "今天是教师节" not in arrived.text:
-        _fail(f"arrived should mark a spoken goal and the festival, got {arrived.text}")
-    if "晚饭窗口还没提过" not in arrived.text:
-        _fail(f"an open meal window should be a fact, got {arrived.text}")
+    if "今天是教师节" in arrived.text or "晚饭窗口" in arrived.text:
+        _fail(f"arrived must not carry scheduler facts, got {arrived.text}")
     if "日记0" in arrived.text or "日记6" not in arrived.text:
         _fail("arrived should use the journal tail")
 
@@ -1260,8 +1258,8 @@ def test_live_inner_model() -> None:
             ThoughtLedger(),
             dinner_ctx,
         ).text
-        if "晚饭窗口还没提过" not in dinner_text:
-            _fail(f"dinner scene should mention the open window, got {dinner_text}")
+        if "离开了" not in dinner_text or "晚饭窗口" in dinner_text:
+            _fail(f"dinner scene should keep the absence and drop the window, got {dinner_text}")
         await _scene(
             "dinner-window-open",
             PendingTrigger(kind="arrived"),
@@ -2304,8 +2302,10 @@ def test_event_triggers() -> None:
     from app.ws_handler import websocket_endpoint
 
     source = inspect.getsource(websocket_endpoint)
-    if "create_task(_run_welcome" not in source or "note_arrived" not in source:
-        _fail("welcome must still start, and arrival must join the thought queue")
+    if "greet_on_connect" not in source or "note_arrived" not in source:
+        _fail("arrival must think, and arrival must join the thought queue")
+    if "_run_welcome" in source:
+        _fail("connect must not inject a welcome impulse")
     now = _now()
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -2511,8 +2511,8 @@ def test_event_triggers() -> None:
             ThoughtLedger(),
             SourceContext(already_greeted=True),
         )
-        if "本时段已经问候过" not in greeted.text:
-            _fail(f"a greeted arrival should say so, got {greeted.text}")
+        if "本时段已经问候过" in greeted.text:
+            _fail(f"arrival must not consult the welcome slot, got {greeted.text}")
         fresh = LifeEngine.from_path(root / "arrived-life.json", LifeSettings())
         if not maybe_offer_thought(
             fresh,
@@ -2860,8 +2860,8 @@ def test_situation_facts_do_not_enqueue() -> None:
             ThoughtLedger(),
             SourceContext(situation=tuple(facts)),
         ).text
-        if "现在处于晚饭窗口，今天还没提过晚饭" not in rendered:
-            _fail(f"spontaneous material should include dinner, got {rendered}")
+        if "现在处于晚饭窗口" in rendered or "交报告" in rendered:
+            _fail(f"thought material must not carry scheduler facts, got {rendered}")
 
         engine = LifeEngine.from_path(root / "life.json", LifeSettings())
         ledger = ThoughtLedger()
@@ -2994,8 +2994,8 @@ def test_situation_facts_do_not_enqueue() -> None:
         )
         if not asyncio.run(flush_impulse(app, now=later)):
             _fail("the dinner impulse should be speakable")
-        if "dinner" not in scheduler.state.care_done:
-            _fail(f"spoken dinner should be care_done, got {scheduler.state.care_done}")
+        if scheduler.state.care_done:
+            _fail(f"life speech must not mark care_done, got {scheduler.state.care_done}")
         if scheduler.state.last_proactive_at:
             _fail("mentioning dinner must not start a cooldown")
 
@@ -3200,8 +3200,8 @@ def test_arrival_greeting_falls_back_only_on_failure() -> None:
             ThoughtLedger(),
             SourceContext(already_greeted=True),
         )
-        if "本时段已经问候过" not in greeted.text:
-            _fail(f"a greeted slot should say so, got {greeted.text}")
+        if "本时段已经问候过" in greeted.text:
+            _fail(f"a greeted slot must not enter the thought, got {greeted.text}")
 
         hello = _world(afternoon)
         asyncio.run(_greet(hello, afternoon, _payload("welcome", True, "下午好")))
@@ -3212,8 +3212,8 @@ def test_arrival_greeting_falls_back_only_on_failure() -> None:
         hello.journal = None
         if not asyncio.run(flush_impulse(hello, now=afternoon)):
             _fail("the greeting should speak")
-        if not hello.welcome._period_greeted:
-            _fail("a welcome line should mark this period")
+        if hello.welcome._period_greeted:
+            _fail("life speech must not mark the welcome period")
         if hello.life.state.pending_impulse is not None:
             _fail("fallback must not add a second line")
 
@@ -3245,19 +3245,17 @@ def test_arrival_greeting_falls_back_only_on_failure() -> None:
 
         broken = _world(afternoon + timedelta(minutes=5))
         asyncio.run(_greet(broken, afternoon, None))
-        if len(broken.spoken) != 1 or broken.spoken[0].get("kind") != "welcome":
-            _fail(f"a failed parse should fall back to one welcome, got {broken.spoken}")
-        if "她想提起" in str(broken.spoken[0].get("history_marker") or ""):
-            _fail("the fallback must not be her thought line")
+        if broken.spoken:
+            _fail(f"a failed parse must not fall back to welcome, got {broken.spoken}")
         if broken.life.state.pending_impulse is not None:
-            _fail("the fallback must not leave a second impulse")
+            _fail("a failed parse must not leave an impulse")
 
         slow = _world(afternoon + timedelta(minutes=6), fallback=0.2)
         asyncio.run(_greet(slow, afternoon, _payload("thought", True, "老师还在吗"), delay=1))
-        if len(slow.spoken) != 1 or slow.spoken[0].get("kind") != "welcome":
-            _fail(f"a slow thought should leave only the welcome fallback, got {slow.spoken}")
+        if slow.spoken:
+            _fail(f"a slow thought must not fall back to welcome, got {slow.spoken}")
         if slow.life.state.pending_impulse is not None:
-            _fail("a late thought must not enqueue after the fallback")
+            _fail("a late thought must not enqueue after the wait")
 
         goal = _world(afternoon + timedelta(minutes=7))
         asyncio.run(_greet(goal, afternoon, _payload("goal", True, "报告快到了")))
@@ -3277,9 +3275,9 @@ def test_arrival_greeting_falls_back_only_on_failure() -> None:
         festive.journal = None
         if not asyncio.run(flush_impulse(festive, now=teacher_day)):
             _fail("the festival line should speak")
-        if "teacher" not in festive.scheduler.state.festival_done or not festive.welcome._period_greeted:
+        if festive.scheduler.state.festival_done or festive.welcome._period_greeted:
             _fail(
-                f"festival speech should record both facts, "
+                f"life speech must not write festival or welcome state, "
                 f"done={festive.scheduler.state.festival_done} greeted={festive.welcome._period_greeted}"
             )
 
@@ -3397,17 +3395,17 @@ def test_festival_speech_marks_done_outside_arrival() -> None:
             _fail("spontaneous festival must not attach welcome-period context")
         if not asyncio.run(flush_impulse(spontaneous, now=national_day)):
             _fail("the spontaneous festival line should speak")
-        if "national" not in spontaneous.scheduler.state.festival_done:
+        if spontaneous.scheduler.state.festival_done:
             _fail(
-                f"spontaneous festival speech should mark festival_done, "
+                f"life speech must not mark festival_done, "
                 f"got {spontaneous.scheduler.state.festival_done}"
             )
         if spontaneous.welcome._period_greeted:
             _fail("spontaneous festival must not mark the welcome period")
         after = spontaneous.scheduler.situation_facts(national_day)
         texts = [item.text for item in after if item.kind == "festival"]
-        if texts != ["今天是国庆节，已经祝贺"]:
-            _fail(f"situation facts should flip to 已经祝贺, got {texts}")
+        if texts != ["今天是国庆节，还没祝贺"]:
+            _fail(f"scheduler facts stay unread by life, got {texts}")
 
         breakfast = _app(root, "breakfast", "老师，国庆节快乐～早饭窗口开了哦")
         if not maybe_offer_thought(
@@ -3430,13 +3428,12 @@ def test_festival_speech_marks_done_outside_arrival() -> None:
             _fail(f"breakfast kind should stay breakfast, got {meal}")
         if not asyncio.run(flush_impulse(breakfast, now=national_day)):
             _fail("the breakfast festival line should speak")
-        if "national" not in breakfast.scheduler.state.festival_done:
+        if breakfast.scheduler.state.festival_done or breakfast.scheduler.state.care_done:
             _fail(
-                f"festival wording inside breakfast should mark festival_done, "
-                f"got {breakfast.scheduler.state.festival_done}"
+                "life speech must not mark festival or care, "
+                f"festival={breakfast.scheduler.state.festival_done} "
+                f"care={breakfast.scheduler.state.care_done}"
             )
-        if "breakfast" not in breakfast.scheduler.state.care_done:
-            _fail("breakfast speech should still mark care_done")
 
         thought_only = _app(root, "thought", "老师，国庆节快乐呀！")
         if not maybe_offer_thought(
@@ -3453,9 +3450,9 @@ def test_festival_speech_marks_done_outside_arrival() -> None:
             _fail(f"thought kind should stay thought, got {plain}")
         if not asyncio.run(flush_impulse(thought_only, now=national_day)):
             _fail("the thought festival line should speak")
-        if "national" not in thought_only.scheduler.state.festival_done:
+        if thought_only.scheduler.state.festival_done:
             _fail(
-                f"festival wording inside thought should mark festival_done, "
+                f"life speech must not mark festival_done, "
                 f"got {thought_only.scheduler.state.festival_done}"
             )
     print("  ok")
@@ -3878,22 +3875,18 @@ def test_relationship_switch_hides_climate_from_thought() -> None:
     off = _state(False)
     off_text, off_ctx = _material(off)
     if off_ctx.climate or off_ctx.last_user_act:
-        _fail(f"a disabled switch should hide relationship reads, got {off_ctx}")
+        _fail(f"thought must not read relationship, got {off_ctx}")
     if "气氛是" in off_text or "当前气候是" in off_text:
-        _fail(f"disabled thought material should omit climate, got {off_text}")
-    if note_climate_enter(off, "steady", "cling_risk", now=now):
-        _fail("a disabled relationship switch must not enqueue a climate thought")
-    if off.thought.pending_triggers:
-        _fail(f"disabled climate enter should leave the queue empty, got {off.thought.pending_triggers}")
+        _fail(f"thought material should omit climate, got {off_text}")
 
     missing = _state(None)
     on_text, on_ctx = _material(missing)
-    if on_ctx.climate != "cling_risk" or on_ctx.last_user_act != "depart":
-        _fail(f"missing relationship config should still read climate, got {on_ctx}")
-    if "气氛是cling_risk" not in on_text or "当前气候是cling_risk" not in on_text:
-        _fail(f"missing config should keep climate in the material, got {on_text}")
+    if on_ctx.climate or on_ctx.last_user_act:
+        _fail(f"a missing relationship config must not be read, got {on_ctx}")
+    if "气氛是" in on_text or "当前气候是" in on_text:
+        _fail(f"missing config must stay out of the material, got {on_text}")
     if not note_climate_enter(missing, "steady", "cling_risk", now=now):
-        _fail("missing relationship config should still enqueue a climate thought")
+        _fail("climate enter no longer depends on the relationship switch")
     print("  ok")
 
 

@@ -22,7 +22,6 @@ from .events import WorldEvent, WorldKind, world_event
 from .impulse import (
     deliver_impulse,
     flush_impulse,
-    impulse_from_motive,
     offer_impulse,
     schedule_impulse_delivery,
 )
@@ -49,7 +48,6 @@ __all__ = [
     "deliver_impulse",
     "flush_impulse",
     "format_interrupt_block",
-    "impulse_from_motive",
     "note_teacher_turn",
     "offer_impulse",
     "presence_emotion",

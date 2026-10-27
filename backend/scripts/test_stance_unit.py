@@ -10,12 +10,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.life.thought.prompt import SECOND_HOP_NOTE, build_thought_system, second_hop_system
 from app.planner.prompts import build_planner_system_base, select_planner_system
-from app.relationship.stance import (
+from app.stance.stance import (
     apply_day,
     parse_observation,
     validate_observation,
 )
-from app.relationship.stance_schema import (
+from app.stance.stance_schema import (
     DEFAULT_STAGE,
     STAGE_FRIEND,
     STAGE_LOVER,
@@ -24,7 +24,7 @@ from app.relationship.stance_schema import (
     StageObservation,
     StanceState,
 )
-from app.relationship.stance_store import StanceStore
+from app.stance.stance_store import StanceStore
 
 
 def _fail(msg: str) -> None:
@@ -61,8 +61,6 @@ def test_prompt_order() -> None:
     order = [text.index(t) for t in ("## 身份", "## 口吻", "## 性格", "## 语气锚定", "## 个性化补丁", "## 边界")]
     if order != sorted(order):
         _fail(f"section order wrong: {order}")
-    if "服从气候" not in text:
-        _fail("climate priority missing")
     thought = build_thought_system(stage=STAGE_FRIEND, patch="叫我小老师")
     if "## 语气锚定" in thought:
         _fail("thought prompt should omit tone anchors")

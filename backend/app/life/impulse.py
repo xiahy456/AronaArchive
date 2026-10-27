@@ -25,20 +25,6 @@ from datetime import datetime
 from typing import Any
 
 from ..channel import QQ_SESSION_ID, hold_channel_for
-from ..proactive.care import (
-    CARE_KINDS,
-    CARE_MEMORY_QUERY,
-    HISTORY_CARE_MARKER,
-    care_window_specs,
-    in_window,
-)
-from ..proactive.festival import (
-    birthday_from_profiles,
-    match_festival,
-    needs_rest_followup,
-)
-from ..proactive.scheduler import Motive
-from ..relationship.engine import read_climate
 from .events import world_event
 from .policy import LifeDecision
 from .presence import schedule_presence
@@ -75,33 +61,11 @@ IMPULSE_HINTS: dict[str, str] = {
 
 _CARE_FACE = "worried"
 _DEFAULT_FACE = "curious"
+_CARE_KINDS = frozenset({"breakfast", "lunch", "dinner", "sleep"})
 
 
 def impulse_priority(kind: str) -> int:
     return int(IMPULSE_PRIORITY.get(kind, 0))
-
-
-def impulse_from_motive(
-    motive: Motive,
-    now: datetime,
-    *,
-    allow_speak: bool,
-) -> Impulse:
-    hint = IMPULSE_HINTS.get(motive.kind, "")
-    source = motive.goal_key or motive.mood_key or motive.festival_id
-    return Impulse(
-        kind=motive.kind,  # type: ignore[arg-type]
-        created_at=now.replace(microsecond=0),
-        source_id=source,
-        hint=hint,
-        instruction=motive.instruction,
-        history_marker=motive.history_marker,
-        retrieve_memory=motive.retrieve_memory,
-        memory_query=motive.memory_query,
-        extra_memories=tuple(motive.extra_memories),
-        due_soon=motive.due_soon,
-        allow_speak=allow_speak,
-    )
 
 
 def _with_rumination(state: InnerState, impulse: Impulse) -> InnerState:
@@ -165,10 +129,6 @@ def clear_impulse(engine: Any) -> None:
         logger.exception("life impulse clear failed")
 
 
-def _climate(state: Any) -> str | None:
-    return read_climate(state)
-
-
 def apply_impulse_due(engine: Any, *, now: datetime | None = None, climate: str | None = None) -> LifeDecision | None:
     if engine is None:
         return None
@@ -184,12 +144,12 @@ async def flush_impulse(
     now: datetime | None = None,
     session_id: str = "",
 ) -> bool:
-    """Apply impulse_due and run the effector. Used by the producer and welcome."""
+    """Apply impulse_due and run the effector."""
     engine = getattr(state, "life", None)
     if engine is None or engine.state.pending_impulse is None:
         return False
     dt = now or datetime.now()
-    decision = apply_impulse_due(engine, now=dt, climate=_climate(state))
+    decision = apply_impulse_due(engine, now=dt)
     return await deliver_impulse(state, decision, now=dt, session_id=session_id)
 
 
@@ -208,7 +168,7 @@ def _pick_session(state: Any, session_id: str = "") -> tuple[str, Any] | None:
 
 
 def _emotion_for(kind: str) -> str:
-    if kind in CARE_KINDS:
+    if kind in _CARE_KINDS:
         return _CARE_FACE
     return _DEFAULT_FACE
 
@@ -221,45 +181,37 @@ def _care_kind_of(item_id: str) -> str:
     if not item_id.startswith("imp-"):
         return ""
     kind = item_id[4:]
-    return kind if kind in CARE_KINDS else ""
+    return kind if kind in _CARE_KINDS else ""
 
 
 def care_kind_live(
     kind: str,
     created_at: datetime | None,
     now: datetime,
-    windows: dict[str, tuple[str, str]],
 ) -> bool:
-    """Care worries live only inside today's window. Other kinds are not care."""
-    if kind not in CARE_KINDS:
+    """Care worries live through the calendar day they were written."""
+    if kind not in _CARE_KINDS:
         return True
-    span = windows.get(kind)
-    if span is None or created_at is None:
+    if created_at is None:
         return False
-    if created_at.date() != now.date():
-        return False
-    return in_window(now, span[0], span[1])
+    return created_at.date() == now.date()
 
 
-def without_stale_care(
-    state: InnerState,
-    now: datetime,
-    windows: dict[str, tuple[str, str]],
-) -> InnerState:
-    """Drop meal/sleep rumination, and an unsent care reminder, after the window or the day.
+def without_stale_care(state: InnerState, now: datetime) -> InnerState:
+    """Drop meal/sleep rumination, and an unsent care reminder, after the day.
 
     A line she already decided to say (from_thought) stays until the life loop speaks it.
     """
     kept = [
         item
         for item in state.rumination
-        if care_kind_live(_care_kind_of(item.id), item.created_at, now, windows)
+        if care_kind_live(_care_kind_of(item.id), item.created_at, now)
     ]
     impulse = state.pending_impulse
     drop_pending = (
         impulse is not None
         and not impulse.from_thought
-        and not care_kind_live(impulse.kind, impulse.created_at, now, windows)
+        and not care_kind_live(impulse.kind, impulse.created_at, now)
     )
     if len(kept) == len(state.rumination) and not drop_pending:
         return state
@@ -270,20 +222,12 @@ def without_stale_care(
 
 
 def expire_stale_care(app_state: Any, now: datetime | None = None) -> None:
-    """Persist the drop so a closed care window cannot stay in life.json."""
+    """Persist the drop so yesterday's care worry cannot stay in life.json."""
     engine = getattr(app_state, "life", None)
     if engine is None:
         return
-    care_cfg = getattr(
-        getattr(getattr(app_state, "config", None), "proactive", None),
-        "care",
-        None,
-    )
-    if care_cfg is None:
-        return
     at = now or datetime.now()
-    windows = {kind: (start, end) for kind, start, end in care_window_specs(care_cfg)}
-    nxt = without_stale_care(engine.state, at, windows)
+    nxt = without_stale_care(engine.state, at)
     if nxt.to_dict() == engine.state.to_dict():
         return
     engine.state = nxt
@@ -317,7 +261,6 @@ def _drop_spoken_rumination(engine: Any, kind: str) -> None:
 def _apply_followup(state: Any, decision: LifeDecision, *, now: datetime) -> None:
     followup = decision.impulse_followup
     engine = getattr(state, "life", None)
-    scheduler = getattr(state, "scheduler", None)
     impulse = engine.state.pending_impulse if engine is not None else None
     hint = (impulse.hint if impulse is not None else "") or ""
     if engine is not None and followup != "keep" and engine.state.pending_impulse is not None:
@@ -326,25 +269,6 @@ def _apply_followup(state: Any, decision: LifeDecision, *, now: datetime) -> Non
         journal = _journal_of(state, engine)
         if journal is not None:
             journal.append("rumination", f"没说出口：{hint}", now)
-    if scheduler is None or followup in {"keep", "drop"}:
-        return
-    kind = decision.impulse_kind
-    source_id = decision.impulse_source_id
-    due_soon = decision.impulse_due_soon
-    if followup == "mark_care" and kind in CARE_KINDS:
-        scheduler.mark_care_addressed(kind, now)
-        logger.info("impulse withheld care kind=%s", kind)
-        return
-    if followup == "mark_fired" and kind:
-        scheduler.mark_fired(
-            kind,
-            now,
-            goal_key=source_id if kind == "goal" else "",
-            mood_key=source_id if kind == "mood_followup" else "",
-            festival_id=source_id if kind == "festival" else "",
-            due_soon=due_soon,
-        )
-        logger.info("impulse withheld fired kind=%s", kind)
 
 
 def _close_spoken_thought(state: Any, engine: Any, now: datetime) -> None:
@@ -454,7 +378,6 @@ async def _speak_impulse(
     else:
         session_id, send = target
         busy_id = session_id
-    climate = _climate(state)
     interrupt_ctx = engine.state.clone()
     motive_block = ""
     if impulse.from_thought:
@@ -474,7 +397,6 @@ async def _speak_impulse(
             retrieve_memory=impulse.retrieve_memory,
             memory_query=impulse.memory_query,
             extra_memories=list(impulse.extra_memories),
-            climate=climate,
             interrupt_ctx=interrupt_ctx,
             client_online=client_up,
             motive_block=motive_block,
@@ -488,7 +410,6 @@ async def _speak_impulse(
         if busy_id:
             hub.set_busy(busy_id, False)
 
-    scheduler = getattr(state, "scheduler", None)
     if result == "deferred":
         impulse.await_channel = hold_channel_for(
             getattr(orchestrator, "last_outbound_method", "")
@@ -504,44 +425,6 @@ async def _speak_impulse(
         spoke = True
         snapshot = impulse
         clear_impulse(engine)
-        if scheduler is not None and snapshot.kind != "thought":
-            if snapshot.from_thought:
-                if snapshot.kind != "welcome" and hasattr(scheduler, "note_mentioned"):
-                    scheduler.note_mentioned(
-                        snapshot.kind,
-                        now,
-                        goal_key=snapshot.source_id if snapshot.kind == "goal" else "",
-                        mood_key=snapshot.source_id if snapshot.kind == "mood_followup" else "",
-                        festival_id=snapshot.source_id if snapshot.kind == "festival" else "",
-                        due_soon=snapshot.due_soon,
-                    )
-            elif snapshot.kind == "welcome":
-                scheduler.note_proactive(now)
-            else:
-                scheduler.mark_fired(
-                    snapshot.kind,  # type: ignore[arg-type]
-                    now,
-                    goal_key=snapshot.source_id if snapshot.kind == "goal" else "",
-                    mood_key=snapshot.source_id if snapshot.kind == "mood_followup" else "",
-                    festival_id=snapshot.source_id if snapshot.kind == "festival" else "",
-                    due_soon=snapshot.due_soon,
-                )
-        # Thought/breakfast/idle may still say the festival blessing in plain text.
-        _note_festival_if_spoken(
-            scheduler,
-            snapshot,
-            orchestrator,
-            now=now,
-        )
-        welcome = getattr(state, "welcome", None)
-        if (
-            snapshot.first_in_slot
-            and welcome is not None
-            and snapshot.date_key
-            and snapshot.slot_id
-            and snapshot.kind in {"welcome", "festival"}
-        ):
-            welcome.mark_period_greeted(snapshot.date_key, snapshot.slot_id)
         logger.info("impulse spoke kind=%s session=%s", snapshot.kind, session_id)
         if snapshot.from_thought or snapshot.kind == "thought":
             _close_spoken_thought(state, engine, now)
@@ -559,77 +442,13 @@ async def _speak_impulse(
             if line:
                 summary = f"{summary}：{line}"
             journal.append("spoke", summary, now)
-        if snapshot.kind == "festival" and needs_rest_followup(now):
-            _enqueue_sleep_followup(state, now)
         return True
     if result == "declined":
-        kind = impulse.kind
         clear_impulse(engine)
-        if scheduler is not None and kind in CARE_KINDS:
-            scheduler.mark_care_addressed(kind, now)
-        logger.info("impulse declined kind=%s session=%s", kind, session_id)
+        logger.info("impulse declined kind=%s session=%s", impulse.kind, session_id)
         return False
     logger.warning("impulse generate failed kind=%s (not marked)", impulse.kind)
     return spoke
-
-
-def _note_festival_if_spoken(
-    scheduler: Any,
-    snapshot: Impulse,
-    orchestrator: Any,
-    *,
-    now: datetime,
-) -> None:
-    """Mark today's festival done when the spoken line already blessed it."""
-    if scheduler is None or not hasattr(scheduler, "note_mentioned"):
-        return
-    done = list(getattr(getattr(scheduler, "state", None), "festival_done", []) or [])
-    birthday = ""
-    store = getattr(orchestrator, "memory_store", None) if orchestrator is not None else None
-    if store is not None and hasattr(store, "list_by_category"):
-        try:
-            birthday = birthday_from_profiles(store.list_by_category("profile"))
-        except Exception:
-            birthday = ""
-    hit = match_festival(now, birthday)
-    if hit is None or not hit.name or hit.id in done:
-        return
-    blob = "\n".join(
-        [
-            str(getattr(snapshot, "hint", "") or ""),
-            str(getattr(snapshot, "instruction", "") or ""),
-            str(getattr(orchestrator, "last_initiate_text", "") or "")
-            if orchestrator is not None
-            else "",
-        ]
-    )
-    if hit.name not in blob:
-        return
-    scheduler.note_mentioned("festival", now, festival_id=hit.id)
-
-
-def _enqueue_sleep_followup(state: Any, now: datetime) -> None:
-    from ..proactive.care import build_care_instruction
-
-    engine = getattr(state, "life", None)
-    scheduler = getattr(state, "scheduler", None)
-    if engine is None or scheduler is None:
-        return
-    if "sleep" in getattr(scheduler.state, "care_done", []):
-        return
-    climate = _climate(state)
-    impulse = Impulse(
-        kind="sleep",
-        created_at=now.replace(microsecond=0),
-        hint=IMPULSE_HINTS["sleep"],
-        instruction=build_care_instruction("sleep", climate),
-        history_marker=HISTORY_CARE_MARKER,
-        retrieve_memory=True,
-        memory_query=CARE_MEMORY_QUERY,
-        allow_speak=True,
-    )
-    offer_impulse(engine, impulse)
-    logger.info("impulse queued sleep after festival")
 
 
 async def deliver_impulse(
@@ -728,7 +547,6 @@ __all__ = [
     "clear_impulse",
     "deliver_impulse",
     "flush_impulse",
-    "impulse_from_motive",
     "impulse_priority",
     "merge_impulse",
     "offer_impulse",
