@@ -30,14 +30,22 @@
 
 **AronaArchive** is a non-conversational desktop AI modeled after Arona from the game *Blue Archive*. In lore she is the OS administrator of the Shittim Chest: cheerful, enthusiastic, and always ready to help Sensei (the user).
 
-The project wires a life loop, inner thoughts, relationship climate, dual-model pipeline, proactive impulses, memory and world-lore, voice interaction, screen operation, and Spine 2D character animation into one desktop pipeline, so Arona stays on your screen instead of inside a chat box.
+The project wires a life loop, inner thoughts and notes, relationship climate, a dual-model pipeline, proactive impulses, memory and world-lore, voice interaction, screen operation, Spine 2D character animation, and a QQ private-chat channel into one desktop pipeline, so Arona stays on the screen instead of inside a chat box.
 
 <p align="center">
   <img src="assets/running_example_2.png" alt="Running Example" width="600"/>
 </p>
 
 <p align="center">
-  <em>Desktop client screenshot — Arona & settings UI</em>
+  <em>Running example — Arona client & settings UI</em>
+</p>
+
+<p align="center">
+  <img src="assets/running_example_3.png" alt="Running Example" width="600"/>
+</p>
+
+<p align="center">
+  <em>Running example — QQ</em>
 </p>
 
 ---
@@ -67,15 +75,14 @@ See [`docs/architecture.md`](docs/architecture.md) for the full directory tree.
 
 ### 🤖 AI Engine
 
-- **Life loop and inner thoughts**: Arona keeps a self-running realtime state; Sensei's actions enter her current thoughts and behavior; the wall clock and facts decide whether she thinks at all and what she thinks about; a single structured model call writes out the thought result, and she chooses whether to speak or to recurse into further thinking
+- **Life loop and inner thoughts**: Arona keeps a self-running realtime state; the user's actions enter her current thoughts and behavior; the wall clock and facts decide whether she thinks and what she thinks about; she decides whether to speak the thought result, or to keep thinking recursively as metacognition
 - **Relationship climate**: three scalars — trust / dependence / tension — form a vector. User actions are classified by rules, then a lookup table updates the climate; climate zones decide whether she speaks, how she holds herself, or stays silent
 - **Dual-model pipeline**: Planner intent planning → Renderer (AronaLM-Renderer-V2.x)
 - **Screen vision and computer use**: when she needs information she reads the screen, and she completes tasks by operating the computer
 - **Continuous dictation**: ASR fragments go into a buffer first and are submitted after silence; the system decides when to reply
-- **Memory and knowledge are separate**: long-term user facts go to SQLite + FTS5 + Chroma; Arona's short-term memory goes to a JSON sliding window; world-lore goes Markdown corpus → local BGE + Chroma RAG; they are never mixed, and each is injected into the prompt on demand
-- **Async memory extraction**: the main dialogue path is not blocked; LLM JSON extraction
+- **Memory and knowledge are separate**: long-term user facts go to SQLite + FTS5 + Chroma; Arona's short-term memory goes to a JSON sliding window; world-lore goes Markdown corpus → local BGE + Chroma RAG; they are never mixed, and each is injected into the prompt on demand. The main dialogue path is not blocked; memories are extracted as LLM JSON
 
-### 🖥️ Desktop Client & Voice
+### 🖥️ Desktop Client, Voice, and QQ Private Chat
 
 - **Spine 2D animation**: Arona's character art, expressions, and touch interaction
 - **Qt UI**: Windows desktop app talking to the backend over WebSocket; the system tray can show/hide the window and toggle click-through and screenshot input
@@ -89,6 +96,8 @@ See [`docs/architecture.md`](docs/architecture.md) for the full directory tree.
 | `Ctrl+Alt+T` | Open text input |
 | `Ctrl+Alt+X` | Toggle screen-capture input |
 | `Ctrl+Alt+S` | Cancel the current computer-use run |
+
+- **Napcat QQ access**: Arona connects to QQ through Napcat as another channel for sending messages, in parallel with the desktop pipeline and from the same source
 
 ---
 
@@ -104,8 +113,9 @@ Download the packaged portable backend from the [Releases](https://github.com/xi
 
    - `planner.api_key` / `memory.extractor.api_key`: replace `YOUR_DEEPSEEK_API_KEY` with your DeepSeek API Key. **Planner requires a key**; without a key, or with `planner.enabled` off, the backend falls back to the local single model. Memory extraction without a key uses the regex fallback. When a screenshot or computer use is involved, Planner uses `planner.vision_model` (default `deepseek-flash`)
    - `model.enabled`: whether to enable Arona-Renderer rendering correction; `true` enables it, `false` uses the Planner draft only. Place the GGUF only when this is enabled. **Disabled by default**
-   - `knowledge.enabled`: whether to enable world-lore RAG. Official zip packages that already have the corpus ingested keep this **enabled by default**; the sample config for running from source is `false` until you ingest the corpus
-   - `computer_use.enabled`: whether to allow Arona to operate Sensei's computer. **Enabled by default**; the client and backend need to be turned on together
+   - `knowledge.enabled`: whether to enable world-lore RAG. The official zip already has the corpus ingested and keeps this **enabled by default**; the sample config for running from source is `false`, and you need to ingest the corpus first
+   - `computer_use.enabled`: whether to allow Arona to operate the user's computer. **Enabled by default**; the client and backend need to be turned on together
+   - `napcat.user_qq_id`: fill in the user's QQ number to use QQ private chat; leave it empty to only hold the reverse WebSocket, with nothing received or sent
 
 3. Place models under `models/` in the extracted directory as needed (paths are already set in the bundled `config.yaml`; see the bundled `models/README.txt` or [`models/README.md`](models/README.md)):
 
@@ -140,11 +150,62 @@ Download the packaged client from the [Releases](https://github.com/xiahy456/Aro
 }
 ```
 
-Keep `tts.host` at `127.0.0.1` when speech synthesis stays on this PC. To put the backend on a public server, do not expose port `20456`; use HTTPS and an access token as described in the Chinese README section 「公网部署后端」. Full field docs and building from source are in [`frontend/AronaArchive_WindowsClient/README.md`](frontend/AronaArchive_WindowsClient/README.md).
+Keep `tts.host` at `127.0.0.1` when TTS stays on this machine. When the backend is on a public server, use HTTPS and an access token as described in [Public Backend Deployment](#public-backend-deployment). Full field docs and building from source are in [`frontend/AronaArchive_WindowsClient/README.md`](frontend/AronaArchive_WindowsClient/README.md).
 
 > **Note**: Upload [`docs/hot_word.txt`](docs/hot_word.txt) as a hot-word list in Tencent Cloud ASR and set it as the default hot-word list.
 
 3. Start the client by running the client executable.
+
+### QQ Private Chat
+
+The backend has a built-in Napcat reverse-WebSocket endpoint. It shares `server.port` with the desktop client; the path defaults to `/arona`.
+
+1. Deploy [Napcat](https://github.com/NapNeko/NapCatQQ) and log in to Arona's QQ account
+2. In Napcat's reverse WebSocket settings, fill in:
+
+   - URL: `ws://your-backend-host:20456/arona` (use `wss://your.domain/arona` on the public internet)
+   - Token: the same as the backend's `napcat.napcat_token` (sent as `Authorization: Bearer`; leave empty if no token is set)
+
+3. In the `napcat` section of the backend `config.yaml`, set `user_qq_id` to the user's QQ number. If it is empty, the connection stays up and private messages are neither received nor sent
+
+> The Napcat token is set separately from `server.token`; an empty token is allowed under the same rule for both. See the `napcat` section in [`backend/README.md`](backend/README.md).
+
+### Public Backend Deployment
+
+The backend still listens only on `127.0.0.1:20456`. Open only port `443` on the firewall. Leave the client and TTS on the user's computer.
+
+1. On the server, set `server.public: true` in `config.yaml` and fill in `server.token`. Generate the token with the command below. Do not use a short passphrase, and do not put the token in the WebSocket URL:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+If `server.token` is empty or still `YOUR_ACCESS_TOKEN`, the process refuses to start when `public: true` or when `host` is not local. On local `127.0.0.1` with `public: false`, a token can be left unset.
+
+2. Reverse-proxy `wss://your.domain/ws` to `127.0.0.1:20456` with Caddy, Nginx, Apache, or similar, and forward the `Authorization` header unchanged:
+
+```caddy
+# Caddy example
+your.domain {
+    reverse_proxy 127.0.0.1:20456
+}
+```
+
+3. Client `Config/config.json`:
+
+```json
+{
+  "aronalm": {
+    "websocket_url": "wss://your.domain/ws",
+    "access_token": "same as the server's server.token"
+  },
+  "tts": {
+    "host": "127.0.0.1"
+  }
+}
+```
+
+Without a domain, set `server.ssl_certfile` and `server.ssl_keyfile` in `config.yaml` and start with `python -m app.main`, so the process serves `wss` directly. On the client, put the path of the CA that issued that certificate in `aronalm.tls_ca_file`. When you have a domain, prefer the Caddy setup above.
 
 ### TTS Service
 
@@ -174,7 +235,7 @@ tts/gpt-sovits/
 | **Desktop client** | [`frontend/AronaArchive_WindowsClient/README.md`](frontend/AronaArchive_WindowsClient/README.md) |
 | **TTS** | [`tts/README.md`](tts/README.md) · [`tts/gpt-sovits/DEPLOY.md`](tts/gpt-sovits/DEPLOY.md) · [`tts/gpt-sovits-minimal/DEPLOY.md`](tts/gpt-sovits-minimal/DEPLOY.md) |
 | **Models** | [`models/README.md`](models/README.md) |
-| **AronaLM fine-tune** (for developers) | [`llm/aronaLM/finetune/README.md`](llm/aronaLM/finetune/README.md) |
+| **AronaLM fine-tune** (if you are a developer, see this doc) | [`llm/aronaLM/finetune/README.md`](llm/aronaLM/finetune/README.md) |
 
 ---
 
@@ -182,17 +243,18 @@ tts/gpt-sovits/
 
 - **Blue Archive (ブルーアーカイブ)** — where all miracles begin (https://bluearchive-cn.com/)
 - **Spine** — 2D animation engine (https://esotericsoftware.com/)
-- **Kivo Wiki** — in-game assets and Blueaka font (https://kivo.wiki/)
-- **Qt** — cross-platform GUI framework (https://www.qt.io/)
-- **llama.cpp / llama-cpp-python** — local GGUF inference (https://github.com/ggml-org/llama.cpp)
-- **Qwen3-1.7B** — fine-tune base model (https://huggingface.co/Qwen/Qwen3-1.7B)
-- **Unsloth** — efficient QLoRA fine-tuning (https://unsloth.ai/)
+- **Kivo Wiki** — in-game assets and the Blueaka font (https://kivo.wiki/)
 - **ChromaDB** — vector database (https://www.trychroma.com/products/chromadb)
 - **DeepSeek** — Planner intent planning, vision screen-reading, computer-use multimodal control, and memory extraction API (https://www.deepseek.com/)
+- **Qt** — cross-platform GUI framework (https://www.qt.io/)
 - **GPT-SoVITS** — speech synthesis (https://github.com/RVC-Boss/GPT-SoVITS)
 - **GPT-SoVITS_minimal_inference** — accelerated inference backend (https://github.com/GPT-SoVITS-Devel/GPT-SoVITS_minimal_inference)
 - **Tencent Cloud ASR** — online speech recognition (https://cloud.tencent.com/product/asr)
 - **bge-small-zh-v1.5** — text embedding model (https://huggingface.co/BAAI/bge-small-zh-v1.5)
+- **Napcat** — QQ protocol framework, providing reverse WebSocket access (https://github.com/NapNeko/NapCatQQ)
+- **llama.cpp / llama-cpp-python** — local GGUF inference (https://github.com/ggml-org/llama.cpp)
+- **Qwen3-1.7B** — fine-tune base model (https://huggingface.co/Qwen/Qwen3-1.7B)
+- **Unsloth** — efficient QLoRA fine-tuning (https://unsloth.ai/)
 
 <p align="center">
   <strong>Thanks to everyone who helped with development, and to all the creators in the Blue Archive community</strong>
@@ -203,24 +265,26 @@ tts/gpt-sovits/
 
 ---
 
-## ⚖️ License, Copyright & Intellectual Property
+## ⚖️ License, Copyright, and Intellectual Property
 
-This project is licensed under [Apache License 2.0](LICENSE).
+This project is open source under the [GNU General Public License v3.0 or later (GPL-3.0-or-later)](LICENSE).
 
-This project is an **unofficial fan work** inspired by Arona from *Blue Archive*, and has **no affiliation, partnership, or authorization** with NEXON, NEXON Games, Yostar, or other related rights holders. All characters, settings, trademarks, and other intellectual property in the game remain with the original rights holders; references in this project do not imply a license or any claim of ownership.
+This project is an **unofficial fan work** modeled on Arona from *Blue Archive*, and has **no affiliation, partnership, or authorization** with NEXON, NEXON Games, Yostar, or other related rights holders. Characters, settings, trademarks, and other intellectual property in the game remain with the original rights holders. References in this project do not imply that a license has been granted, and this project claims no related rights.
 
-[Apache License 2.0](LICENSE) **applies only to this project's original source code and documentation**. This project is **not for commercial profit**. If a rights holder wishes related material removed, please contact us using the details in **[About the Developer](#-about-the-developer)** below; we will cooperate promptly.
+[GPL-3.0-or-later](LICENSE) **applies only to this project's original source code and documentation**. This project is **not for profit**. If a rights holder wants related material removed, contact us using the details in **[About the Developer](#-about-the-developer)** below, and we will cooperate as soon as we can.
+
+The repository includes third-party code whose licenses differ from GPLv3 and to which **GPLv3 does not apply**. See [`NOTICE.md`](NOTICE.md).
 
 ---
 
 ## ⭐ About the Developer
 
 - **Project lead**: xia_hy456
-- **Blog**: https://xia-hy456.top/
+- **Personal blog**: https://xia-hy456.top/
 - **Feedback**: 2066961858@qq.com
 
 ---
 
 <p align="center">
-  <sub>/* イチゴミルクのような 甘い甘い奇跡 */</sub>
+  <sub>/* Like strawberry milk, a sweet miracle */</sub>
 </p>

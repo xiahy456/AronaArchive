@@ -114,8 +114,8 @@ AronaArchive/
    - `planner.api_key` / `memory.extractor.api_key`：把 `YOUR_DEEPSEEK_API_KEY` 换成你的 DeepSeek API Key。**Planner 必填**；不填 Key 或关闭 `planner.enabled` 则回落本地单模型。记忆抽取无 Key 时走正则降级。有截图或电脑操作时 Planner 使用 `planner.vision_model`（默认 `deepseek-flash`）
    - `model.enabled`：是否启用 Arona-Renderer 渲染修正；`true` 启用，`false` 只用 Planner 草稿。仅启用时才需要放置 GGUF。**默认不启用**
    - `knowledge.enabled`：是否启用世界观 RAG。官方压缩包已灌库，**默认启用**；从源码启动时示例配置为 `false`，需先灌库
-   - `computer_use.enabled`：是否允许阿洛娜操作老师的电脑。**默认开启**；客户端与后端需同步打开
-   - `napcat.user_qq_id`：要走 QQ 私聊时填老师的 QQ 号；空则只挂反向 WebSocket，不收不发
+   - `computer_use.enabled`：是否允许阿洛娜操作用户的电脑。**默认开启**；客户端与后端需同步打开
+   - `napcat.user_qq_id`：要走 QQ 私聊时填用户的 QQ 号；空则只挂反向 WebSocket，不收不发
 
 3. 按需把模型放到解压目录内的 `models/`（路径已写在包内 `config.yaml`，详见包内 `models/README.txt` 或 [`models/README.md`](models/README.md)）：
 
@@ -166,13 +166,13 @@ TTS 留在本机时 `tts.host` 保持 `127.0.0.1`。把后端放到公网服务�
    - 地址：`ws://你的后端地址:20456/arona`（公网用 `wss://你的域名/arona`）
    - 令牌：与后端 `napcat.napcat_token` 相同（放在 `Authorization: Bearer`；未设令牌时留空）
 
-3. 在后端 `config.yaml` 的 `napcat` 段填老师的 QQ 号 `user_qq_id`。空则只挂连接、不收不发私聊
+3. 在后端 `config.yaml` 的 `napcat` 段填用户的 QQ 号 `user_qq_id`。空则只挂连接、不收不发私聊
 
 > Napcat 令牌与 `server.token` 分开设置；二者空令牌的放行规则相同。详见 [`backend/README.md`](backend/README.md) 的 `napcat` 段。
 
 ### 公网部署后端
 
-后端仍只监听 `127.0.0.1:20456`。防火墙只开放 `443`。客户端和 TTS 留在老师电脑上。
+后端仍只监听 `127.0.0.1:20456`。防火墙只开放 `443`。客户端和 TTS 留在用户电脑上。
 
 1. 在服务器的 `config.yaml` 里设 `server.public: true`，并填写 `server.token`。令牌用下面的命令生成，不要用短口令，也不要写进 WebSocket 地址：
 
@@ -182,9 +182,10 @@ python -c "import secrets; print(secrets.token_urlsafe(32))"
 
 `server.token` 为空或仍是 `YOUR_ACCESS_TOKEN` 时，`public: true` 或非本机 `host` 会让进程拒绝启动。本机 `127.0.0.1` 且 `public: false` 时可以不设令牌。
 
-2. 用 Caddy 把 `wss://你的域名/ws` 反代到 `127.0.0.1:20456`，并原样转发 `Authorization`：
+2. 用 Caddy / Nginx / Apache 等把 `wss://你的域名/ws` 反代到 `127.0.0.1:20456`，并原样转发 `Authorization`：
 
 ```caddy
+# Caddy 示例
 your.domain {
     reverse_proxy 127.0.0.1:20456
 }
