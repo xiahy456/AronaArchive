@@ -125,7 +125,7 @@ proactive:
     baseline_dependence: 0.30
     baseline_tension: 0.25
   idle:
-    enabled: true
+    enabled: false
     after_sec: 1800
     cooldown_sec: 3600
     max_per_day: 3
@@ -141,7 +141,7 @@ proactive:
     sleep_start: "23:00"
     sleep_end: "23:20"
   goal:
-    enabled: true
+    enabled: false
     min_after_user_sec: 300
     cooldown_sec: 21600
     important_horizon_hours: 36
@@ -150,10 +150,10 @@ proactive:
     mute_sec: 604800
     max_per_day: 1
   continue:
-    enabled: true
+    enabled: false
     delay_sec: 2
   festival:
-    enabled: true
+    enabled: false
 
 stance:
   enabled: true
