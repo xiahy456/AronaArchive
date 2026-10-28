@@ -199,7 +199,7 @@ Planner 只看见【关系气候】档位与【建议姿态】，禁止下发 A/
 
 ### Planner prompt
 
-结构固定为两条 message：`system` 由 `select_planner_system()` 按 `model.enabled` 选择，`user = climate +【当前时间】+ 记忆 + 知识 + 历史 +「老师本轮消息」+ 收尾句`。
+结构固定为两条 message：`system` 由 `select_planner_system()` 按 `model.enabled` 选择，`user = climate +【当前时间】+【老师当前情况】+【老师近况】+ 记忆 + 知识 + 历史 +「老师本轮消息」+ 收尾句`。
 
 
 | 部件                                     | 位置                                                   |
@@ -216,7 +216,7 @@ Planner 只看见【关系气候】档位与【建议姿态】，禁止下发 A/
 
 `FIXED_MUST_NOT` 仍在 `prompts.py`，V2.4 **不再注入**。
 
-`build_planner_user_message()` 按顺序拼：可选 `climate_block` → `【当前时间】`（与记忆抽取同一格式，如 `2026年8月24日 星期一 10:14`）→ `【长期记忆】` → `【相关知识】` → `【近期对话】` → `【老师本轮消息】` → 收尾「若有【关系气候】，按建议姿态写草稿」。`【近期对话】` 每条带本地年月日时分秒（如 `[2026年8月24日 10:14:05] 老师：…`），缺时间戳的旧消息仍按 `老师：` / `阿洛娜：` 原样输出。写入 Planner 的记忆按 key 冷却，默认 1 小时内不重复注入（`memory.inject_cooldown_sec`）；老师本轮对某条记忆强匹配（高分或词汇重叠）时绕过该冷却。抽取侧检索不受冷却影响。
+`build_planner_user_message()` 按顺序拼：可选 `climate_block` → `【当前时间】`（与记忆抽取同一格式，如 `2026年8月24日 星期一 10:14`）→ `【老师当前情况】`（全部当前状态句，无标签）→ `【老师近况】` → `【长期记忆】` → `【相关知识】` → `【近期对话】` → `【阿洛娜的记忆】` → `【老师本轮消息】` → 收尾。思考请求在 `【当前时间】` 后同样放全部状态句。`【近期对话】` 每条带本地年月日时分秒（如 `[2026年8月24日 10:14:05] 老师：…`），缺时间戳的旧消息仍按 `老师：` / `阿洛娜：` 原样输出。情景与情绪记忆按 key 冷却，默认 1 小时内不重复注入（`memory.inject_cooldown_sec`）；事实、目标、状态不冷却。抽取侧检索不受冷却影响。
 
 `【老师本轮消息】` **按来源分套：**
 
@@ -391,7 +391,7 @@ python scripts/ingest_knowledge.py --rebuild
 1. 冒烟检索：`python scripts/test_knowledge_rag.py`；时间感知查询单测（不加载 BGE）：`python scripts/test_query_time.py`
 2. 在 `config.yaml` 设 `knowledge.enabled: true` 后重启后端
 
-对话主路径里记忆与知识检索共用一轮 BGE：同时编码老师原文和带当前时间的附带查询（相对日期会先展开成与记忆写入相同的绝对日期）。两路召回按 key / 标题合并后截断 `top_k`。写入 Planner 的记忆命中按 key 冷却，默认 `memory.inject_cooldown_sec: 3600` 内不重复注入，空缺由下一名候选补上；本轮强匹配（`inject_cooldown_bypass_score` 或与老师原文有词汇重叠）永久绕过该冷却。无词汇重叠时用更高的 `min_score_no_overlap`。抽取器对照已有记忆时不走该冷却，也不走注入用的分数门槛：按缓冲里每一轮老师消息做宽松召回后合并，并钉上全部 `goal` 与热 key（`user_name` / `preference_color` / `user_birthday`）。知识命中（过滤后的 lore 文本）可按 query 向量近义复用，默认 `query_cache_min_cosine: 0.92`，缓存按自然日区分以免跨日复用带日期的命中；`ingest` / `--rebuild` 会清空该缓存。不缓存 Planner 草稿或最终台词。当前时间同时用于检索附带查询，并以 `【当前时间】` 写入 Planner user 消息（不写入 Renderer）。
+对话主路径里记忆与知识检索共用一轮 BGE：同时编码老师原文和带当前时间的附带查询（相对日期会先展开成与记忆写入相同的绝对日期）。记忆召回把向量、全文、实体和时间窗按 RRF 融合，再可选本地 bge-reranker 重排，最后由 LLM 丢掉不相关的条目；失败时保留融合顺序。情景与情绪记忆按 key 冷却，默认 `memory.inject_cooldown_sec: 3600`；事实和目标不冷却。状态句和承诺不进向量库，每次请求全量注入。抽取器对照已有记忆时不走该冷却：按缓冲里每一轮老师消息做宽松召回后合并，并钉上全部 `goal` 与热 key（`user_name` / `preference_color` / `user_birthday`）。知识命中（过滤后的 lore 文本）可按 query 向量近义复用，默认 `query_cache_min_cosine: 0.92`，缓存按自然日区分以免跨日复用带日期的命中；`ingest` / `--rebuild` 会清空该缓存。不缓存 Planner 草稿或最终台词。当前时间同时用于检索附带查询，并以 `【当前时间】` 写入 Planner user 消息（不写入 Renderer）。
 
 ## 配置
 
@@ -411,7 +411,7 @@ python scripts/ingest_knowledge.py --rebuild
 | `life`         | 生命循环：内状态、自己的一天、阿洛娜侧记忆、低频瞥屏、电脑操作作为可打断活动 |
 | `proactive`    | 上线欢迎、关系气候、空闲搭话、照料、goal 回访、节日、同轮补充               |
 | `napcat`       | QQ 私聊：老师 QQ 号、反向 WebSocket 路径与令牌                     |
-| `token_budget` | 注入 prompt 的 memory / knowledge / history 预算     |
+| `token_budget` | 注入 prompt 的 state / memory / knowledge / history 预算     |
 | `logging`      | 日志目录、文件名、级别与滚动                                  |
 
 
@@ -531,7 +531,25 @@ python scripts/ingest_knowledge.py --rebuild
 | `reconcile_top_k`       | `5`                     | 调和 / 去重时的相似检索条数                          |
 | `dedup_enabled`         | `true`                  | 写入前合并同类别近重复条目（`goal` 除外）                 |
 | `dedup_min_score`       | `0.88`                  | 去重合并的相似度下限                               |
+| `state_enabled`         | `true`                  | 是否维护可常驻的状态句                            |
+| `state_max_items`       | `12`                    | 状态条数上限；满了只允许覆盖已有 id                 |
+| `state_max_chars_per_item` | `32`                 | 单句字数上限；超长整句拒绝，不截断                    |
+| `state_confirm_after_hours` | `48`               | 超过该小时只在抽取上下文标「待确认」，不写进对话          |
+| `commitment_enabled`    | `true`                  | 是否记录要阿洛娜去做的定时承诺                      |
+| `commitment_mute_sec`   | `604800`                | 连续两次提醒未回应后静音的秒数                       |
+| `rerank_enabled`        | `true`                  | 是否用本地交叉编码器重排候选                        |
+| `rerank_model_path`     | `../models/bge-reranker-base` | 权重目录；缺失时警告并退回 RRF              |
+| `rerank_candidates`     | `30`                    | 送进重排的候选数                               |
+| `llm_filter_enabled`    | `true`                  | 注入前让模型丢掉不相关条目；失败则保留重排顺序           |
+| `llm_filter_timeout_sec` | `5`                    | 相关性判定超时                                 |
+| `llm_filter_max_candidates` | `16`               | 送进判定的条数上限                              |
+| `time_window_past_days` | `3`                     | 时间问句对过去日期的加分窗                         |
+| `time_window_future_days` | `7`                   | 时间问句对未来日期的加分窗                         |
+| `summary_enabled`       | `true`                  | 休息整理时写一天近况                              |
+| `summary_max_chars`     | `200`                   | 近况字数上限                                   |
 
+
+状态句、承诺和日近况写在同一份 SQLite，不进 Chroma。状态句禁止相对时间。承诺由生命循环到点开口，说出口才记已提醒。
 
 `memory.extractor`：
 
@@ -543,10 +561,15 @@ python scripts/ingest_knowledge.py --rebuild
 | `api_key`              | `YOUR_DEEPSEEK_API_KEY`    | 未填写或仍为占位符时走 `fallback`      |
 | `model`                | `deepseek-flash`           | 抽取模型名                       |
 | `timeout_sec`          | `15`                       | 单次 HTTP 超时（秒）               |
-| `max_calls_per_day`    | `512`                      | 每日抽取调用上限                    |
-| `every_n_turns`        | `6`                        | 每 N 轮强制抽一次（另有「请记住」等启发式立即触发） |
-| `extract_buffer_turns` | `6`                        | 抽取缓冲攒满该轮数也触发；老师刚回应【回访】/【心情回访】时绕过该门槛 |
-| `fallback`             | `regex`                    | DeepSeek 失败或无 Key 时的降级方式    |
+| `max_calls_per_day`    | `1000`                     | 每日抽取调用上限，按事实/状态/承诺调用次数合计 |
+| `every_n_turns`        | `6`                        | 无语义门时每 N 轮强制抽一次 |
+| `extract_buffer_turns` | `6`                        | 待抽取窗口攒满该轮数也触发；语义门说不用记时仍会抽全部种类。窗口按全局对话日志的序号游标累计，沉默轮、未送达轮与主动开口也在内 |
+| `fallback`             | `regex`                    | 事实抽取失败或无 Key 时的降级方式；状态和承诺不走正则 |
+| `gate_enabled`         | `true`                     | 每轮先判断要不要记、记哪一类 |
+| `gate_model`           | `deepseek-flash`           | 语义门模型 |
+| `gate_timeout_sec`     | `5`                        | 语义门超时；失败则三类都抽 |
+| `gate_max_tokens`      | `64`                       | 语义门输出上限 |
+| `extract_retry_max`    | `2`                        | 某一类失败后单独重试的次数 |
 
 
 
@@ -718,6 +741,7 @@ python scripts/ingest_knowledge.py --rebuild
 
 | 配置项         | 默认    | 说明                        |
 | ----------- | ----- | ------------------------- |
+| `state`     | `300` | 常驻状态句的 token 预算；启动时检查条数乘单句上限是否装得下，运行时不截断 |
 | `memory`    | `250` | 本地回落注入长期记忆的 token 预算      |
 | `knowledge` | `250` | 知识注入预算（Planner 与本地回落都会截断） |
 | `history`   | `700` | 本地回落拼进 prompt 的历史字符预算     |

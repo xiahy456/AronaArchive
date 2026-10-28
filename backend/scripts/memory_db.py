@@ -254,6 +254,79 @@ def cmd_retrieve(db_path: Path, query: str, top_k: int) -> int:
     return 0
 
 
+def cmd_state(db_path: Path) -> int:
+    from app.memory.state import StateStore
+
+    items = StateStore(db_path).all_items()
+    if not items:
+        print("(0 state)")
+        return 0
+    for item in items:
+        stamp = datetime.fromtimestamp(item.updated_at).strftime("%Y-%m-%d %H:%M")
+        print(f"{item.id}\t{stamp}\t{item.text}")
+    return 0
+
+
+def cmd_state_add(db_path: Path, item_id: str, text: str) -> int:
+    from app.memory.state import StateItem, StateStore
+
+    now = datetime.now().timestamp()
+    ok = StateStore(db_path).upsert(
+        StateItem(
+            id=item_id,
+            text=text,
+            created_at=now,
+            updated_at=now,
+            importance=5,
+        )
+    )
+    print("ok" if ok else "rejected")
+    return 0 if ok else 1
+
+
+def cmd_state_del(db_path: Path, ids: list[str]) -> int:
+    from app.memory.state import StateStore
+
+    removed = StateStore(db_path).delete(ids)
+    print(f"removed {removed}")
+    return 0
+
+
+def cmd_commit(db_path: Path) -> int:
+    from app.memory.commitment import CommitmentStore
+
+    items = CommitmentStore(db_path).active()
+    if not items:
+        print("(0 commitments)")
+        return 0
+    for item in items:
+        when = datetime.fromtimestamp(item.next_due_at).strftime("%Y-%m-%d %H:%M")
+        print(f"{item.id}\t{item.rrule}\t{item.at_time}\t{when}\t{item.what}")
+    return 0
+
+
+def cmd_commit_ack(db_path: Path, item_id: str) -> int:
+    from app.memory.commitment import CommitmentStore
+
+    CommitmentStore(db_path).apply([{"op": "ack", "id": item_id}], datetime.now())
+    print("acked")
+    return 0
+
+
+def cmd_summary(db_path: Path) -> int:
+    from app.memory.summary import SummaryStore
+
+    store = SummaryStore(db_path)
+    day = store.last_day()
+    content = store.latest_content()
+    if not day:
+        print("(no summary)")
+        return 0
+    print(day)
+    print(content)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Debug / manage AronaArchive memory.db (SQL REPL + CRUD)",
@@ -292,6 +365,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_retrieve.add_argument("query")
     p_retrieve.add_argument("--top-k", type=int, default=3)
 
+    sub.add_parser("state", help="List resident state sentences")
+    p_state_add = sub.add_parser("state-add", help="Upsert one state sentence")
+    p_state_add.add_argument("id")
+    p_state_add.add_argument("text")
+    p_state_del = sub.add_parser("state-del", help="Delete state sentences by id")
+    p_state_del.add_argument("id", nargs="+")
+    sub.add_parser("commit", help="List active commitments")
+    p_ack = sub.add_parser("commit-ack", help="Mark a commitment done today")
+    p_ack.add_argument("id")
+    sub.add_parser("summary", help="Print the latest day summary")
+
     return parser
 
 
@@ -317,6 +401,18 @@ def main() -> int:
         return cmd_count(db_path)
     if args.cmd == "retrieve":
         return cmd_retrieve(db_path, args.query, args.top_k)
+    if args.cmd == "state":
+        return cmd_state(db_path)
+    if args.cmd == "state-add":
+        return cmd_state_add(db_path, args.id, args.text)
+    if args.cmd == "state-del":
+        return cmd_state_del(db_path, args.id)
+    if args.cmd == "commit":
+        return cmd_commit(db_path)
+    if args.cmd == "commit-ack":
+        return cmd_commit_ack(db_path, args.id)
+    if args.cmd == "summary":
+        return cmd_summary(db_path)
 
     with connect(db_path) as conn:
         return repl(conn)

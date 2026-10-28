@@ -76,16 +76,37 @@ memory:
   reconcile_top_k: 5
   dedup_enabled: true
   dedup_min_score: 0.88
+  state_enabled: true
+  state_max_items: 12
+  state_max_chars_per_item: 32
+  state_confirm_after_hours: 48
+  commitment_enabled: true
+  commitment_mute_sec: 604800
+  rerank_enabled: true
+  rerank_model_path: "../models/bge-reranker-base"
+  rerank_candidates: 30
+  llm_filter_enabled: true
+  llm_filter_timeout_sec: 5
+  llm_filter_max_candidates: 16
+  time_window_past_days: 3
+  time_window_future_days: 7
+  summary_enabled: true
+  summary_max_chars: 200
   extractor:
     enabled: true
     base_url: "https://api.deepseek.com"
     api_key: "YOUR_DEEPSEEK_API_KEY"
     model: "deepseek-flash"
     timeout_sec: 15
-    max_calls_per_day: 512
+    max_calls_per_day: 1000
     every_n_turns: 6
     extract_buffer_turns: 6
     fallback: "regex"
+    gate_enabled: true
+    gate_model: "deepseek-flash"
+    gate_timeout_sec: 5
+    gate_max_tokens: 64
+    extract_retry_max: 2
 
 planner:
   enabled: true
@@ -211,6 +232,7 @@ computer_use:
   vision_thinking: true
 
 token_budget:
+  state: 300
   memory: 250
   knowledge: 250
   history: 700

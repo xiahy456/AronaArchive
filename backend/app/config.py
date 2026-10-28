@@ -124,10 +124,15 @@ class ExtractorConfig(BaseModel):
     api_key: str = ""
     model: str = "deepseek-flash"
     timeout_sec: float = 15
-    max_calls_per_day: int = 200
+    max_calls_per_day: int = 1000
     every_n_turns: int = 6
     extract_buffer_turns: int = 6
     fallback: str = "regex"
+    gate_enabled: bool = True
+    gate_model: str = "deepseek-flash"
+    gate_timeout_sec: float = 5
+    gate_max_tokens: int = 64
+    extract_retry_max: int = 2
 
 
 class MemoryConfig(BaseModel):
@@ -149,6 +154,22 @@ class MemoryConfig(BaseModel):
     reconcile_top_k: int = 5
     dedup_enabled: bool = True
     dedup_min_score: float = 0.88
+    state_enabled: bool = True
+    state_max_items: int = 12
+    state_max_chars_per_item: int = 32
+    state_confirm_after_hours: float = 48
+    commitment_enabled: bool = True
+    commitment_mute_sec: float = 604800
+    rerank_enabled: bool = True
+    rerank_model_path: str = "../models/bge-reranker-base"
+    rerank_candidates: int = 30
+    llm_filter_enabled: bool = True
+    llm_filter_timeout_sec: float = 5
+    llm_filter_max_candidates: int = 16
+    time_window_past_days: int = 3
+    time_window_future_days: int = 7
+    summary_enabled: bool = True
+    summary_max_chars: int = 200
     extractor: ExtractorConfig = Field(default_factory=ExtractorConfig)
 
 
@@ -178,6 +199,7 @@ class ListenConfig(BaseModel):
 
 
 class TokenBudgetConfig(BaseModel):
+    state: int = 300
     memory: int = 250
     knowledge: int = 250
     history: int = 700
@@ -381,6 +403,10 @@ class AppConfig(BaseModel):
     @property
     def memory_chroma_abs_path(self) -> Path:
         return self.resolve_path(self.memory.chroma_path)
+
+    @property
+    def rerank_model_abs_path(self) -> Path:
+        return self.resolve_path(self.memory.rerank_model_path)
 
     @property
     def knowledge_corpus_abs_path(self) -> Path:

@@ -79,10 +79,8 @@ _TAIL_AFTER_PATCH = f"""## 边界
      需要附带表情，则把对应 emoji_id 原样写入 arona_emotion；不需要则留空字符串 ""。只能使用已给出的 emoji_id，禁止自造，也不要填 description。
 9. followup_ok：当前这句说完后，阿洛娜是否还需要再补一句。必须显式 true 或 false。短应、道别、致谢、收束、能一次说完 → false。reply_ok 为 false 时 followup_ok 必须 false。屏幕互动的 followup_ok 必须 false。
 10. reply_ok：本轮阿洛娜要不要对老师开口，请根据已有的信息进行判断。必须显式 true 或 false。有以下规则：
-    - 明显在对房间里的其他人说话，或在打电话/对第三人说话，不是在对阿洛娜说话，此类情况选 false。无法判断老师说话的对象时默认 true
+    - 明显在对房间里的其他人说话，或在打电话/对第三人说话，不是在对阿洛娜说话，此类情况选 false。
     - 【近期对话】中阿洛娜最后一条回复与老师本轮消息构成明确的互道晚安/再见，此类情况选 false
-    - 老师发送不需要明确答复的、不需要解读的短应，此类情况选 false。请注意表情包消息与短应不同，可能会需要答复。
-    - 老师明确要求阿洛娜安静时选 false
     - 若有【阿洛娜此刻】：老师这句话是插入她当前活动的事件。允许保持沉默继续做事，或只换表情；
 11. user_act 必须根据老师本轮意图，从下列英文值中原样选一个：{USER_ACT_WHITELIST_CSV}
     道别、去忙、先去休息、要睡觉、晚安收束 → depart。短「嗯/好/哦」且不是道别 → short_ack。明确的自伤、轻生、不想活下去 → crisis，不要标成 fatigue 或 self_disclose。拿不准 → other。禁止输出信任度、依赖度、张力或任何数值。禁止自造表外值。
@@ -95,9 +93,11 @@ _TAIL_AFTER_PATCH = f"""## 边界
     - 2026年10月10号 → 「10月20号」
 14. 老师指出阿洛娜事实错误（记错、答错、与已知记忆/知识不符）时：先认错再纠正；不要硬撑、狡辩或把错推给老师。没有可靠事实可用来纠正时，只认错并承认不确定，禁止编造更正。老师只是质疑能力或开玩笑说笨，不是指出具体事实错误时，仍按人设轻松接住，不必认错。
 15. life_action：speak / continue_activity / emotion_only。循环认这个动作；reply_ok 仍表示开不开口。reply_ok 为 true 时用 speak；reply_ok 为 false 且只换脸时用 emotion_only；reply_ok 为 false 且继续当前活动时用 continue_activity。
-16. 写 draft 前，先按【近期对话】的先后和【当前时间】判断：老师现在的状态、位置等，某件事开始了没有。本轮是在说打算、待会、到了之后要做的事，或近期对话仍表明还没到那个场合时，按「这件事还没开始」来接，不要说成正在做。拿不准进度时，只接住这个打算，不要替老师宣布已经开始。
+16. 写 draft 前，先看【老师当前情况】，再按【近期对话】的先后和【当前时间】判断：老师现在的状态、位置等，某件事开始了没有。本轮是在说打算、待会、到了之后要做的事，或近期对话仍表明还没到那个场合时，按「这件事还没开始」来接，不要说成正在做。拿不准进度时，只接住这个打算，不要替老师宣布已经开始。
 17. 该 draft 被说出口的时间就是【当前时间】，请说出符合当下时间情况的回复。
 18. 阿洛娜无法感知到除用户说话以外的任何音频；当阿洛娜与用户面对面时，开口也只能与用户说话。
+19. 【老师当前情况】是阿洛娜已经知道的、关于老师此刻处境的事实，属于背景知识，只在需要时使用，不用刻意提及。它优先于【近期对话】的推断；与【近期对话】冲突时以【近期对话】为准，并在必要时轻轻确认。
+20. 写 draft 前先看【老师当前情况】判断老师现在的位置、正在做的事、身体状况与作息。若其中已有依据，不要再问一遍；若与老师的问话相关，可以自然带出；若不相关，就不要主动提起。
 
 JSON：{{"draft": string, "arona_emotion": string, "followup_ok": bool, "reply_ok": bool, "user_act": string, "life_action": string, "method": "direct" | "message"}}
 """
@@ -300,6 +300,8 @@ def build_planner_user_message(
     has_screenshot: bool = False,
     has_qq_images: bool = False,
     memory_block: str = "",
+    state_block: str = "",
+    summary_block: str = "",
     life_block: str = "",
     day_block: str = "",
     teacher_method: str | None = None,
@@ -390,9 +392,17 @@ def build_planner_user_message(
         if teacher_method is not None:
             teacher_line = f"[{method_label(teacher_method)}] {teacher_line}"
         turn_section = f"【老师本轮消息】\n{teacher_line}\n\n"
+    state_section = ""
+    if (state_block or "").strip():
+        state_section = f"{state_block.strip()}\n\n"
+    summary_section = ""
+    if (summary_block or "").strip():
+        summary_section = f"{summary_block.strip()}\n\n"
     return (
         f"{climate_section}"
         f"{format_extract_now(now)}\n\n"
+        f"{state_section}"
+        f"{summary_section}"
         f"{mem_section}\n\n"
         f"【相关知识】\n{know_block}\n\n"
         f"【近期对话】\n{hist_block}\n\n"

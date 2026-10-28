@@ -230,7 +230,46 @@ async def _think(
         hold_speech=_hold_fresh_speech(state, now, offered_ctx, live_spoke),
         gate_kind=decision.kind,
     )
+    if decision.kind == "consolidate":
+        await _write_day_summary(state, now)
     return "committed"
+
+
+async def _write_day_summary(state: "AppState", now: datetime) -> None:
+    cfg = getattr(getattr(state, "config", None), "memory", None)
+    store = getattr(state, "summary_store", None)
+    if cfg is None or store is None or not getattr(cfg, "summary_enabled", False):
+        return
+    memory = getattr(getattr(state, "orchestrator", None), "memory_store", None)
+    episodes: list[str] = []
+    if memory is not None:
+        since = (now - timedelta(days=1)).timestamp()
+        try:
+            rows = memory.list_recent("episodic", since_ts=since, limit=30)
+        except Exception:
+            logger.exception("day summary episode load failed")
+            rows = []
+        episodes = [str(row.get("content") or "").strip() for row in rows if str(row.get("content") or "").strip()]
+    state_store = getattr(state, "state_store", None)
+    state_lines: list[str] = []
+    if state_store is not None:
+        try:
+            state_lines = [str(line).strip() for line in state_store.texts() if str(line).strip()]
+        except Exception:
+            logger.exception("day summary state load failed")
+    from ...memory.summary import build_day_summary
+
+    try:
+        text = await build_day_summary(
+            cfg.extractor,
+            episodes=episodes,
+            state_lines=state_lines,
+        )
+    except Exception:
+        logger.exception("day summary failed")
+        return
+    if text.strip():
+        store.save(now.date().isoformat(), text)
 
 
 def _defer_failed_trigger(state: "AppState", now: datetime, decision: ThoughtDecision) -> None:

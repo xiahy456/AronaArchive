@@ -38,6 +38,7 @@ KNOWLEDGE_MARKS = ("基沃托斯", "学生")
 
 SECTION_ORDER = (
     "当前时间",
+    "老师当前情况",
     "触发",
     "阿洛娜此刻",
     "上一次想法",
@@ -115,6 +116,7 @@ class SourceContext:
     focus_text: str = ""
     knowledge: Callable[[str], Sequence[str]] | None = None
     situation: tuple = ()
+    state_lines: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -173,6 +175,7 @@ def _sections(
     focus = _focus_text(ledger, inner, trigger, ctx)
     sections: dict[str, list[str]] = {name: [] for name in SECTION_ORDER}
     sections["当前时间"] = [_keep(format_clock_stamp(now), seen)]
+    sections["老师当前情况"] = _state_rows(ctx, seen)
     why = _WHY.get(kind, "到了该想一想的时候")
     sections["触发"] = [_keep(f"{kind}。{why}", seen)]
     sections["阿洛娜此刻"] = _here(kind, inner, trigger, ctx, seen)
@@ -186,6 +189,18 @@ def _sections(
     if kind == "glance":
         sections["瞥见"] = _glance_rows(ctx, seen)
     return sections
+
+
+def _state_rows(ctx: SourceContext, seen: dict[str, bool]) -> list[str]:
+    rows: list[str] = []
+    for raw in ctx.state_lines:
+        text = str(raw or "").strip()
+        if not text or is_crisis_text(text):
+            continue
+        kept = _keep(text, seen)
+        if kept:
+            rows.append(kept)
+    return rows
 
 
 def _here(

@@ -23,6 +23,7 @@ import asyncio
 import json
 import logging
 import time
+from datetime import datetime
 from typing import Any
 
 import httpx
@@ -31,52 +32,19 @@ from ..config import ExtractorConfig, MemoryConfig
 from ..query_time import format_extract_now, parse_content_datetimes
 from ..safety import is_crisis_text, turns_contain_crisis
 from ..taxonomy import normalize_memory_category
+from .commitment import CommitmentStore
 from .fallback import regex_extract_memories
 from .normalize import normalize_memory_item
+from .prompts import ALL_EXTRACT_KINDS, COMMITMENT_SYSTEM, FACT_SYSTEM, STATE_SYSTEM
+from .state import StateItem, StateStore, format_state_context
 from .store import MemoryStore, normalize_content_for_compare
 from .validate import memory_reject_reason
+
+EXTRACT_SYSTEM = FACT_SYSTEM
 
 logger = logging.getLogger(__name__)
 
 _HOT_KEYS = frozenset({"user_name", "preference_color", "user_birthday"})
-
-EXTRACT_SYSTEM = """你是记忆抽取助手。根据「用户（老师）」与「阿洛娜」的对话片段、【当前时间】，以及可选的【已有相关记忆】，提取需要长期记住或需要更新/清除的用户（老师）事实。
-
-只输出 JSON，格式：
-{"memories":[{"op":"upsert或delete","key":"英文蛇形键","content":"短中文陈述句","category":"preference|profile|goal|other|episodic|emotional"}]}
-
-规则：
-- 只提取已确认的精确事实（名字、偏好、约定、未完成的计划）、已确认的共处事件、已确认的心情披露，不要闲聊、不要世界观百科。
-- 无值得记忆的内容时返回 {"memories":[]}
-- content 必须是短陈述句；delete 时可省略 content 或沿用旧内容
-- 禁止疑问句、反问、猜测或未确认信息；错误示例：「老师喜欢什么颜色吗」
-- 不要把老师的提问本身当成事实写入
-- 禁止提取自伤、轻生、不想活、结束生命等危机内容
-- category 含义：
-  - preference：稳定偏好（颜色、食物等）
-  - profile：档案信息（名字、生日等）
-  - goal：未完成的计划/打算/约定（临时意图）
-  - other：其它稳定事实
-  - episodic：老师与阿洛娜的共处事件（「一起做过 X」），不是稳定档案。key 建议带日期，如 ep_20260918_fireworks。同日同主题才复用 key；跨日的相似事件必须新 key。禁止写成「老师经常和阿洛娜去看烟花」这类永恒人格。
-  - emotional：已确认的心情披露 + 原因（「因 Y 感到难过/开心」），不是猜测、不是未说出口的分析。key 建议带日期，如 emo_20260918_overtime。同日同主题才复用 key；跨日的相似心情必须新 key。禁止写成「老师是个容易难过的人」这类永恒人格。
-- 时间写入 content（对照【当前时间】换算，禁止保留相对说法）：
-  - 按能确定的最细粒度写：能确定到日则写年月日（「今天 / 明天 / 后天 / 昨天 / 下周一」，如 2026年8月23日）；只能确定到月则写年月（「下个月 / 上个月 / 这个月」，如 2026年9月）；只能确定到年则写年份（「明年 / 去年」）。「下个月3号」这类已点明日的，仍写到日，不要停在月。缺少年份的绝对日期（如「8月31号」）用【当前时间】补全年份。
-  - 钟点可保留，但必须带日期。正确：「老师2026年8月24日下午4点睡到晚上7点」；错误：「老师今天下午4点睡到晚上7点」
-  - 区间写成覆盖的具体日期：未指定落在哪一天时用「或」（二选一）；连续时段用「到」。正确：「老师2026年8月22日或2026年8月23日要去医院」、「老师2026年8月31日到2026年9月6日要每天11点睡觉」；错误：「老师周末要去医院」、「老师下周要每天11点睡觉」。
-  - 过去时态 → 最近已发生的那个日期；将来/打算 → 即将到来的那个日期；拿不准时按即将到来的日期写
-  - 对话已给出带年的绝对日期则沿用，不要改成抽取当日
-  - 无时间含义的稳定事实（名字、偏好、生日本身）不要硬加抽取当日
-  - 无明确起止的周期性习惯保留周期表述（如「老师每周五加班」），不要压成某一天；若周期带有明确时段（如下周每天），则写成日期区间并保留周期
-- 若提供了【已有相关记忆】：
-  - 同主题新事实与旧记忆冲突时必须二选一：复用旧 key 做 upsert，或对旧 key 输出 op=delete 后再 upsert 新 key。禁止让冲突的旧记忆继续存在。
-  - 优先复用已有记忆的 key；仅当主题全新时才新建 key
-  - 对照集里出现的同主题旧条目，若本轮要写入新事实，必须在输出中点名（upsert 或 delete），不要默不作声地另开一条
-  - goal：对话表明该计划已执行、正在执行或已取消时，对该 goal 的 key 输出 op=delete，不要再 upsert。对照集里的过期/已完成 goal 必须 delete
-  - 已发生且无后续待办的事实不要写成 goal（例如「老师成功加入了社团」用 episodic 或 other），并 delete 对照集里同主题的旧 goal。若老师只是答应以后再做，不算已完成，不要 delete
-- 高频稳定 key（若适用请直接使用）：user_name、preference_color、user_birthday
-- 只记录与用户（老师）相关的记忆；例如「老师喜欢蓝色」
-- 记忆必须来自于用户（老师）所述。对于阿洛娜口述的老师记忆，除非得到老师肯定，否则判定为无效。
-"""
 
 
 def _format_existing_memories(entries: list[dict[str, Any]]) -> str:
@@ -181,14 +149,27 @@ def _collapse_batch_upserts(items: list[dict[str, Any]]) -> list[dict[str, Any]]
 
 
 class MemoryExtractor:
-    def __init__(self, store: MemoryStore, config: ExtractorConfig) -> None:
+    def __init__(
+        self,
+        store: MemoryStore,
+        config: ExtractorConfig,
+        *,
+        state_store: StateStore | None = None,
+        commitment_store: CommitmentStore | None = None,
+    ) -> None:
         self.store = store
         self.config = config
+        self.state_store = state_store
+        self.commitment_store = commitment_store
         self._queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self._worker_task: asyncio.Task[None] | None = None
-        self._calls_today = 0
+        self._calls_by_kind: dict[str, int] = {}
         self._calls_day = time.strftime("%Y-%m-%d")
         self.on_memory_upsert: Any = None
+
+    @property
+    def _calls_today(self) -> int:
+        return sum(self._calls_by_kind.values())
 
     @property
     def memory_config(self) -> MemoryConfig:
@@ -213,6 +194,8 @@ class MemoryExtractor:
         transcript: str,
         user_text: str,
         user_turns: list[str] | None = None,
+        kinds: list[str] | None = None,
+        retries: dict[str, int] | None = None,
     ) -> None:
         if not self.config.enabled:
             logger.info("memory extractor disabled; skip enqueue")
@@ -225,26 +208,50 @@ class MemoryExtractor:
                 len(turns),
             )
             return
+        selected = [
+            kind
+            for kind in (kinds or list(ALL_EXTRACT_KINDS))
+            if kind in ALL_EXTRACT_KINDS
+        ]
+        if not selected:
+            return
         qsize = self._queue.qsize() + 1
         logger.info(
-            "memory extract queued qsize=%d user_text=%r user_turns=%d",
+            "memory extract queued qsize=%d user_text=%r user_turns=%d kinds=%s",
             qsize,
             user_text,
             len(turns),
+            selected,
         )
         await self._queue.put(
-            {"transcript": transcript, "user_text": user_text, "user_turns": turns}
+            {
+                "transcript": transcript,
+                "user_text": user_text,
+                "user_turns": turns,
+                "kinds": selected,
+                "retries": dict(retries or {}),
+            }
         )
 
     def _reset_daily_if_needed(self) -> None:
         today = time.strftime("%Y-%m-%d")
         if today != self._calls_day:
             self._calls_day = today
-            self._calls_today = 0
+            self._calls_by_kind = {}
 
     def _under_quota(self) -> bool:
         self._reset_daily_if_needed()
         return self._calls_today < self.config.max_calls_per_day
+
+    def _note_call(self, kind: str) -> None:
+        self._reset_daily_if_needed()
+        self._calls_by_kind[kind] = int(self._calls_by_kind.get(kind) or 0) + 1
+        logger.info(
+            "extract calls_today kind=%s count=%d total=%d",
+            kind,
+            self._calls_by_kind[kind],
+            self._calls_today,
+        )
 
     async def _worker(self) -> None:
         while True:
@@ -352,6 +359,10 @@ class MemoryExtractor:
         )
         return selected
 
+    def _has_api(self) -> bool:
+        key = (self.config.api_key or "").strip()
+        return bool(key and key != "YOUR_DEEPSEEK_API_KEY")
+
     async def _process(self, job: dict[str, Any]) -> None:
         transcript = job.get("transcript") or ""
         user_text = job.get("user_text") or ""
@@ -365,87 +376,204 @@ class MemoryExtractor:
                 len(user_turns),
             )
             return
+        kinds = [
+            str(kind)
+            for kind in (job.get("kinds") or list(ALL_EXTRACT_KINDS))
+            if str(kind) in ALL_EXTRACT_KINDS
+        ]
         logger.info(
-            "memory extract start user_text=%r user_turns=%d transcript_chars=%d",
+            "memory extract start user_text=%r user_turns=%d transcript_chars=%d kinds=%s",
             user_text,
             len(user_turns),
             len(transcript),
+            kinds,
+        )
+        runners = {
+            "fact": self._run_fact,
+            "state": self._run_state,
+            "commitment": self._run_commitment,
+        }
+        selected = [kind for kind in kinds if kind in runners]
+        results = await asyncio.gather(
+            *(runners[kind](job) for kind in selected),
+            return_exceptions=True,
+        )
+        failed: list[str] = []
+        for kind, result in zip(selected, results):
+            if isinstance(result, Exception):
+                logger.warning("memory extract kind=%s failed: %s", kind, result)
+                failed.append(kind)
+        if failed:
+            await self._requeue_failed(job, failed)
+
+    async def _requeue_failed(self, job: dict[str, Any], failed: list[str]) -> None:
+        retries = {
+            str(key): int(value)
+            for key, value in dict(job.get("retries") or {}).items()
+        }
+        again: list[str] = []
+        limit = max(0, int(self.config.extract_retry_max))
+        for kind in failed:
+            used = int(retries.get(kind) or 0) + 1
+            retries[kind] = used
+            if used <= limit:
+                again.append(kind)
+            else:
+                logger.info("memory extract retry exhausted kind=%s", kind)
+        if not again:
+            return
+        await self._queue.put(
+            {
+                "transcript": job.get("transcript") or "",
+                "user_text": job.get("user_text") or "",
+                "user_turns": job.get("user_turns") or [],
+                "kinds": again,
+                "retries": retries,
+            }
         )
 
+    async def _run_fact(self, job: dict[str, Any]) -> None:
+        transcript = str(job.get("transcript") or "")
+        user_text = str(job.get("user_text") or "")
+        user_turns = job.get("user_turns") or []
+        if not isinstance(user_turns, list):
+            user_turns = []
         existing = self._load_extract_context(user_text, user_turns)
         memories: list[dict[str, Any]] = []
         used_api = False
-
-        if self._under_quota() and self.config.api_key and self.config.api_key != "YOUR_DEEPSEEK_API_KEY":
-            try:
-                memories = await self._call_deepseek(transcript, existing)
-                used_api = True
-                self._calls_today += 1
-                logger.info(
-                    "DeepSeek extract ok calls_today=%d memories=%d items=%s",
-                    self._calls_today,
-                    len(memories),
-                    memories,
-                )
-            except Exception as exc:
-                logger.warning("DeepSeek extract failed: %s", exc)
-                memories = []
-        else:
-            logger.info(
-                "DeepSeek extract skipped under_quota=%s has_key=%s",
-                self._under_quota(),
-                bool(self.config.api_key and self.config.api_key != "YOUR_DEEPSEEK_API_KEY"),
+        api_failed = False
+        if self._under_quota() and self._has_api():
+            user_payload = (
+                f"{format_extract_now()}\n\n"
+                f"{_format_existing_memories(existing)}\n\n【对话片段】\n{transcript}"
             )
-
+            try:
+                parsed = await self._call_llm(FACT_SYSTEM, user_payload)
+                self._note_call("fact")
+                used_api = True
+                raw_items = parsed.get("memories") or []
+                if isinstance(raw_items, list):
+                    memories = [item for item in raw_items if isinstance(item, dict)]
+                logger.info("fact extract memories=%d", len(memories))
+            except Exception as exc:
+                api_failed = True
+                logger.warning("fact extract failed: %s", exc)
         if not memories and self.config.fallback == "regex":
             memories = regex_extract_memories(user_text)
-            if memories:
-                logger.info("Applied regex fallback memories: %s", memories)
-            else:
-                logger.info("regex fallback found no memories")
-
+            logger.info("fact regex fallback memories=%d", len(memories))
+        if api_failed and not memories:
+            raise RuntimeError("fact extract failed")
         source = "deepseek" if used_api else "regex"
         self._apply(memories, source=source, existing=existing)
-        logger.info(
-            "memory extract done source=%s applied=%d",
-            source,
-            len(memories),
-        )
 
-    async def _call_deepseek(
-        self,
-        transcript: str,
-        existing: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        url = self.config.base_url.rstrip("/") + "/chat/completions"
-        user_payload = (
-            f"{format_extract_now()}\n\n"
-            f"{_format_existing_memories(existing)}\n\n【对话片段】\n{transcript}"
+    async def _run_state(self, job: dict[str, Any]) -> None:
+        store = self.state_store
+        if store is None or not self.memory_config.state_enabled or not self._has_api():
+            return
+        if not self._under_quota():
+            raise RuntimeError("state extract skipped: no api quota")
+        now = datetime.now()
+        context = format_state_context(
+            store.all_items(),
+            now,
+            confirm_after_hours=float(self.memory_config.state_confirm_after_hours),
         )
+        user_payload = (
+            f"{format_extract_now(now)}\n\n"
+            f"{context}\n\n【对话片段】\n{job.get('transcript') or ''}"
+        )
+        parsed = await self._call_llm(STATE_SYSTEM, user_payload)
+        self._note_call("state")
+        items = parsed.get("items") or []
+        if not isinstance(items, list):
+            return
+        self._apply_state([item for item in items if isinstance(item, dict)])
+
+    async def _run_commitment(self, job: dict[str, Any]) -> None:
+        store = self.commitment_store
+        if store is None or not self.memory_config.commitment_enabled or not self._has_api():
+            return
+        if not self._under_quota():
+            raise RuntimeError("commitment extract skipped: no api quota")
+        now = datetime.now()
+        user_payload = (
+            f"{format_extract_now(now)}\n\n"
+            f"{store.format_context(now)}\n\n【对话片段】\n{job.get('transcript') or ''}"
+        )
+        parsed = await self._call_llm(COMMITMENT_SYSTEM, user_payload)
+        self._note_call("commitment")
+        items = parsed.get("items") or []
+        if isinstance(items, list):
+            store.apply([item for item in items if isinstance(item, dict)], now)
+
+    def _apply_state(self, items: list[dict[str, Any]]) -> None:
+        store = self.state_store
+        if store is None:
+            return
+        now = time.time()
+        for raw in items:
+            op = str(raw.get("op") or "upsert").strip().lower()
+            item_id = str(raw.get("id") or "").strip()
+            if not item_id:
+                continue
+            if op == "delete":
+                store.delete([item_id])
+                continue
+            text = str(raw.get("text") or "").strip()
+            if not text or is_crisis_text(text):
+                continue
+            try:
+                importance = int(raw.get("importance") or 5)
+            except (TypeError, ValueError):
+                importance = 5
+            store.upsert(
+                StateItem(
+                    id=item_id,
+                    text=text,
+                    created_at=now,
+                    updated_at=now,
+                    importance=importance,
+                    source_key=str(raw.get("source_key") or "").strip(),
+                )
+            )
+
+    async def _call_llm(self, system: str, user_payload: str) -> dict[str, Any]:
+        url = self.config.base_url.rstrip("/") + "/chat/completions"
         payload: dict[str, Any] = {
             "model": self.config.model,
             "messages": [
-                {"role": "system", "content": EXTRACT_SYSTEM},
+                {"role": "system", "content": system},
                 {"role": "user", "content": user_payload},
             ],
             "temperature": 0.1,
             "max_tokens": 1024,
             "response_format": {"type": "json_object"},
-            # DeepSeek V4: disable thinking for extraction
             "thinking": {"type": "disabled"},
         }
         headers = {
             "Authorization": f"Bearer {self.config.api_key}",
             "Content-Type": "application/json",
         }
-
         async with httpx.AsyncClient(timeout=self.config.timeout_sec) as client:
             resp = await client.post(url, headers=headers, json=payload)
             resp.raise_for_status()
             data = resp.json()
-
         content = data["choices"][0]["message"]["content"] or "{}"
         parsed = json.loads(content)
+        if not isinstance(parsed, dict):
+            return {}
+        return parsed
+
+    async def _call_deepseek(
+        self,
+        transcript: str,
+        existing: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        user_payload = (
+            f"{format_extract_now()}\n\n"
+            f"{_format_existing_memories(existing)}\n\n【对话片段】\n{transcript}"
+        )
+        parsed = await self._call_llm(FACT_SYSTEM, user_payload)
         items = parsed.get("memories") or []
         if not isinstance(items, list):
             return []
@@ -549,6 +677,24 @@ class MemoryExtractor:
             return []
         return list(by_key.values())
 
+    def _write_memory(
+        self,
+        key: str,
+        content: str,
+        category: str | None,
+        source: str,
+        importance: int | None,
+        entities: list[str] | None,
+    ) -> None:
+        self.store.upsert(
+            key,
+            content,
+            category=category,
+            source=source,
+            importance=importance,
+            entities=entities,
+        )
+
     def _upsert_with_dedup(
         self,
         *,
@@ -556,18 +702,20 @@ class MemoryExtractor:
         content: str,
         category: str | None,
         source: str,
+        importance: int | None = None,
+        entities: list[str] | None = None,
     ) -> str:
         cfg = self.memory_config
         cat = (category or "other").strip() or "other"
 
         if not cfg.dedup_enabled or cat == "goal":
-            self.store.upsert(key, content, category=category, source=source)
+            self._write_memory(key, content, category, source, importance, entities)
             self._reconcile_after_upsert(key, content, category)
             return key
 
         candidates = self._collect_dedup_candidates(content, category=cat, new_key=key)
         if not candidates:
-            self.store.upsert(key, content, category=category, source=source)
+            self._write_memory(key, content, category, source, importance, entities)
             self._reconcile_after_upsert(key, content, category)
             return key
 
@@ -581,7 +729,7 @@ class MemoryExtractor:
             | ({key} if key != keep_key else set())
         )
         best_score = max((float(c.get("score") or 0.0) for c in candidates), default=0.0)
-        self.store.upsert(keep_key, content, category=category, source=source)
+        self._write_memory(keep_key, content, category, source, importance, entities)
         for drop in drop_keys:
             if drop == keep_key:
                 continue
@@ -669,11 +817,18 @@ class MemoryExtractor:
                 category = None
             if not key:
                 continue
+            entities = raw.get("entities") if isinstance(raw.get("entities"), list) else []
+            try:
+                importance = int(raw.get("importance")) if raw.get("importance") is not None else None
+            except (TypeError, ValueError):
+                importance = None
             item = {
                 "op": op,
                 "key": key,
                 "content": content,
                 "category": category,
+                "importance": importance,
+                "entities": [str(part).strip() for part in entities if str(part or "").strip()],
             }
             if op == "upsert" and content:
                 if is_crisis_text(content):
@@ -718,6 +873,8 @@ class MemoryExtractor:
                     content=content,
                     category=category,
                     source=source,
+                    importance=item.get("importance"),
+                    entities=item.get("entities") if isinstance(item.get("entities"), list) else None,
                 )
                 addressed.add(key)
                 if keep_key:

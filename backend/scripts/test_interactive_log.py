@@ -49,7 +49,7 @@ class _CaptureHandler(logging.Handler):
 
 
 def _orchestrator() -> Orchestrator:
-    return Orchestrator(
+    orch = Orchestrator(
         AppConfig(),
         model=MagicMock(),
         conversations=MagicMock(),
@@ -57,6 +57,12 @@ def _orchestrator() -> Orchestrator:
         extractor=MagicMock(),
         knowledge=MagicMock(),
     )
+    # Silent turns now reach the extract gate, so numeric defaults matter.
+    orch.conversations.turn_count.return_value = 0
+    orch.conversations.extract_window_turn_count.return_value = 0
+    orch.conversations.extract_window_transcript.return_value = ""
+    orch.conversations.extract_window_user_texts.return_value = []
+    return orch
 
 
 def _seed_qq_trace() -> str:
@@ -524,7 +530,7 @@ def test_qq_undelivered_skips_relationship_commit() -> None:
             orch.conversations.planner_history_hours = 6.0
             orch.conversations.append = MagicMock()
             orch.conversations.turn_count.return_value = 0
-            orch.conversations.extract_buffer_turn_count.return_value = 0
+            orch.conversations.extract_window_turn_count.return_value = 0
             orch.knowledge.enabled = False
             orch.planner = MagicMock()
             orch.planner.enabled = True

@@ -52,7 +52,7 @@ class _FakeStore:
     def find_exact_content(self, content):
         return []
 
-    def upsert(self, key, content, category=None, source=""):
+    def upsert(self, key, content, category=None, source="", **kwargs):
         self.upserted.append((key, content, category))
 
     def delete(self, key):

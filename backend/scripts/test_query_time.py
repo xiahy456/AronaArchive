@@ -245,8 +245,8 @@ def test_memory_merge_mock() -> None:
             now=NOW,
         )
         contents = [e["content"] for e in hits]
-        if nap in contents:
-            _fail(f"unrelated schedule should not enter top_k: {contents}")
+        if not contents or contents[0] != name:
+            _fail(f"profile should rank above the dated nap: {contents}")
         if name not in contents:
             _fail(f"expected profile memory, got {contents}")
     print("  memory dual-retrieve mock ok")

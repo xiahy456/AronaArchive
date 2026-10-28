@@ -28,10 +28,13 @@ from typing import Any
 
 from .channel import method_label
 from .life.thought.schema import is_thought_history_marker
+from .safety import is_crisis_text
 
 logger = logging.getLogger(__name__)
 
 MAX_DIALOGUE_ENTRIES = 2048
+EXTRACT_WINDOW_MAX_ROWS = 40
+EXTRACT_CARRY_MAX_ROWS = 20
 _DT_FMT = "%Y-%m-%dT%H:%M:%S"
 _ROLES = frozenset({"user", "assistant", "event"})
 _KINDS = frozenset({"speech", "touch", "arrive", "leave"})
@@ -80,6 +83,7 @@ class DialogueEntry:
     session_id: str = ""
     method: str = ""
     qq_parts: list[dict[str, str]] = field(default_factory=list)
+    seq: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -89,6 +93,7 @@ class DialogueEntry:
             "action": self.action,
             "time": self.time,
             "session_id": self.session_id,
+            "seq": self.seq,
         }
         if self.method:
             payload["method"] = self.method
@@ -141,6 +146,10 @@ def _entry_from_dict(raw: object) -> DialogueEntry | None:
         return None
     if content and (is_thought_history_marker(content) or content in _PROACTIVE_MARKERS):
         return None
+    try:
+        seq = int(raw.get("seq") or 0)
+    except (TypeError, ValueError):
+        seq = 0
     return DialogueEntry(
         role=role,
         kind=kind,
@@ -150,6 +159,7 @@ def _entry_from_dict(raw: object) -> DialogueEntry | None:
         session_id=str(raw.get("session_id") or "").strip(),
         method=str(raw.get("method") or "").strip(),
         qq_parts=qq_parts,
+        seq=max(0, seq),
     )
 
 
@@ -158,6 +168,7 @@ class DialogueStore:
         self.path = path
         self.max_entries = max(1, int(max_entries or MAX_DIALOGUE_ENTRIES))
         self.entries: list[DialogueEntry] = []
+        self._next_seq = 1
         self.load()
 
     def load(self) -> list[DialogueEntry]:
@@ -182,7 +193,32 @@ class DialogueStore:
             return self.entries
         loaded = [item for item in (_entry_from_dict(row) for row in rows) if item is not None]
         self.entries = loaded[-self.max_entries :]
+        self._assign_missing_seq()
         return self.entries
+
+    def _assign_missing_seq(self) -> None:
+        """Keep seq monotonic. Older files have no seq; number them by order."""
+        highest = 0
+        for entry in self.entries:
+            if entry.seq > highest:
+                highest = entry.seq
+        if highest <= 0:
+            for index, entry in enumerate(self.entries, start=1):
+                entry.seq = index
+            highest = len(self.entries)
+        else:
+            for entry in self.entries:
+                if entry.seq <= 0:
+                    highest += 1
+                    entry.seq = highest
+        self._next_seq = highest + 1
+
+    @property
+    def next_seq(self) -> int:
+        return self._next_seq
+
+    def max_seq(self) -> int:
+        return max((entry.seq for entry in self.entries), default=0)
 
     def save(self) -> None:
         if self.path is None:
@@ -194,6 +230,9 @@ class DialogueStore:
         tmp.replace(self.path)
 
     def append(self, entry: DialogueEntry) -> None:
+        if entry.seq <= 0:
+            entry.seq = self._next_seq
+        self._next_seq = max(self._next_seq, entry.seq + 1)
         self.entries.append(entry)
         if len(self.entries) > self.max_entries:
             self.entries = self.entries[-self.max_entries :]
@@ -237,11 +276,14 @@ class ConversationManager:
     max_entries: int = MAX_DIALOGUE_ENTRIES
     _store: DialogueStore | None = field(default=None, init=False, repr=False)
     _turn_counts: dict[str, int] = field(default_factory=dict)
-    _extract_buffers: dict[str, list[dict[str, str]]] = field(default_factory=dict)
+    _extract_cursor: int = field(default=0, init=False, repr=False)
+    _extract_carry: list[dict[str, str]] = field(default_factory=list, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._store = DialogueStore(self.persist_path, max_entries=self.max_entries)
         self.planner_history_hours = max(0.0, float(self.planner_history_hours or 0.0))
+        self._extract_cursor = self._store.max_seq()
+        self._turn_counts.clear()
 
     def entries(self) -> list[DialogueEntry]:
         assert self._store is not None
@@ -344,44 +386,82 @@ class ConversationManager:
     def turn_count(self, session_id: str) -> int:
         return self._turn_counts.get(session_id, 0)
 
-    def append_extract_buffer(
-        self,
-        session_id: str,
-        role: str,
-        content: str,
-        method: str = "",
-    ) -> None:
-        buffer = self._extract_buffers.setdefault(session_id, [])
-        buffer.append({"role": role, "content": content, "method": method})
+    def _max_seq(self) -> int:
+        assert self._store is not None
+        return self._store.max_seq()
 
-    def extract_buffer_turn_count(self, session_id: str) -> int:
-        buffer = self._extract_buffers.get(session_id) or []
-        return sum(1 for msg in buffer if msg.get("role") == "user")
+    def _window_rows(self) -> list[dict[str, str]]:
+        """Every logged line the extractor has not consumed yet, in order."""
+        assert self._store is not None
+        rows = [
+            {
+                "role": item.role,
+                "content": item.content,
+                "method": item.method,
+                "seq": item.seq,
+            }
+            for item in self._store.entries
+            if item.role in {"user", "assistant"} and item.seq > self._extract_cursor
+        ]
+        return rows
 
-    def extract_buffer_transcript(self, session_id: str) -> str:
-        buffer = self._extract_buffers.get(session_id) or []
-        return _format_transcript(buffer)
+    def pending_extract_entries(self) -> list[dict[str, str]]:
+        rows = list(self._extract_carry) + self._window_rows()
+        if len(rows) > EXTRACT_WINDOW_MAX_ROWS:
+            rows = rows[-EXTRACT_WINDOW_MAX_ROWS:]
+        return rows
 
-    def extract_buffer_user_texts(self, session_id: str) -> list[str]:
-        buffer = self._extract_buffers.get(session_id) or []
+    def pending_extract_high_water(self) -> int:
+        """Highest seq covered by the current window, ignoring the carry."""
+        rows = self._window_rows()
+        return max((int(row.get("seq") or 0) for row in rows), default=self._extract_cursor)
+
+    def extract_window_turn_count(self) -> int:
+        rows = self.pending_extract_entries()
+        return sum(1 for msg in rows if msg.get("role") == "user")
+
+    def extract_window_transcript(self) -> str:
+        return _format_transcript(self.pending_extract_entries())
+
+    def extract_window_user_texts(self) -> list[str]:
         return [
             str(msg.get("content") or "").strip()
-            for msg in buffer
+            for msg in self.pending_extract_entries()
             if msg.get("role") == "user" and str(msg.get("content") or "").strip()
         ]
 
-    def clear_extract_buffer(self, session_id: str) -> None:
-        self._extract_buffers.pop(session_id, None)
+    def advance_extract_cursor(
+        self,
+        *,
+        keep_pending: bool = False,
+        through_seq: int | None = None,
+    ) -> None:
+        """Consume the window. keep_pending stashes it for the next extract.
+
+        through_seq pins the high-water mark that was actually enqueued, so lines
+        appended while the gate call was in flight stay for the next round.
+        """
+        if keep_pending:
+            kept = [
+                row
+                for row in self.pending_extract_entries()
+                if not is_crisis_text(str(row.get("content") or ""))
+            ]
+            self._extract_carry = kept[-EXTRACT_CARRY_MAX_ROWS:]
+        else:
+            self._extract_carry.clear()
+        mark = self._max_seq() if through_seq is None else int(through_seq)
+        self._extract_cursor = max(self._extract_cursor, mark)
 
     def clear(self, session_id: str) -> None:
         assert self._store is not None
         self._store.clear()
         self._turn_counts.pop(session_id, None)
-        self._extract_buffers.pop(session_id, None)
+        self._extract_carry.clear()
+        self._extract_cursor = 0
 
     def drop(self, session_id: str) -> None:
         self._turn_counts.pop(session_id, None)
-        self._extract_buffers.pop(session_id, None)
 
     def recent_transcript(self, session_id: str, turns: int = 3) -> str:
         history = self.get_history(session_id)

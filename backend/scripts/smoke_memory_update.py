@@ -404,16 +404,21 @@ def test_inject_cooldown() -> None:
         store._client = None
 
 
-def test_extract_buffer_user_texts() -> None:
-    print("== extract buffer user texts ==")
+def test_extract_window_user_texts() -> None:
+    print("== extract window user texts ==")
     cm = ConversationManager()
-    cm.append_extract_buffer("s", "user", "我现在喜欢黄色了")
-    cm.append_extract_buffer("s", "assistant", "了解")
-    cm.append_extract_buffer("s", "user", "今天天气真好")
-    texts = cm.extract_buffer_user_texts("s")
+    cm.append("s", "user", "我现在喜欢黄色了")
+    cm.append("s", "assistant", "了解")
+    cm.append("s", "user", "今天天气真好")
+    texts = cm.extract_window_user_texts()
     if texts != ["我现在喜欢黄色了", "今天天气真好"]:
         _fail(f"expected both user turns, got {texts}")
-    print("  extract_buffer_user_texts ok")
+    if cm.extract_window_turn_count() != 2:
+        _fail("window should count both user turns")
+    cm.advance_extract_cursor()
+    if cm.pending_extract_entries():
+        _fail("advancing the cursor must empty the window")
+    print("  extract_window_user_texts ok")
 
 
 def test_extract_multi_turn_context() -> None:
@@ -452,9 +457,19 @@ def test_extract_multi_turn_context() -> None:
             top_k=8,
             apply_score_filter=True,
         )
+        plain_hits = store.retrieve_entries(
+            greeting,
+            top_k=8,
+            apply_score_filter=False,
+        )
         chat_keys = {str(e.get("key")) for e in chat_hits}
-        if "preference_color" in chat_keys or "location_beijing" in chat_keys:
-            _fail(f"greeting must not inject color/location via score filter, got {chat_keys}")
+        plain_keys = {str(e.get("key")) for e in plain_hits}
+        # Score thresholds are gone: RRF ranking is the same either way and the
+        # relevance call in memory/filter.py decides what reaches the prompt.
+        if chat_keys != plain_keys:
+            _fail(f"apply_score_filter must no longer change ranking: {chat_keys} vs {plain_keys}")
+        if not chat_keys:
+            _fail("greeting should still produce ranked candidates for the filter")
 
         last_only = extractor._load_extract_context(greeting, [greeting])
         last_keys = {str(e.get("key")) for e in last_only}
@@ -664,7 +679,7 @@ def main() -> None:
     test_reconcile_color_and_goal_delete()
     test_semantic_and_exact_dedup()
     test_inject_cooldown()
-    test_extract_buffer_user_texts()
+    test_extract_window_user_texts()
     test_extract_multi_turn_context()
     test_extract_conflict_cleanup()
     test_emotional_inject_labels()

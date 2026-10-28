@@ -88,7 +88,18 @@ def gather_context(
         memory_key=trigger.memory_key,
         memory_content=_memory_text(state, trigger),
         knowledge=_knowledge(state),
+        state_lines=_state_lines(state),
     )
+
+
+def _state_lines(state: "AppState") -> tuple[str, ...]:
+    store = getattr(state, "state_store", None)
+    if store is None:
+        return ()
+    try:
+        return tuple(str(line).strip() for line in store.texts() if str(line).strip())
+    except Exception:
+        return ()
 
 
 def _glance_text(

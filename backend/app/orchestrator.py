@@ -68,6 +68,9 @@ from .logging_utils import (
     update_trace,
 )
 from .memory.extractor import MemoryExtractor
+from .memory.filter import filter_entries
+from .memory.gate import decide_gate
+from .memory.prompts import ALL_EXTRACT_KINDS
 from .memory.store import MemoryStore
 from .memory.trigger import should_extract
 from .model_loader import ModelLoader
@@ -93,7 +96,10 @@ from .prompt import (
     build_renderer_messages,
     clip_knowledge_for_inject,
     format_memory_inject,
+    format_state_block,
+    format_summary_block,
     memory_inject_char_budget,
+    memory_state_char_budget,
 )
 from .protocol import CODE_INTERNAL, msg_chat_response, msg_error
 from .query_time import build_time_aware_query
@@ -144,6 +150,9 @@ class Orchestrator:
         self.stance = None
         self.life_journal: Any = None
         self.arona_memory: Any = None
+        self.state_store: Any = None
+        self.commitment_store: Any = None
+        self.summary_store: Any = None
         self.last_initiate_text = ""
         self.last_outbound_method = ""
         self.napcat: Any = None
@@ -181,6 +190,42 @@ class Orchestrator:
         if mark and injected.keys:
             self.memory_store.mark_injected(injected.keys)
         return injected.contents, injected.block
+
+    async def _filter_memory_entries(self, query: str, entries: list[Any]) -> list[Any]:
+        cfg = self.config.memory
+        if not cfg.llm_filter_enabled or len(entries) <= 1:
+            return entries
+        return await filter_entries(
+            memory_config=cfg,
+            extractor_config=cfg.extractor,
+            query=query,
+            entries=entries,
+        )
+
+    def _state_block(self) -> str:
+        store = self.state_store
+        if store is None or not self.config.memory.state_enabled:
+            return ""
+        try:
+            texts = list(store.texts())
+        except Exception:
+            logger.exception("state block failed")
+            return ""
+        return format_state_block(
+            texts,
+            max_chars=memory_state_char_budget(self.config),
+        )
+
+    def _summary_block(self) -> str:
+        store = self.summary_store
+        if store is None or not self.config.memory.summary_enabled:
+            return ""
+        try:
+            content = str(store.latest_content() or "")
+        except Exception:
+            logger.exception("summary block failed")
+            return ""
+        return format_summary_block(content)
 
     def _planner_history_hours(self) -> float:
         raw = getattr(self.conversations, "planner_history_hours", None)
@@ -515,6 +560,7 @@ class Orchestrator:
                     time_query_embedding=time_query_embedding,
                     now=retrieve_now,
                 )
+                entries = await self._filter_memory_entries(user_text, entries)
                 memories, memory_block = self._pack_memory_inject(entries)
                 logger.info(
                     "memory retrieve session=%s hits=%d latency=%.3fs items=%s",
@@ -597,6 +643,8 @@ class Orchestrator:
                     image=image,
                     qq_images=photos,
                     memory_block=memory_block,
+                    state_block=self._state_block(),
+                    summary_block=self._summary_block(),
                     life_block=self._life_block(interrupt_ctx),
                     day_block=self._day_block(),
                     teacher_method=inbound_method,
@@ -731,6 +779,7 @@ class Orchestrator:
                     method,
                     user_text,
                 )
+                await self._maybe_extract(session_id, user_text)
                 return True
 
             _commit_relationship()
@@ -832,6 +881,8 @@ class Orchestrator:
                     qq_images=qq_images,
                     crisis=True,
                     memory_block=memory_block,
+                    state_block=self._state_block(),
+                    summary_block=self._summary_block(),
                     life_block=self._life_block(interrupt_ctx),
                     day_block=self._day_block(),
                     teacher_method=inbound_method,
@@ -895,7 +946,7 @@ class Orchestrator:
                 self.conversations.append(session_id, "assistant", draft, method=method)
             if on_committed is not None:
                 on_committed()
-            self.conversations.clear_extract_buffer(session_id)
+            self.conversations.advance_extract_cursor(keep_pending=True)
             if delivered:
                 self.stats["chat_count"] += 1
             logger.info(
@@ -1069,6 +1120,7 @@ class Orchestrator:
                 cand_k,
                 apply_inject_cooldown=True,
             )
+            entries = await self._filter_memory_entries(memory_query, entries)
             memories, memory_block = self._pack_memory_inject(entries)
             logger.info(
                 "initiate memory retrieve session=%s kind=%s hits=%d latency=%.3fs",
@@ -1117,6 +1169,8 @@ class Orchestrator:
                 knowledge=[],
                 climate_block=block,
                 memory_block=memory_block,
+                state_block=self._state_block(),
+                summary_block=self._summary_block(),
                 life_block=self._life_block(interrupt_ctx),
                 day_block=self._day_block(),
                 channels_block=self._channels_block(client_online=client_online),
@@ -1379,6 +1433,8 @@ class Orchestrator:
                 knowledge=knowledge,
                 extra_system=extra_system,
                 memory_block=memory_block,
+                state_block=self._state_block(),
+                summary_block=self._summary_block(),
                 teacher_method=None if kind is not None else inbound_method,
             )
             mode = "local"
@@ -1610,66 +1666,90 @@ class Orchestrator:
             reason or action,
             user_text,
         )
+        await self._maybe_extract(session_id, user_text)
 
     async def _maybe_extract(self, session_id: str, user_text: str) -> None:
-        # Buffer this completed turn (history was already appended by caller).
+        # The window is whatever the dialogue log has not consumed yet, so silent
+        # turns and proactive lines are included without re-deriving a pair.
         history = self.conversations.get_history(session_id)
-        if len(history) >= 2:
-            self.conversations.append_extract_buffer(
-                session_id,
-                history[-2]["role"],
-                history[-2]["content"],
-                method=str(history[-2].get("method") or ""),
-            )
-            self.conversations.append_extract_buffer(
-                session_id,
-                history[-1]["role"],
-                history[-1]["content"],
-                method=str(history[-1].get("method") or ""),
-            )
-
         ext = self.config.memory.extractor
         turn_count = self.conversations.turn_count(session_id)
-        buffer_turns = self.conversations.extract_buffer_turn_count(session_id)
-        disclose = (
-            not is_crisis_text(user_text)
-            and classify_user_act(user_text) == "self_disclose"
-        )
+        window_turns = self.conversations.extract_window_turn_count()
+        if is_crisis_text(user_text):
+            logger.info("memory extract skipped session=%s reason=crisis", session_id)
+            self.conversations.advance_extract_cursor(keep_pending=True)
+            return
+        disclose = classify_user_act(user_text) == "self_disclose"
         follows_followup = history_follows_proactive_marker(history)
-        if (
-            not disclose
-            and not follows_followup
-            and not should_extract(
-                user_text,
-                turn_count=turn_count,
-                every_n_turns=ext.every_n_turns,
-                buffer_turns=buffer_turns,
-                extract_buffer_turns=ext.extract_buffer_turns,
-            )
-        ):
+        kinds = await self._extract_kinds(
+            user_text,
+            turn_count=turn_count,
+            buffer_turns=window_turns,
+            disclose=disclose,
+            follows_followup=follows_followup,
+        )
+        if not kinds:
             logger.info(
-                "memory extract skipped session=%s turns=%d buffer_turns=%d",
+                "memory extract skipped session=%s turns=%d window_turns=%d",
                 session_id,
                 turn_count,
-                buffer_turns,
+                window_turns,
             )
             return
 
-        transcript = self.conversations.extract_buffer_transcript(session_id)
+        window_high = self.conversations.pending_extract_high_water()
+        transcript = self.conversations.extract_window_transcript()
         if not transcript:
-            logger.info("memory extract skipped session=%s reason=empty_transcript", session_id)
+            logger.info("memory extract skipped session=%s reason=empty_window", session_id)
             return
         logger.info(
-            "memory extract enqueue session=%s turns=%d buffer_turns=%d transcript=%s",
+            "memory extract enqueue session=%s turns=%d window_turns=%d kinds=%s transcript=%s",
             session_id,
             turn_count,
-            buffer_turns,
+            window_turns,
+            kinds,
             preview(transcript, 300),
         )
-        user_turns = self.conversations.extract_buffer_user_texts(session_id)
+        user_turns = self.conversations.extract_window_user_texts()
         await self.extractor.enqueue(
             transcript=transcript,
             user_text=user_text,
             user_turns=user_turns,
+            kinds=kinds,
         )
-        self.conversations.clear_extract_buffer(session_id)
+        self.conversations.advance_extract_cursor(through_seq=window_high)
+
+    async def _extract_kinds(
+        self,
+        user_text: str,
+        *,
+        turn_count: int,
+        buffer_turns: int,
+        disclose: bool,
+        follows_followup: bool,
+    ) -> list[str]:
+        ext = self.config.memory.extractor
+        all_kinds = list(ALL_EXTRACT_KINDS)
+        if disclose or follows_followup:
+            return all_kinds
+        key = (ext.api_key or "").strip()
+        gate_ready = bool(ext.gate_enabled and key and key != "YOUR_DEEPSEEK_API_KEY")
+        if gate_ready:
+            decision = await decide_gate(ext, user_text)
+            if decision.failed:
+                logger.warning("memory gate failed; extracting every kind")
+                return all_kinds
+            if decision.kinds:
+                return list(decision.kinds)
+            if ext.extract_buffer_turns > 0 and buffer_turns >= ext.extract_buffer_turns:
+                return all_kinds
+            return []
+        if should_extract(
+            user_text,
+            turn_count=turn_count,
+            every_n_turns=ext.every_n_turns,
+            buffer_turns=buffer_turns,
+            extract_buffer_turns=ext.extract_buffer_turns,
+        ):
+            return all_kinds
+        return []

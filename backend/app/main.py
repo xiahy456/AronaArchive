@@ -23,6 +23,7 @@ import asyncio
 import logging
 import os
 import sys
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime
 
@@ -32,11 +33,16 @@ from .config import AppConfig, get_config
 from .conversation import ConversationManager
 from .embeddings import LocalBgeEncoder, bge_missing_reason
 from .knowledge import KnowledgeRetriever
+from .memory.commitment import CommitmentStore
+from .memory.state import StateStore
+from .memory.summary import SummaryStore
+from .prompt import state_budget_fits
+from .rerank import LocalBgeReranker, rerank_missing_reason
 from .life import LifeEngine, run_life_loop
 from .life.arona_memory import AronaMemory
 from .life.impulse import expire_stale_care
 from .life.journal import LifeJournal
-from .life.thought import ThoughtLedger, ThoughtStore
+from .life.thought import PendingTrigger, ThoughtLedger, ThoughtStore
 from .life.thought.loop import run_thought_loop
 from .logging_utils import configure_logging
 from .memory.extractor import MemoryExtractor
@@ -77,6 +83,34 @@ configure_logging()
 logger = logging.getLogger(__name__)
 
 
+def _enqueue_stale_summary(state) -> None:
+    """If yesterday was never summarized and a recent episode exists, think once."""
+    cfg = state.config.memory
+    if not cfg.summary_enabled:
+        return
+    ledger = getattr(state, "thought", None)
+    store = getattr(state, "summary_store", None)
+    memory = getattr(getattr(state, "orchestrator", None), "memory_store", None)
+    if ledger is None or store is None or memory is None:
+        return
+    today = datetime.now().date().isoformat()
+    if (store.last_day() or "") >= today:
+        return
+    try:
+        recent = memory.list_recent("episodic", since_ts=time.time() - 86400, limit=1)
+    except Exception:
+        logger.exception("summary catch-up lookup failed")
+        return
+    if not recent:
+        return
+    if not ledger.enqueue(PendingTrigger(kind="consolidate")):
+        return
+    thought_store = getattr(state, "thought_store", None)
+    if thought_store is not None:
+        thought_store.save(ledger)
+    logger.info("summary catch-up queued")
+
+
 def create_app() -> FastAPI:
     config = get_config()
     token_error = startup_token_error(
@@ -107,7 +141,42 @@ def create_app() -> FastAPI:
     else:
         logger.warning("%s", missing_bge)
     memory_store = MemoryStore(config, encoder=shared_encoder)
-    extractor = MemoryExtractor(memory_store, config.memory.extractor)
+    mem_cfg = config.memory
+    state_store = StateStore(
+        config.memory_db_abs_path,
+        max_items=mem_cfg.state_max_items,
+        max_chars=mem_cfg.state_max_chars_per_item,
+    )
+    commitment_store = CommitmentStore(
+        config.memory_db_abs_path,
+        mute_sec=mem_cfg.commitment_mute_sec,
+    )
+    summary_store = SummaryStore(
+        config.memory_db_abs_path,
+        max_chars=mem_cfg.summary_max_chars,
+    )
+    fits, needed, budget = state_budget_fits(config)
+    if not fits:
+        logger.warning(
+            "state block can exceed its token budget: needed=%d budget=%d",
+            needed,
+            budget,
+        )
+    if mem_cfg.rerank_enabled:
+        missing_rerank = rerank_missing_reason(config.rerank_model_abs_path)
+        if missing_rerank is None:
+            try:
+                memory_store.reranker = LocalBgeReranker(config.rerank_model_abs_path)
+            except Exception:
+                logger.exception("reranker load failed; retrieval keeps RRF order")
+        else:
+            logger.warning("%s", missing_rerank)
+    extractor = MemoryExtractor(
+        memory_store,
+        config.memory.extractor,
+        state_store=state_store,
+        commitment_store=commitment_store,
+    )
     knowledge = KnowledgeRetriever(config, encoder=shared_encoder)
     planner = PlannerClient(
         config.planner, renderer_enabled=config.model.enabled
@@ -129,6 +198,9 @@ def create_app() -> FastAPI:
         relationship=relationship,
     )
     orchestrator.stance = stance_state
+    orchestrator.state_store = state_store
+    orchestrator.commitment_store = commitment_store
+    orchestrator.summary_store = summary_store
     hub = ConnectionHub()
     scheduler = ProactiveScheduler(
         config.proactive_abs_path,
@@ -182,6 +254,9 @@ def create_app() -> FastAPI:
     state.thought_store = thought_store
     state.stance = stance_state
     state.stance_store = stance_store
+    state.state_store = state_store
+    state.commitment_store = commitment_store
+    state.summary_store = summary_store
     state.glance_request_id = ""
     state.napcat = NapcatLink(config.napcat.user_qq_id)
     orchestrator.napcat = state.napcat
@@ -217,6 +292,7 @@ def create_app() -> FastAPI:
             except Exception:
                 logger.exception("Knowledge warmup failed; RAG will retry on first use")
         await extractor.start()
+        _enqueue_stale_summary(state)
         life_task = None
         thought_task = None
         stance_task = None

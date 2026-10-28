@@ -72,6 +72,48 @@ def memory_inject_char_budget(config: AppConfig) -> int:
     return min(budget, config.memory.max_inject_chars)
 
 
+def memory_state_char_budget(config: AppConfig) -> int:
+    return _approx_chars_for_tokens(config.token_budget.state)
+
+
+def state_budget_fits(config: AppConfig) -> tuple[bool, int, int]:
+    """True when the constructed state block cannot exceed the state token budget."""
+    needed = int(config.memory.state_max_items) * (
+        int(config.memory.state_max_chars_per_item) + 4
+    )
+    budget = memory_state_char_budget(config)
+    return needed <= budget, needed, budget
+
+
+def format_state_block(texts: Sequence[str], *, max_chars: int | None = None) -> str:
+    """Resident situation lines. Never clipped; max_chars is only a startup invariant."""
+    lines: list[str] = []
+    for raw in texts:
+        text = str(raw or "").strip()
+        if not text or is_crisis_text(text):
+            continue
+        lines.append(f"- {text}")
+    if not lines:
+        return ""
+    block = "【老师当前情况】\n" + "\n".join(lines)
+    if max_chars is not None and len(block) > int(max_chars):
+        # Construction should have prevented this. Do not drop lines.
+        pass
+    return block
+
+
+def format_summary_block(content: str) -> str:
+    lines: list[str] = []
+    for raw in (content or "").splitlines():
+        text = str(raw or "").strip().lstrip("-").strip()
+        if not text or is_crisis_text(text):
+            continue
+        lines.append(f"- {text}")
+    if not lines:
+        return ""
+    return "【老师近况】\n" + "\n".join(lines)
+
+
 EMOTIONAL_INJECT_NOTE = "仅在与本轮相关时轻触，不要当病历翻旧账。"
 
 
@@ -183,11 +225,17 @@ def build_messages(
     knowledge: list[str],
     extra_system: str | None = None,
     memory_block: str = "",
+    state_block: str = "",
+    summary_block: str = "",
     teacher_method: str | None = None,
 ) -> list[dict[str, str]]:
     system_parts = [config.prompt.local_system_prompt.strip()]
     if extra_system and extra_system.strip():
         system_parts.append(extra_system.strip())
+    if (state_block or "").strip():
+        system_parts.append(state_block.strip())
+    if (summary_block or "").strip():
+        system_parts.append(summary_block.strip())
 
     labeled = (memory_block or "").strip()
     if labeled:

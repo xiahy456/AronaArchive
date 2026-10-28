@@ -201,6 +201,7 @@ class MemoryStore:
         self._encoder = encoder
         self._collection: Any | None = None
         self._client: Any | None = None
+        self.reranker: Any | None = None
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
@@ -236,6 +237,74 @@ class MemoryStore:
                 conn.execute(
                     "ALTER TABLE memories ADD COLUMN last_injected_at REAL"
                 )
+            if "importance" not in cols:
+                conn.execute(
+                    "ALTER TABLE memories ADD COLUMN importance INTEGER NOT NULL DEFAULT 5"
+                )
+            if "entities" not in cols:
+                conn.execute(
+                    "ALTER TABLE memories ADD COLUMN entities TEXT NOT NULL DEFAULT ''"
+                )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS state_items (
+                    id TEXT PRIMARY KEY,
+                    text TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL,
+                    importance INTEGER NOT NULL DEFAULT 5,
+                    source_key TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_state_updated
+                ON state_items(updated_at)
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS commitments (
+                    id TEXT PRIMARY KEY,
+                    what TEXT NOT NULL,
+                    rrule TEXT NOT NULL,
+                    at_time TEXT,
+                    weekday INTEGER,
+                    due_at REAL,
+                    next_due_at REAL NOT NULL,
+                    last_fired_at REAL,
+                    last_fired_day TEXT,
+                    acked_day TEXT,
+                    muted_until REAL,
+                    active INTEGER NOT NULL DEFAULT 1,
+                    source_key TEXT,
+                    updated_at REAL NOT NULL,
+                    miss_streak INTEGER NOT NULL DEFAULT 0
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_commit_due
+                ON commitments(active, next_due_at)
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS day_summaries (
+                    day TEXT PRIMARY KEY,
+                    content TEXT NOT NULL,
+                    created_at REAL NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE VIRTUAL TABLE IF NOT EXISTS memories_entities_fts
+                USING fts5(key, entities, tokenize='unicode61')
+                """
+            )
             conn.commit()
 
     def _ensure_encoder(self) -> LocalBgeEncoder:
@@ -295,6 +364,9 @@ class MemoryStore:
         content: str,
         category: str | None = None,
         source: str = "extractor",
+        *,
+        importance: int | None = None,
+        entities: list[str] | None = None,
     ) -> None:
         key = (key or "").strip()
         content = (content or "").strip()
@@ -304,25 +376,40 @@ class MemoryStore:
             content = content[:200]
 
         now = time.time()
+        score = 5 if importance is None else max(1, min(10, int(importance)))
+        entity_text = " ".join(
+            part.strip() for part in (entities or []) if str(part or "").strip()
+        )
         fts_body = _tokenize(f"{key} {content}")
+        entity_fts = _tokenize(entity_text)
         with self._connect() as conn:
             conn.execute(
                 """
-                INSERT INTO memories(key, content, category, updated_at, source)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO memories(
+                    key, content, category, updated_at, source, importance, entities
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(key) DO UPDATE SET
                     content=excluded.content,
                     category=excluded.category,
                     updated_at=excluded.updated_at,
-                    source=excluded.source
+                    source=excluded.source,
+                    importance=excluded.importance,
+                    entities=excluded.entities
                 """,
-                (key, content, category, now, source),
+                (key, content, category, now, source, score, entity_text),
             )
             conn.execute("DELETE FROM memories_fts WHERE key = ?", (key,))
             conn.execute(
                 "INSERT INTO memories_fts(key, content) VALUES (?, ?)",
                 (key, fts_body),
             )
+            conn.execute("DELETE FROM memories_entities_fts WHERE key = ?", (key,))
+            if entity_fts:
+                conn.execute(
+                    "INSERT INTO memories_entities_fts(key, entities) VALUES (?, ?)",
+                    (key, entity_fts),
+                )
             conn.commit()
         logger.info("Memory upsert key=%s content=%s", key, content)
         self._chroma_upsert(key, content, category=category, source=source)
@@ -360,6 +447,7 @@ class MemoryStore:
         with self._connect() as conn:
             conn.execute("DELETE FROM memories WHERE key = ?", (key,))
             conn.execute("DELETE FROM memories_fts WHERE key = ?", (key,))
+            conn.execute("DELETE FROM memories_entities_fts WHERE key = ?", (key,))
             conn.commit()
         logger.info("Memory delete key=%s", key)
         self._chroma_delete(key)
@@ -570,6 +658,86 @@ class MemoryStore:
             if not rows and len(tokens) >= 2 and or_q != and_q:
                 rows = self._fts_search(conn, or_q, limit)
         return [str(r["key"]) for r in rows]
+
+    def _entity_candidate_keys(self, query: str, limit: int) -> list[str]:
+        tokens = [self._fts_quote(t) for t in _tokenize(query).split() if t]
+        tokens = [t for t in tokens if t]
+        if not tokens:
+            return []
+        or_q = " OR ".join(tokens)
+        with self._connect() as conn:
+            try:
+                rows = conn.execute(
+                    """
+                    SELECT key FROM memories_entities_fts
+                    WHERE memories_entities_fts MATCH ?
+                    LIMIT ?
+                    """,
+                    (or_q, max(1, int(limit))),
+                ).fetchall()
+            except sqlite3.OperationalError as exc:
+                logger.warning("entity FTS failed for %r: %s", or_q, exc)
+                return []
+        return [str(row["key"]) for row in rows]
+
+    def memory_attrs(self, keys: list[str]) -> dict[str, dict[str, Any]]:
+        cleaned = [str(key or "").strip() for key in keys if str(key or "").strip()]
+        if not cleaned:
+            return {}
+        placeholders = ",".join("?" for _ in cleaned)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT key, category, importance, content, entities
+                FROM memories WHERE key IN ({placeholders})
+                """,
+                cleaned,
+            ).fetchall()
+        out: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            key = str(row["key"])
+            try:
+                importance = int(row["importance"] or 5)
+            except (TypeError, ValueError):
+                importance = 5
+            out[key] = {
+                "category": str(row["category"] or "").strip() or "other",
+                "importance": max(1, min(10, importance)),
+                "content": str(row["content"] or ""),
+                "entities": str(row["entities"] or ""),
+            }
+        return out
+
+    def list_recent(
+        self,
+        category: str,
+        *,
+        since_ts: float,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        cat = (category or "").strip()
+        if not cat:
+            return []
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT key, content, category, updated_at FROM memories
+                WHERE category = ? AND updated_at >= ?
+                ORDER BY updated_at DESC
+                LIMIT ?
+                """,
+                (cat, float(since_ts), max(1, int(limit))),
+            ).fetchall()
+        return [
+            {
+                "key": str(row["key"]),
+                "content": str(row["content"] or "").strip(),
+                "category": cat,
+                "updated_at": float(row["updated_at"] or 0.0),
+            }
+            for row in rows
+            if str(row["content"] or "").strip()
+        ]
 
     @staticmethod
     def _fts_search(conn: sqlite3.Connection, match_query: str, top_k: int) -> list[sqlite3.Row]:
@@ -789,106 +957,37 @@ class MemoryStore:
 
         try:
             collection = self._ensure_chroma()
-            if int(collection.count()) <= 0:
-                logger.info(
-                    "memory retrieve query=%r skipped empty chroma",
-                    query,
-                )
-                return []
-            if query_embedding is None:
-                query_embedding = self._ensure_encoder().encode_query(query)
-        except FileNotFoundError as exc:
-            logger.warning("%s", exc)
-            return self._fts_only_entries(
-                query,
-                top_k,
-                apply_inject_cooldown=apply_inject_cooldown,
-                apply_score_filter=apply_score_filter,
-            )
+            chroma_count = int(collection.count())
         except Exception:
-            logger.exception("Memory retrieve backend init failed; falling back to FTS")
-            return self._fts_only_entries(
-                query,
-                top_k,
-                apply_inject_cooldown=apply_inject_cooldown,
-                apply_score_filter=apply_score_filter,
-            )
+            logger.exception("Memory chroma init failed; ranking sqlite channels")
+            chroma_count = 0
+        if chroma_count <= 0:
+            logger.info("memory retrieve query=%r chroma empty", query)
+        if query_embedding is None and chroma_count > 0:
+            try:
+                query_embedding = self._ensure_encoder().encode_query(query)
+            except FileNotFoundError as exc:
+                logger.warning("%s", exc)
+                query_embedding = None
+            except Exception:
+                logger.exception("Memory query encode failed; ranking without vectors")
+                query_embedding = None
 
-        orig_merged, fts_n, vec_n = self._hybrid_score_map(
-            query, query_embedding, candidate_k
-        )
-        timed_query = ""
-        timed_fts_n = 0
-        timed_vec_n = 0
-        if include_time:
-            timed_map, timed_query, timed_fts_n, timed_vec_n = self._time_aware_score_map(
-                query,
-                candidate_k,
-                now=clock,
-                time_query=time_query,
-                time_query_embedding=time_query_embedding,
-                fallback_embedding=query_embedding,
-            )
-            merged = self._merge_score_maps(orig_merged, timed_map)
-        else:
-            merged = orig_merged
+        del apply_score_filter
+        from .retrieve import rank_entries
 
-        ranked = sorted(merged.items(), key=lambda item: item[1][1], reverse=True)
-        if apply_score_filter:
-            passed = self._filter_by_score(ranked, query)
-        else:
-            passed = [
-                (key, content, score)
-                for key, (content, score) in ranked
-                if content
-            ]
-        pre_scores = _preview_scored(passed)
-        cooled_keys = [
-            key
-            for key, _, _ in passed
-        ]
-        passed = self._drop_cooled_entries(
-            passed,
-            apply_inject_cooldown=apply_inject_cooldown,
-            query=query,
-        )
-        dropped_cooled = [
-            key for key in cooled_keys if key not in {k for k, _, _ in passed}
-        ]
-        passed = passed[:top_k]
-
-        categories = self._categories_for_keys([key for key, _, _ in passed])
-        entries = [
-            {
-                "key": key,
-                "content": content,
-                "category": categories.get(key, "other"),
-                "score": float(score),
-            }
-            for key, content, score in passed
-        ]
-        logger.info(
-            "memory retrieve query=%r time_query=%r fts_keys=%d timed_fts_keys=%d "
-            "vec_hits=%d timed_vec_hits=%d merged=%d hits=%d min_score=%.3f "
-            "min_score_no_overlap=%.3f score_filter=%s pre_scores=%s cooled=%s "
-            "scores=%s items=%s",
+        return rank_entries(
+            self,
             query,
-            timed_query or None,
-            fts_n,
-            timed_fts_n,
-            vec_n,
-            timed_vec_n,
-            len(merged),
-            len(entries),
-            float(self.config.min_score),
-            float(self.config.min_score_no_overlap),
-            apply_score_filter,
-            pre_scores,
-            dropped_cooled,
-            [(round(e["score"], 3), e["content"][:40]) for e in entries],
-            [e["content"] for e in entries],
+            top_k=top_k,
+            query_embedding=query_embedding,
+            include_time=include_time,
+            time_query=time_query,
+            time_query_embedding=time_query_embedding,
+            now=clock,
+            apply_inject_cooldown=apply_inject_cooldown,
+            candidate_k=candidate_k,
         )
-        return entries
 
     def retrieve(
         self,

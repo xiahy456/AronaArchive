@@ -41,13 +41,14 @@ IMPULSE_PRIORITY: dict[str, int] = {
     "dinner": 80,
     "sleep": 80,
     "goal": 50,
+    "commitment": 70,
     "mood_followup": 40,
     "thought": 30,
     "idle": 10,
 }
 
 _RUMINATE_KINDS: frozenset[str] = frozenset(
-    {"breakfast", "lunch", "dinner", "sleep", "goal", "mood_followup"}
+    {"breakfast", "lunch", "dinner", "sleep", "goal", "commitment", "mood_followup"}
 )
 
 IMPULSE_HINTS: dict[str, str] = {
@@ -56,6 +57,7 @@ IMPULSE_HINTS: dict[str, str] = {
     "dinner": "老师晚饭窗口到了",
     "sleep": "老师睡觉窗口到了",
     "goal": "老师还有未完成的计划",
+    "commitment": "到了该提醒老师的时候",
     "mood_followup": "老师提过的心情还记着",
 }
 
@@ -95,6 +97,68 @@ def merge_impulse(state: InnerState, impulse: Impulse) -> tuple[InnerState, bool
     nxt = _with_rumination(nxt, impulse)
     nxt.pending_impulse = impulse
     return nxt, True
+
+
+def maybe_offer_commitment(state: Any, now: datetime) -> None:
+    """Queue one due promise. Fired only after the line is actually sent."""
+    store = getattr(state, "commitment_store", None)
+    engine = getattr(state, "life", None)
+    if store is None or engine is None:
+        return
+    cfg = getattr(getattr(state, "config", None), "memory", None)
+    if cfg is not None and not getattr(cfg, "commitment_enabled", True):
+        return
+    pending = getattr(getattr(engine, "state", None), "pending_impulse", None)
+    if pending is not None and getattr(pending, "kind", "") == "commitment":
+        return
+    due = store.due(now)
+    if not due:
+        return
+    item = due[0]
+    what = (item.what or "").strip()
+    if not what:
+        return
+    offer_impulse(
+        engine,
+        Impulse(
+            kind="commitment",
+            created_at=now,
+            source_id=item.id,
+            hint=what,
+            extra_memories=(what,),
+        ),
+    )
+
+
+def _speak_memories(state: Any, impulse: Impulse, now: datetime) -> list[str]:
+    """Commitment reminders carry the promise and whether today already heard it."""
+    extras = [str(item).strip() for item in impulse.extra_memories if str(item).strip()]
+    if impulse.kind != "commitment":
+        return extras
+    store = getattr(state, "commitment_store", None)
+    item = None
+    if store is not None and impulse.source_id:
+        try:
+            item = store.get(impulse.source_id)
+        except Exception:
+            logger.exception("commitment lookup failed id=%s", impulse.source_id)
+    what = (getattr(item, "what", "") or impulse.hint or "").strip()
+    fired_today = bool(item is not None and item.last_fired_day == now.date().isoformat())
+    status = "今天已经提醒过" if fired_today else "今天还没有提醒"
+    line = f"{what}。{status}。" if what else status
+    if line not in extras:
+        extras.insert(0, line)
+    return extras
+
+
+def _mark_commitment_fired(state: Any, item_id: str, now: datetime) -> None:
+    store = getattr(state, "commitment_store", None)
+    if store is None:
+        return
+    try:
+        store.mark_fired(item_id, now)
+    except Exception:
+        logger.exception("commitment mark_fired failed id=%s", item_id)
 
 
 def offer_impulse(engine: Any, impulse: Impulse) -> bool:
@@ -396,7 +460,7 @@ async def _speak_impulse(
             send=send,
             retrieve_memory=impulse.retrieve_memory,
             memory_query=impulse.memory_query,
-            extra_memories=list(impulse.extra_memories),
+            extra_memories=_speak_memories(state, impulse, now),
             interrupt_ctx=interrupt_ctx,
             client_online=client_up,
             motive_block=motive_block,
@@ -428,6 +492,8 @@ async def _speak_impulse(
         logger.info("impulse spoke kind=%s session=%s", snapshot.kind, session_id)
         if snapshot.from_thought or snapshot.kind == "thought":
             _close_spoken_thought(state, engine, now)
+        if snapshot.kind == "commitment" and snapshot.source_id:
+            _mark_commitment_fired(state, snapshot.source_id, now)
         _drop_spoken_rumination(engine, snapshot.kind)
         journal = _journal_of(state, engine)
         if journal is not None:
