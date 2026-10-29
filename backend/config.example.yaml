@@ -82,7 +82,7 @@ memory:
   state_confirm_after_hours: 48
   commitment_enabled: true
   commitment_mute_sec: 604800
-  rerank_enabled: true
+  rerank_enabled: false
   rerank_model_path: "../models/bge-reranker-base"
   rerank_candidates: 30
   llm_filter_enabled: true
