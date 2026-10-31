@@ -118,7 +118,7 @@ memory_v2:
   extractor:
     enabled: true
     base_url: "https://api.deepseek.com"
-    api_key: ""
+    api_key: "YOUR_DEEPSEEK_API_KEY"
     model: "deepseek-flash"
     timeout_sec: 15
     state_model: ""

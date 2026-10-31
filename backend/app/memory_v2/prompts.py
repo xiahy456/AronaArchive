@@ -51,7 +51,7 @@ summary 用若干句中文，写清谁、做了什么、什么时间、结果、
 STATE_SYSTEM = f"""{projection("states")}
 你维护老师此刻的处境。只输出一个 JSON 对象。
 
-value 是一句可以直接放进提示词的中文，主语用「老师」。禁止「所在地：」这类前缀，禁止键值对，禁止换行。
+value 是一句可以直接放进提示词的中文，主语用「老师」。禁止键值对，禁止换行。
 value 里禁止相对时间（今天、最近、这几天）和具体日期。时间只写在 valid_from / valid_until。
 key 用 snake_case，不超过 24 个字符。起始槽位：location（在哪）、current_task（正在做的事）、routine（作息）、health（身体）、mood（情绪基调）、social（重要的人）。可以提出新 key。
 同一 key 在这次输出里只出现一次。
