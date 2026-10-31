@@ -131,8 +131,9 @@ class Orchestrator:
         *,
         model: ModelLoader,
         conversations: ConversationManager,
-        memory_store: MemoryStore,
-        extractor: MemoryExtractor,
+        memory_store: MemoryStore | None = None,
+        extractor: MemoryExtractor | None = None,
+        memory_v2: Any = None,
         knowledge: KnowledgeRetriever,
         planner: PlannerClient | None = None,
         relationship: RelationshipEngine | None = None,
@@ -142,6 +143,7 @@ class Orchestrator:
         self.conversations = conversations
         self.memory_store = memory_store
         self.extractor = extractor
+        self.memory_v2 = memory_v2
         self.knowledge = knowledge
         self.planner = planner or PlannerClient(
             config.planner, renderer_enabled=config.model.enabled
@@ -187,7 +189,7 @@ class Orchestrator:
             arona_lines=self._arona_lines(),
             max_chars=memory_inject_char_budget(self.config),
         )
-        if mark and injected.keys:
+        if mark and injected.keys and self.memory_store is not None:
             self.memory_store.mark_injected(injected.keys)
         return injected.contents, injected.block
 
@@ -226,6 +228,27 @@ class Orchestrator:
             logger.exception("summary block failed")
             return ""
         return format_summary_block(content)
+
+    def _resident_state_block(self) -> str:
+        """v2 states use their own formatter. v1 still goes through _state_block."""
+        memory_v2 = self.memory_v2
+        if memory_v2 is not None:
+            try:
+                return str(memory_v2.state_block() or "")
+            except Exception:
+                logger.exception("memory_v2 state block failed")
+                return ""
+        return self._state_block()
+
+    async def _recall_events(self, query: str) -> tuple[list[str], str]:
+        memory_v2 = self.memory_v2
+        if memory_v2 is None:
+            return [], ""
+        try:
+            return await asyncio.to_thread(memory_v2.event_block, query)
+        except Exception:
+            logger.exception("memory_v2 event retrieve failed")
+            return [], ""
 
     def _planner_history_hours(self) -> float:
         raw = getattr(self.conversations, "planner_history_hours", None)
@@ -521,7 +544,7 @@ class Orchestrator:
             time_query_embedding: list[float] | None = None
             retrieve_now = datetime.now()
             time_query = build_time_aware_query(user_text, retrieve_now)
-            if use_memory or need_rag:
+            if (use_memory or need_rag) and self.memory_store is not None:
                 t0 = time.perf_counter()
                 try:
                     embeddings = await asyncio.to_thread(
@@ -546,7 +569,19 @@ class Orchestrator:
 
             memories: list[str] = []
             memory_block = ""
-            if use_memory:
+            if use_memory and self.memory_v2 is not None:
+                t0 = time.perf_counter()
+                memories, memory_block = await self._recall_events(user_text)
+                logger.info(
+                    "memory_v2 retrieve session=%s hits=%d latency=%.3fs items=%s",
+                    session_id,
+                    len(memories),
+                    time.perf_counter() - t0,
+                    preview_list(memories),
+                )
+                if memories:
+                    context_parts.append("memory")
+            elif use_memory and self.memory_store is not None:
                 t0 = time.perf_counter()
                 cand_k = max(1, int(self.config.memory.candidate_top_k))
                 entries = await asyncio.to_thread(
@@ -643,7 +678,7 @@ class Orchestrator:
                     image=image,
                     qq_images=photos,
                     memory_block=memory_block,
-                    state_block=self._state_block(),
+                    state_block=self._resident_state_block(),
                     summary_block=self._summary_block(),
                     life_block=self._life_block(interrupt_ctx),
                     day_block=self._day_block(),
@@ -881,7 +916,7 @@ class Orchestrator:
                     qq_images=qq_images,
                     crisis=True,
                     memory_block=memory_block,
-                    state_block=self._state_block(),
+                    state_block=self._resident_state_block(),
                     summary_block=self._summary_block(),
                     life_block=self._life_block(interrupt_ctx),
                     day_block=self._day_block(),
@@ -1111,7 +1146,19 @@ class Orchestrator:
                 kind,
                 len(memories),
             )
-        elif retrieve_memory and memory_query:
+        elif retrieve_memory and memory_query and self.memory_v2 is not None:
+            t0 = time.perf_counter()
+            memories, memory_block = await self._recall_events(memory_query)
+            logger.info(
+                "memory_v2 initiate retrieve session=%s kind=%s hits=%d latency=%.3fs",
+                session_id,
+                kind,
+                len(memories),
+                time.perf_counter() - t0,
+            )
+            if memories:
+                context_parts.append("memory")
+        elif retrieve_memory and memory_query and self.memory_store is not None:
             t0 = time.perf_counter()
             cand_k = max(1, int(self.config.memory.candidate_top_k))
             entries = await asyncio.to_thread(
@@ -1169,7 +1216,7 @@ class Orchestrator:
                 knowledge=[],
                 climate_block=block,
                 memory_block=memory_block,
-                state_block=self._state_block(),
+                state_block=self._resident_state_block(),
                 summary_block=self._summary_block(),
                 life_block=self._life_block(interrupt_ctx),
                 day_block=self._day_block(),
@@ -1433,7 +1480,7 @@ class Orchestrator:
                 knowledge=knowledge,
                 extra_system=extra_system,
                 memory_block=memory_block,
-                state_block=self._state_block(),
+                state_block=self._resident_state_block(),
                 summary_block=self._summary_block(),
                 teacher_method=None if kind is not None else inbound_method,
             )
@@ -1668,7 +1715,49 @@ class Orchestrator:
         )
         await self._maybe_extract(session_id, user_text)
 
+    async def _enqueue_v2_window(self, session_id: str, user_text: str) -> None:
+        memory_v2 = self.memory_v2
+        if memory_v2 is None:
+            return
+        if is_crisis_text(user_text):
+            logger.info("memory_v2 extract skipped session=%s reason=crisis", session_id)
+            self.conversations.advance_extract_cursor(keep_pending=True)
+            return
+        by_seq = {entry.seq: entry for entry in self.conversations.entries()}
+        window: list[dict[str, Any]] = []
+        for row in self.conversations.pending_extract_entries():
+            content = str(row.get("content") or "")
+            if is_crisis_text(content):
+                continue
+            seq = int(row.get("seq") or 0)
+            entry = by_seq.get(seq)
+            window.append(
+                {
+                    "role": row.get("role"),
+                    "content": content,
+                    "method": str(row.get("method") or ""),
+                    "time": entry.time if entry is not None else str(row.get("time") or ""),
+                    "seq": seq,
+                }
+            )
+        if not window:
+            logger.info("memory_v2 extract skipped session=%s reason=empty_window", session_id)
+            return
+        high = self.conversations.pending_extract_high_water()
+        memory_v2.enqueue_window(window)
+        self.conversations.advance_extract_cursor(through_seq=high)
+        logger.info(
+            "memory_v2 extract enqueue session=%s lines=%d",
+            session_id,
+            len(window),
+        )
+
     async def _maybe_extract(self, session_id: str, user_text: str) -> None:
+        if self.memory_v2 is not None:
+            await self._enqueue_v2_window(session_id, user_text)
+            return
+        if self.extractor is None:
+            return
         # The window is whatever the dialogue log has not consumed yet, so silent
         # turns and proactive lines are included without re-deriving a pair.
         history = self.conversations.get_history(session_id)

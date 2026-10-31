@@ -108,6 +108,51 @@ memory:
     gate_max_tokens: 64
     extract_retry_max: 2
 
+# 与 memory 段独立。enabled 默认 true 时只构造 memory_v2，不实例化 v1。
+memory_v2:
+  enabled: true
+  storage:
+    db_path: "data/memory/memory.db"
+    events_fts: "data/memory/events_fts"
+    chroma_path: "data/memory/chroma"
+  extractor:
+    enabled: true
+    base_url: "https://api.deepseek.com"
+    api_key: ""
+    model: "deepseek-flash"
+    timeout_sec: 15
+    state_model: ""
+    commitment_model: ""
+    window_max_turns: 40
+    window_max_chars: 8000
+    retry_max: 2
+    calls_per_day: 3000
+  states:
+    enabled: true
+    max_items: 12
+    max_chars_per_item: 48
+    key_max_chars: 24
+  events:
+    enabled: true
+    inject_top_k: 3
+    summary_max_chars: 300
+    vector_enabled: false
+    rerank_enabled: false
+    rerank_candidates: 12
+  commitment:
+    enabled: true
+    scan_default_sec: 14400
+    scan_max_sec: 14400
+    scan_min_sec: 300
+    scan_lookback_hours: 24
+    scan_model: ""
+    scan_timeout_sec: 20
+    inject_max: 2
+    extract_max_new: 3
+    current_max_chars: 200
+    stale_after_sec: 2592000
+  trace_enabled: true
+
 planner:
   enabled: true
   base_url: "https://api.deepseek.com"
@@ -232,7 +277,7 @@ computer_use:
   vision_thinking: true
 
 token_budget:
-  state: 300
+  state: 400
   memory: 250
   knowledge: 250
   history: 700

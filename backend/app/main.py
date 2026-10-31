@@ -29,15 +29,10 @@ from datetime import datetime
 
 from fastapi import FastAPI, WebSocket
 
-from .config import AppConfig, get_config
+from .config import BACKEND_DIR, AppConfig, get_config
 from .conversation import ConversationManager
 from .embeddings import LocalBgeEncoder, bge_missing_reason
 from .knowledge import KnowledgeRetriever
-from .memory.commitment import CommitmentStore
-from .memory.state import StateStore
-from .memory.summary import SummaryStore
-from .prompt import state_budget_fits
-from .rerank import LocalBgeReranker, rerank_missing_reason
 from .life import LifeEngine, run_life_loop
 from .life.arona_memory import AronaMemory
 from .life.impulse import expire_stale_care
@@ -45,8 +40,6 @@ from .life.journal import LifeJournal
 from .life.thought import PendingTrigger, ThoughtLedger, ThoughtStore
 from .life.thought.loop import run_thought_loop
 from .logging_utils import configure_logging
-from .memory.extractor import MemoryExtractor
-from .memory.store import MemoryStore
 from .model_loader import get_model_loader
 from .orchestrator import Orchestrator
 from .planner import PlannerClient
@@ -81,6 +74,36 @@ def _configure_stdio_utf8() -> None:
 _configure_stdio_utf8()
 configure_logging()
 logger = logging.getLogger(__name__)
+
+
+def _dialogue_since(conversations):
+    """Rows at or after `since` (unix seconds) for the commitment scan."""
+
+    def _rows(since: float) -> list[dict[str, str | float]]:
+        found: list[dict[str, str | float]] = []
+        for entry in conversations.entries():
+            if entry.role not in {"user", "assistant"}:
+                continue
+            spoken = 0.0
+            if entry.time:
+                try:
+                    spoken = datetime.fromisoformat(entry.time).timestamp()
+                except ValueError:
+                    spoken = 0.0
+            if spoken and spoken < since:
+                continue
+            found.append(
+                {
+                    "role": entry.role,
+                    "content": entry.content,
+                    "time": entry.time,
+                    "method": entry.method,
+                    "at": spoken,
+                }
+            )
+        return found
+
+    return _rows
 
 
 def _enqueue_stale_summary(state) -> None:
@@ -140,43 +163,70 @@ def create_app() -> FastAPI:
         shared_encoder = LocalBgeEncoder(config.knowledge_embedding_abs_path)
     else:
         logger.warning("%s", missing_bge)
-    memory_store = MemoryStore(config, encoder=shared_encoder)
-    mem_cfg = config.memory
-    state_store = StateStore(
-        config.memory_db_abs_path,
-        max_items=mem_cfg.state_max_items,
-        max_chars=mem_cfg.state_max_chars_per_item,
-    )
-    commitment_store = CommitmentStore(
-        config.memory_db_abs_path,
-        mute_sec=mem_cfg.commitment_mute_sec,
-    )
-    summary_store = SummaryStore(
-        config.memory_db_abs_path,
-        max_chars=mem_cfg.summary_max_chars,
-    )
-    fits, needed, budget = state_budget_fits(config)
-    if not fits:
-        logger.warning(
-            "state block can exceed its token budget: needed=%d budget=%d",
-            needed,
-            budget,
+    memory_store = None
+    extractor = None
+    state_store = None
+    commitment_store = None
+    summary_store = None
+    memory_v2 = None
+    if config.memory_v2.enabled:
+        from .memory_v2 import MemoryV2
+
+        memory_v2 = MemoryV2(
+            config.memory_v2,
+            backend_dir=BACKEND_DIR,
+            trace_path=config.logging_dir_abs_path / "memory_v2-trace.jsonl",
+            token_budget_state=config.token_budget.state,
+            token_budget_memory=config.token_budget.memory,
+            encoder=shared_encoder if config.memory_v2.events.vector_enabled else None,
         )
-    if mem_cfg.rerank_enabled:
-        missing_rerank = rerank_missing_reason(config.rerank_model_abs_path)
-        if missing_rerank is None:
-            try:
-                memory_store.reranker = LocalBgeReranker(config.rerank_model_abs_path)
-            except Exception:
-                logger.exception("reranker load failed; retrieval keeps RRF order")
-        else:
-            logger.warning("%s", missing_rerank)
-    extractor = MemoryExtractor(
-        memory_store,
-        config.memory.extractor,
-        state_store=state_store,
-        commitment_store=commitment_store,
-    )
+        logger.info("memory_v2 enabled; v1 memory stores were not created")
+    else:
+        from .memory.commitment import CommitmentStore
+        from .memory.extractor import MemoryExtractor
+        from .memory.state import StateStore
+        from .memory.store import MemoryStore
+        from .memory.summary import SummaryStore
+        from .prompt import state_budget_fits
+        from .rerank import LocalBgeReranker, rerank_missing_reason
+
+        memory_store = MemoryStore(config, encoder=shared_encoder)
+        mem_cfg = config.memory
+        state_store = StateStore(
+            config.memory_db_abs_path,
+            max_items=mem_cfg.state_max_items,
+            max_chars=mem_cfg.state_max_chars_per_item,
+        )
+        commitment_store = CommitmentStore(
+            config.memory_db_abs_path,
+            mute_sec=mem_cfg.commitment_mute_sec,
+        )
+        summary_store = SummaryStore(
+            config.memory_db_abs_path,
+            max_chars=mem_cfg.summary_max_chars,
+        )
+        fits, needed, budget = state_budget_fits(config)
+        if not fits:
+            logger.warning(
+                "state block can exceed its token budget: needed=%d budget=%d",
+                needed,
+                budget,
+            )
+        if mem_cfg.rerank_enabled:
+            missing_rerank = rerank_missing_reason(config.rerank_model_abs_path)
+            if missing_rerank is None:
+                try:
+                    memory_store.reranker = LocalBgeReranker(config.rerank_model_abs_path)
+                except Exception:
+                    logger.exception("reranker load failed; retrieval keeps RRF order")
+            else:
+                logger.warning("%s", missing_rerank)
+        extractor = MemoryExtractor(
+            memory_store,
+            config.memory.extractor,
+            state_store=state_store,
+            commitment_store=commitment_store,
+        )
     knowledge = KnowledgeRetriever(config, encoder=shared_encoder)
     planner = PlannerClient(
         config.planner, renderer_enabled=config.model.enabled
@@ -193,6 +243,7 @@ def create_app() -> FastAPI:
         conversations=conversations,
         memory_store=memory_store,
         extractor=extractor,
+        memory_v2=memory_v2,
         knowledge=knowledge,
         planner=planner,
         relationship=relationship,
@@ -257,6 +308,10 @@ def create_app() -> FastAPI:
     state.state_store = state_store
     state.commitment_store = commitment_store
     state.summary_store = summary_store
+    state.memory_v2 = memory_v2
+    if memory_v2 is not None:
+        memory_v2.bind_life(life)
+        memory_v2.bind_dialogue(_dialogue_since(conversations))
     state.glance_request_id = ""
     state.napcat = NapcatLink(config.napcat.user_qq_id)
     orchestrator.napcat = state.napcat
@@ -271,7 +326,8 @@ def create_app() -> FastAPI:
         del category
         note_memory(state, key, now=datetime.now())
 
-    orchestrator.extractor.on_memory_upsert = _on_memory
+    if orchestrator.extractor is not None:
+        orchestrator.extractor.on_memory_upsert = _on_memory
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -283,7 +339,8 @@ def create_app() -> FastAPI:
             await asyncio.to_thread(model.warmup)
         else:
             logger.info("Local renderer disabled; skipping GGUF load")
-        await asyncio.to_thread(memory_store.warmup)
+        if memory_store is not None:
+            await asyncio.to_thread(memory_store.warmup)
         if knowledge.enabled:
             try:
                 await asyncio.to_thread(knowledge.warmup)
@@ -291,7 +348,17 @@ def create_app() -> FastAPI:
                 logger.warning("%s", exc)
             except Exception:
                 logger.exception("Knowledge warmup failed; RAG will retry on first use")
-        await extractor.start()
+        if extractor is not None:
+            await extractor.start()
+        scan_task = None
+        if memory_v2 is not None:
+            if not memory_v2.extractor.has_api():
+                logger.warning(
+                    "memory_v2 extract and commitment scan disabled: no API key"
+                )
+            await memory_v2.extractor.start()
+            scan_task = asyncio.create_task(memory_v2.scanner.run())
+            logger.info("memory_v2 commitment scan started")
         _enqueue_stale_summary(state)
         life_task = None
         thought_task = None
@@ -311,6 +378,13 @@ def create_app() -> FastAPI:
             logger.info("stance loop started")
         app.state.arona = state  # type: ignore[attr-defined]
         yield
+        if scan_task is not None:
+            memory_v2.scanner.stop()
+            scan_task.cancel()
+            try:
+                await scan_task
+            except asyncio.CancelledError:
+                pass
         if life_task is not None:
             life_task.cancel()
             try:
@@ -329,7 +403,10 @@ def create_app() -> FastAPI:
                 await stance_task
             except asyncio.CancelledError:
                 pass
-        await extractor.stop()
+        if extractor is not None:
+            await extractor.stop()
+        if memory_v2 is not None:
+            await memory_v2.extractor.stop()
         logger.info("AronaArchive backend stopped")
 
     app = FastAPI(title="AronaArchive Backend", lifespan=lifespan)

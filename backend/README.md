@@ -393,6 +393,43 @@ python scripts/ingest_knowledge.py --rebuild
 
 对话主路径里记忆与知识检索共用一轮 BGE：同时编码老师原文和带当前时间的附带查询（相对日期会先展开成与记忆写入相同的绝对日期）。记忆召回把向量、全文、实体和时间窗按 RRF 融合，再可选本地 bge-reranker 重排，最后由 LLM 丢掉不相关的条目；失败时保留融合顺序。情景与情绪记忆按 key 冷却，默认 `memory.inject_cooldown_sec: 3600`；事实和目标不冷却。状态句和承诺不进向量库，每次请求全量注入。抽取器对照已有记忆时不走该冷却：按缓冲里每一轮老师消息做宽松召回后合并，并钉上全部 `goal` 与热 key（`user_name` / `preference_color` / `user_birthday`）。知识命中（过滤后的 lore 文本）可按 query 向量近义复用，默认 `query_cache_min_cosine: 0.92`，缓存按自然日区分以免跨日复用带日期的命中；`ingest` / `--rebuild` 会清空该缓存。不缓存 Planner 草稿或最终台词。当前时间同时用于检索附带查询，并以 `【当前时间】` 写入 Planner user 消息（不写入 Renderer）。
 
+## 记忆系统 v2 与迁移
+
+`memory_v2.enabled` 默认 `true`。为 `true` 时后端只构造 `MemoryV2`，不实例化 v1 的 `MemoryStore`。为 `false` 时完全走 v1，`memory_v2` 段其余键被忽略。两者不会同时构造。`memory` 段只给 v1 使用。
+
+`token_budget.state` 两版共用。v2 的常驻状态需要至少 400（400 × 1.6 = 640 字，装得下 12 × 52 字）。调高不影响 v1 的正确性，v1 只拿它做启动检查、运行时不截断。
+
+迁移会原地替换 `data/memory/memory.db`。替换之后 v1 代码读不了这个文件。想回到 v1，必须先 `--restore`，再把 `memory_v2.enabled` 改成 `false`。只改开关不够。
+
+库里还有 v1 表（`memories` / `state_items`）但没有 v2 的 `events` 表时，启动会报错并提示先迁移，不会静默把旧记忆丢掉。
+
+在 `backend/` 下执行：
+
+```bash
+# 只备份，不改 data/memory/。退出码 0。打印备份目录。
+python scripts/migrate_memory_v2.py --backup-only
+
+# 备份，并把事实记忆原样写入新的 memory.db。不迁移状态、承诺和摘要，也不改目录里的其他文件。
+python scripts/migrate_memory_v2.py
+
+# 与上一条相同。迁移不再调用模型，这个开关只为兼容旧命令。
+python scripts/migrate_memory_v2.py --no-llm
+
+# 按 manifest 的 SHA256 校验后，把备份拷回 data/memory/。不删除备份。
+python scripts/migrate_memory_v2.py --restore data/memory_v1_backup_20261031T014000
+```
+
+备份目录是 `backend/data/memory_v1_backup/`。目录已经存在时会改成 `memory_v1_backup_<时间戳>`，不覆盖。事实记忆指 `preference` / `profile` / `goal` / `other`，以及没有类别的条目；情景和情绪不写入。产物：
+
+| 文件 | 用途 |
+| --- | --- |
+| `manifest.json` | 备份文件清单、大小、SHA256、v1 各表行数。回切只认这一份 |
+| `migration_report.json` | 源条数、写入的事实条数、跳过的状态与非事实条数 |
+| `migration_review.csv` | 保留为空。事实记忆直接复制，不再排队人工改写 |
+| `migration_trace.jsonl` | 不再生成。迁移不调用模型 |
+
+迁移前先停后端。建议先 `--backup-only`，核对 manifest 的大小和 SHA256，再跑完整迁移。迁移后跑 `python scripts/eval_memory_v2.py`。任一步失败都会留下 `memory.db.new` 和备份，原始 `memory.db` 不动。库已经是 v2（有 `events` 表）时，脚本拒绝再迁，并提示 `--restore`。
+
 ## 配置
 
 由 `config.example.yaml` 复制为 `config.yaml`（已 gitignore）。相对路径均相对后端根目录解析（源码为 `backend/`；便携包为解压目录；可用环境变量 `ARONA_BACKEND_DIR` 覆盖）。下表默认值与示例文件一致。
@@ -405,7 +442,8 @@ python scripts/ingest_knowledge.py --rebuild
 | `prompt`       | 本地单模型回落用 system prompt（双模型 Renderer 不读此项）       |
 | `conversation` | 多轮历史保留轮数                                        |
 | `knowledge`    | 世界观 RAG（语料、Chroma、嵌入模型、检索阈值、近义 query 缓存）        |
-| `memory`       | SQLite + Chroma 记忆、混合检索、注入冷却、去重/调和、DeepSeek 抽取器 |
+| `memory`       | 仅 v1 使用。SQLite + Chroma 记忆、混合检索、注入冷却、去重/调和、DeepSeek 抽取器 |
+| `memory_v2`    | 状态 / 事件 / 承诺。与 `memory` 不共用字段。默认开启 |
 | `planner`      | 双模型 Planner（DeepSeek 意图卡）与轮次路由器                 |
 | `listen`       | 连续听写的静音提交与接话窗口                                  |
 | `life`         | 生命循环：内状态、自己的一天、阿洛娜侧记忆、低频瞥屏、电脑操作作为可打断活动 |
@@ -508,7 +546,7 @@ python scripts/ingest_knowledge.py --rebuild
 
 
 
-### `memory`
+### `memory`（仅 v1 使用）
 
 
 | 配置项                     | 默认                      | 说明                                       |
@@ -572,6 +610,50 @@ python scripts/ingest_knowledge.py --rebuild
 | `extract_retry_max`    | `2`                        | 某一类失败后单独重试的次数 |
 
 
+### `memory_v2`
+
+与 `memory` 无关。`enabled` 默认 `true`。下面 37 项都在主路径或明确的降级路径上。
+
+
+| 配置项 | 默认 | 说明 |
+| --- | --- | --- |
+| `enabled` | `true` | 为 true 时不构造 v1 记忆 |
+| `storage.db_path` | `data/memory/memory.db` | 与 v1 同路径；迁移后只剩 v2 表 |
+| `storage.events_fts` | `data/memory/events_fts` | 事件全文索引旁路文件 |
+| `storage.chroma_path` | `data/memory/chroma` | 仅 `vector_enabled` 时写入事件向量 |
+| `extractor.enabled` | `true` | 关闭后不再从对话写入 |
+| `extractor.base_url` | `https://api.deepseek.com` | 抽取与调度共用的 API 根 |
+| `extractor.api_key` | 空 | 空或占位符时抽取和调度都停用，读取仍可用 |
+| `extractor.model` | `deepseek-flash` | 事件抽取模型 |
+| `extractor.timeout_sec` | `15` | 单次抽取超时 |
+| `extractor.state_model` | 空 | 空则用 `extractor.model` |
+| `extractor.commitment_model` | 空 | 空则用 `extractor.model` |
+| `extractor.window_max_turns` | `40` | 待抽取窗口条数上限 |
+| `extractor.window_max_chars` | `8000` | 待抽取窗口字数上限 |
+| `extractor.retry_max` | `2` | 某一层失败后单独重试的次数 |
+| `extractor.calls_per_day` | `3000` | 三层抽取合计的每日上限 |
+| `states.enabled` | `true` | 关闭后不写状态 |
+| `states.max_items` | `12` | 常驻条数上限 |
+| `states.max_chars_per_item` | `48` | 单句字数上限，超出整句拒绝 |
+| `states.key_max_chars` | `24` | 槽位名长度上限 |
+| `events.enabled` | `true` | 关闭后不写事件 |
+| `events.inject_top_k` | `3` | 【相关回忆】最多几条；预算不够再减条，不砍句子 |
+| `events.summary_max_chars` | `300` | 异常长摘要按句末截断 |
+| `events.vector_enabled` | `false` | 默认只用 FTS5；没有向量库时 trace 标 `degraded` |
+| `events.rerank_enabled` | `false` | 默认不做 cross-encoder |
+| `events.rerank_candidates` | `12` | 打开重排时送进去的候选数 |
+| `commitment.enabled` | `true` | 关闭后不提取、不调度 |
+| `commitment.scan_default_sec` | `14400` | 首次以及失败后的间隔 |
+| `commitment.scan_max_sec` | `14400` | 模型给出的间隔上限 |
+| `commitment.scan_min_sec` | `300` | 模型给出的间隔下限 |
+| `commitment.scan_lookback_hours` | `24` | 调度时回看的对话小时数 |
+| `commitment.scan_model` | 空 | 空则用 `extractor.model` |
+| `commitment.scan_timeout_sec` | `20` | 调度调用超时；超时则不改、不注入 |
+| `commitment.inject_max` | `2` | 一次最多把几条承诺送进思考 |
+| `commitment.extract_max_new` | `3` | 一次提取最多新增几条 |
+| `commitment.current_max_chars` | `200` | `current` 字数上限，超出按句末截断 |
+| `commitment.stale_after_sec` | `2592000` | 30 天没有有帮助的注入就终止；从未注入的不参与 |
+| `trace_enabled` | `true` | 写 `logs/memory_v2-trace.jsonl` |
 
 
 ### `planner`
@@ -741,7 +823,7 @@ python scripts/ingest_knowledge.py --rebuild
 
 | 配置项         | 默认    | 说明                        |
 | ----------- | ----- | ------------------------- |
-| `state`     | `300` | 常驻状态句的 token 预算；启动时检查条数乘单句上限是否装得下，运行时不截断 |
+| `state`     | `400` | 常驻状态句的 token 预算，v1 与 v2 共用。v2 启动时要求装得下 12 条状态，不够就拒绝启动；运行时不截断 |
 | `memory`    | `250` | 本地回落注入长期记忆的 token 预算      |
 | `knowledge` | `250` | 知识注入预算（Planner 与本地回落都会截断） |
 | `history`   | `700` | 本地回落拼进 prompt 的历史字符预算     |

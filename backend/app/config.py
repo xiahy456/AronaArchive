@@ -173,6 +173,66 @@ class MemoryConfig(BaseModel):
     extractor: ExtractorConfig = Field(default_factory=ExtractorConfig)
 
 
+class MemoryV2StorageConfig(BaseModel):
+    db_path: str = "data/memory/memory.db"
+    events_fts: str = "data/memory/events_fts"
+    chroma_path: str = "data/memory/chroma"
+
+
+class MemoryV2ExtractorConfig(BaseModel):
+    enabled: bool = True
+    base_url: str = "https://api.deepseek.com"
+    api_key: str = ""
+    model: str = "deepseek-flash"
+    timeout_sec: float = 15
+    state_model: str = ""
+    commitment_model: str = ""
+    window_max_turns: int = 40
+    window_max_chars: int = 8000
+    retry_max: int = 2
+    calls_per_day: int = 3000
+
+
+class MemoryV2StatesConfig(BaseModel):
+    enabled: bool = True
+    max_items: int = 12
+    max_chars_per_item: int = 48
+    key_max_chars: int = 24
+
+
+class MemoryV2EventsConfig(BaseModel):
+    enabled: bool = True
+    inject_top_k: int = 3
+    summary_max_chars: int = 300
+    vector_enabled: bool = False
+    rerank_enabled: bool = False
+    rerank_candidates: int = 12
+
+
+class MemoryV2CommitmentConfig(BaseModel):
+    enabled: bool = True
+    scan_default_sec: int = 14400
+    scan_max_sec: int = 14400
+    scan_min_sec: int = 300
+    scan_lookback_hours: int = 24
+    scan_model: str = ""
+    scan_timeout_sec: float = 20
+    inject_max: int = 2
+    extract_max_new: int = 3
+    current_max_chars: int = 200
+    stale_after_sec: int = 2592000
+
+
+class MemoryV2Config(BaseModel):
+    enabled: bool = True
+    storage: MemoryV2StorageConfig = Field(default_factory=MemoryV2StorageConfig)
+    extractor: MemoryV2ExtractorConfig = Field(default_factory=MemoryV2ExtractorConfig)
+    states: MemoryV2StatesConfig = Field(default_factory=MemoryV2StatesConfig)
+    events: MemoryV2EventsConfig = Field(default_factory=MemoryV2EventsConfig)
+    commitment: MemoryV2CommitmentConfig = Field(default_factory=MemoryV2CommitmentConfig)
+    trace_enabled: bool = True
+
+
 class PlannerConfig(BaseModel):
     """Big-LLM intent planner (separate from memory extractor)."""
 
@@ -199,7 +259,7 @@ class ListenConfig(BaseModel):
 
 
 class TokenBudgetConfig(BaseModel):
-    state: int = 300
+    state: int = 400
     memory: int = 250
     knowledge: int = 250
     history: int = 700
@@ -375,6 +435,7 @@ class AppConfig(BaseModel):
     conversation: ConversationConfig = Field(default_factory=ConversationConfig)
     knowledge: KnowledgeConfig = Field(default_factory=KnowledgeConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    memory_v2: MemoryV2Config = Field(default_factory=MemoryV2Config)
     planner: PlannerConfig = Field(default_factory=PlannerConfig)
     listen: ListenConfig = Field(default_factory=ListenConfig)
     proactive: ProactiveConfig = Field(default_factory=ProactiveConfig)

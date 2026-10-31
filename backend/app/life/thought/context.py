@@ -94,10 +94,18 @@ def gather_context(
 
 def _state_lines(state: "AppState") -> tuple[str, ...]:
     store = getattr(state, "state_store", None)
-    if store is None:
+    if store is not None:
+        try:
+            return tuple(str(line).strip() for line in store.texts() if str(line).strip())
+        except Exception:
+            return ()
+    memory_v2 = getattr(state, "memory_v2", None)
+    if memory_v2 is None:
+        memory_v2 = getattr(getattr(state, "orchestrator", None), "memory_v2", None)
+    if memory_v2 is None:
         return ()
     try:
-        return tuple(str(line).strip() for line in store.texts() if str(line).strip())
+        return tuple(str(line).strip() for line in memory_v2.live_states() if str(line).strip())
     except Exception:
         return ()
 
