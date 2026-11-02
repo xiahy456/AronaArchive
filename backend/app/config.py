@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 def resolve_backend_dir() -> Path:
@@ -50,6 +50,10 @@ class NapcatConfig(BaseModel):
     user_qq_id: str = ""
     napcat_ws_path: str = "/arona"
     napcat_token: str = ""
+    # Quiet after the last inbound message before a draft is generated.
+    idle_generate_sec: float = 4.0
+    # Quiet after the last inbound message before that draft is sent, clause by clause.
+    idle_deliver_sec: float = 16.0
 
     @field_validator("user_qq_id", "napcat_token", mode="before")
     @classmethod
@@ -65,6 +69,23 @@ class NapcatConfig(BaseModel):
         if not text.startswith("/"):
             text = "/" + text
         return text
+
+    @field_validator("idle_generate_sec", "idle_deliver_sec", mode="before")
+    @classmethod
+    def _non_negative(cls, value: object) -> float:
+        try:
+            seconds = float(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return 0.0
+        return max(0.0, seconds)
+
+    @model_validator(mode="after")
+    def _deliver_after_generate(self) -> NapcatConfig:
+        if self.idle_deliver_sec <= self.idle_generate_sec:
+            raise ValueError(
+                "napcat.idle_deliver_sec must be greater than napcat.idle_generate_sec"
+            )
+        return self
 
 
 class ServerConfig(BaseModel):

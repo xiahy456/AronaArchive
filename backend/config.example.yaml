@@ -296,3 +296,7 @@ napcat:
   napcat_ws_path: "/arona"
   # Napcat websocket client 的 token，对应 Authorization: Bearer。与 server.token 分开
   napcat_token: ""
+  # 距最后一条消息静默这么久后开始生成；期间再来消息会顺延
+  idle_generate_sec: 4
+  # 距最后一条消息静默这么久后才分句发出。必须大于 idle_generate_sec
+  idle_deliver_sec: 16

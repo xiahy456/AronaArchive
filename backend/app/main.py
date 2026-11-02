@@ -47,7 +47,7 @@ from .proactive import ConnectionHub, ProactiveScheduler, WelcomeState
 from .relationship import RelationshipEngine, RelationshipSettings
 from .stance.stance_loop import review_day, run_stance_loop
 from .stance.stance_store import StanceStore
-from .napcat import NapcatLink, QqInbox, napcat_endpoint
+from .napcat import NapcatLink, QqPipeline, napcat_endpoint
 from .ws_auth import startup_token_error
 from .ws_handler import AppState, websocket_endpoint
 
@@ -315,7 +315,7 @@ def create_app() -> FastAPI:
     state.glance_request_id = ""
     state.napcat = NapcatLink(config.napcat.user_qq_id)
     orchestrator.napcat = state.napcat
-    state.qq_inbox = QqInbox(state)
+    state.qq_inbox = QqPipeline(state, config.napcat)
     state.generation_kind = ""
     state.generation_owner = ""
     state.generation_interrupts = {}

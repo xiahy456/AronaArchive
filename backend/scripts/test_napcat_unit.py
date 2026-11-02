@@ -26,8 +26,16 @@ from app.config import NapcatConfig, load_config  # noqa: E402
 from app.conversation import ConversationManager, DialogueEntry, _format_transcript  # noqa: E402
 from app.life.impulse import _speak_impulse  # noqa: E402
 from app.life.state import Impulse, InnerState  # noqa: E402
-from app.napcat import NapcatLink, QqInbox, build_send_private, private_text_from_event, split_qq_clauses  # noqa: E402
+from app.napcat import (  # noqa: E402
+    NapcatLink,
+    QqPipeline,
+    SendOutcome,
+    build_send_private,
+    private_text_from_event,
+    split_qq_clauses,
+)
 from app.napcat.link import EMOJI_GAP_SEC, clause_gap_sec  # noqa: E402
+from app.orchestrator import ChatPlan  # noqa: E402
 from app.emoji_catalog import load_emoji_catalog, lookup_emoji, sticker_from_row  # noqa: E402
 from app.planner.prompts import (  # noqa: E402
     PLANNER_SYSTEM_BASE,
@@ -219,15 +227,18 @@ async def test_link_send() -> None:
     ws = _Ws()
     await link.bind(ws)  # type: ignore[arg-type]
     ok = await link.send_text("欢迎回来老师！今天想做什么？")
-    if not ok or len(ws.frames) != 2:
-        _fail(f"expected two frames, got {ws.frames}")
+    if not ok.completed or ok.interrupted or len(ws.frames) != 2:
+        _fail(f"expected two frames, got {ws.frames} outcome={ok}")
+    if ok.sent != ("欢迎回来老师！", "今天想做什么？") or ok.remainder:
+        _fail(f"outcome {ok}")
     if ws.frames[0]["params"]["message"][0]["data"]["text"] != "欢迎回来老师！":
         _fail("first clause")
     if ws.frames[1]["params"]["message"][0]["data"]["text"] != "今天想做什么？":
         _fail("second clause")
     down = NapcatLink("42", gap_sec=0)
-    if await down.send_text("在吗"):
-        _fail("disconnected link must not report success")
+    missed = await down.send_text("在吗")
+    if missed.completed or missed.sent or missed.remainder != "在吗":
+        _fail(f"disconnected link must keep the clause, got {missed}")
     print("link send ok")
 
 
@@ -324,171 +335,268 @@ async def test_offline_impulse() -> None:
     print("offline impulse ok")
 
 
-class _Chat:
+class _FastLink:
     def __init__(self) -> None:
+        self.connected = True
         self.texts: list[str] = []
 
-    async def handle_chat(self, **kwargs):
-        self.texts.append(kwargs["content"])
-        if kwargs.get("inbound_method") != "message":
-            _fail("qq turns must be marked message")
-        return True
+    async def send_text(self, text: str, *, emoji: object | None = None, interrupt: object = None):
+        del emoji, interrupt
+        self.texts.append(text)
+        return SendOutcome(tuple(split_qq_clauses(text)), "", True, False)
 
 
-async def test_coalesce() -> None:
-    orch = _Chat()
-    state = _State(_Orch("sent", "message"), _Engine(_impulse()), _Hub(), None)
-    state.orchestrator = orch
-    state.generation_kind = ""
-    state.generation_owner = ""
-    state.generation_interrupts = {}
-    inbox = QqInbox(state, coalesce_sec=0.05)
-    await inbox.push("第一句")
-    await inbox.push("第二句")
-    await asyncio.sleep(0.2)
-    if orch.texts != ["第一句\n第二句"]:
-        _fail(f"coalesce got {orch.texts}")
-    print("coalesce ok")
-
-
-class _GateChat:
-    """handle_chat that blocks on a per-call gate so tests can barge in."""
-
+class _PlanOrch:
     def __init__(self) -> None:
-        self.texts: list[str] = []
-        self.gates: list[asyncio.Event] = []
-        self.calls = 0
+        self.prepares: list[dict] = []
+        self.commits: list[dict] = []
+        self.hold: asyncio.Event | None = None
+        self.reply = "在的"
 
-    async def handle_chat(self, **kwargs):
-        self.calls += 1
-        if kwargs.get("inbound_method") != "message":
-            _fail("qq turns must be marked message")
-        gate = asyncio.Event()
-        self.gates.append(gate)
-        await gate.wait()
-        abort_check = kwargs.get("abort_check")
-        on_reply_ready = kwargs.get("on_reply_ready")
-        if abort_check is not None and abort_check():
-            return False
-        if on_reply_ready is not None:
-            on_reply_ready()
-        if abort_check is not None and abort_check():
-            return False
-        self.texts.append(kwargs["content"])
-        return True
+    def note_teacher_spoke(self, _text: str = "") -> None:
+        return None
 
+    def _drop_teacher_journal(self) -> None:
+        return None
 
-async def _wait_gates(orch: object, count: int, *, timeout: float = 2.0) -> None:
-    gates = getattr(orch, "gates")
-    deadline = time.monotonic() + timeout
-    while len(gates) < count:
-        if time.monotonic() >= deadline:
-            _fail(f"expected {count} chat gates, got {len(gates)}")
-        await asyncio.sleep(0.01)
-
-
-async def test_barge_in_merges() -> None:
-    orch = _GateChat()
-    state = _State(_Orch("sent", "message"), _Engine(_impulse()), _Hub(), None)
-    state.orchestrator = orch
-    state.generation_kind = ""
-    state.generation_owner = ""
-    state.generation_interrupts = {}
-    inbox = QqInbox(state, coalesce_sec=0.05)
-    await inbox.push("第一句")
-    await _wait_gates(orch, 1)
-    await inbox.push("第二句")
-    await _wait_gates(orch, 2)
-    orch.gates[-1].set()
-    deadline = time.monotonic() + 2.0
-    while not orch.texts and time.monotonic() < deadline:
-        await asyncio.sleep(0.01)
-    if orch.texts != ["第一句\n第二句"]:
-        _fail(f"barge-in merge got {orch.texts} calls={orch.calls}")
-    print("barge-in merge ok")
-
-
-async def test_after_ready_holds() -> None:
-    orch = _GateChat()
-    state = _State(_Orch("sent", "message"), _Engine(_impulse()), _Hub(), None)
-    state.orchestrator = orch
-    state.generation_kind = ""
-    state.generation_owner = ""
-    state.generation_interrupts = {}
-    inbox = QqInbox(state, coalesce_sec=0.05)
-    await inbox.push("第一句")
-    await _wait_gates(orch, 1)
-    # Seal before finishing so a late message must wait for the next window.
-    ready = orch.gates[0]
-    # Drive seal by finishing the first turn's abort-check path via on_reply_ready:
-    # release the gate; handle_chat seals then records the text.
-    ready.set()
-    deadline = time.monotonic() + 2.0
-    while not orch.texts and time.monotonic() < deadline:
-        await asyncio.sleep(0.01)
-    if orch.texts != ["第一句"]:
-        _fail(f"first turn should complete, got {orch.texts}")
-    # After the first turn finishes, _held from a mid-deliver push would release.
-    # Push while reply_ready during deliver: seal happens inside handle_chat before
-    # return, then _running clears. Push after completion starts a new coalesce.
-    await inbox.push("第二句")
-    await _wait_gates(orch, 2)
-    orch.gates[1].set()
-    deadline = time.monotonic() + 2.0
-    while len(orch.texts) < 2 and time.monotonic() < deadline:
-        await asyncio.sleep(0.01)
-    if orch.texts != ["第一句", "第二句"]:
-        _fail(f"after-ready next window got {orch.texts}")
-    print("after-ready hold ok")
-
-
-async def test_barge_in_after_seal_keeps_reply() -> None:
-    """Once on_reply_ready fires, a new message must not discard that reply."""
-
-    class _SealThenHoldChat:
-        def __init__(self) -> None:
-            self.texts: list[str] = []
-            self.gates: list[asyncio.Event] = []
-            self.calls = 0
-
-        async def handle_chat(self, **kwargs):
-            self.calls += 1
-            abort_check = kwargs.get("abort_check")
-            on_reply_ready = kwargs.get("on_reply_ready")
-            if on_reply_ready is not None:
-                on_reply_ready()
-            gate = asyncio.Event()
-            self.gates.append(gate)
+    async def prepare_chat(self, **kwargs):
+        self.prepares.append(kwargs)
+        if self.hold is not None:
+            gate = self.hold
+            self.hold = None
             await gate.wait()
-            if abort_check is not None and abort_check():
-                return False
-            self.texts.append(kwargs["content"])
-            return True
+        text = self.reply if len(self.prepares) == 1 else f"{self.reply}{len(self.prepares)}"
+        return ChatPlan(
+            session_id="qq",
+            user_text=str(kwargs.get("content") or ""),
+            action="speak",
+            text=text,
+            method="message",
+            emotion="normal",
+            context_used="planner",
+            inbound_method="message",
+            latency=0.01,
+        )
 
-    orch = _SealThenHoldChat()
-    state = _State(_Orch("sent", "message"), _Engine(_impulse()), _Hub(), None)
+    async def commit_chat(self, plan, *, spoken: str, delivered: bool, qq_parts=None, **_kwargs):
+        self.commits.append(
+            {
+                "action": plan.action,
+                "user": plan.user_text,
+                "spoken": spoken,
+                "delivered": delivered,
+                "parts": qq_parts,
+            }
+        )
+
+
+def _qq_state(orch: _PlanOrch, link: object):
+    state = _State(_Orch("sent", "message"), _Engine(_impulse()), _Hub(), link)  # type: ignore[arg-type]
     state.orchestrator = orch
     state.generation_kind = ""
     state.generation_owner = ""
     state.generation_interrupts = {}
-    inbox = QqInbox(state, coalesce_sec=0.05)
-    await inbox.push("第一句")
-    await _wait_gates(orch, 1)
-    await inbox.push("第二句")
-    orch.gates[0].set()
-    deadline = time.monotonic() + 2.0
-    while not orch.texts and time.monotonic() < deadline:
+    state.scheduler = None
+    return state
+
+
+async def _wait_for(pred, what: str, timeout: float = 2.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if pred():
+            return
         await asyncio.sleep(0.01)
-    if orch.texts != ["第一句"]:
-        _fail(f"sealed reply must be kept, got {orch.texts} calls={orch.calls}")
-    await _wait_gates(orch, 2)
-    orch.gates[1].set()
-    deadline = time.monotonic() + 2.0
-    while len(orch.texts) < 2 and time.monotonic() < deadline:
-        await asyncio.sleep(0.01)
-    if orch.texts != ["第一句", "第二句"]:
-        _fail(f"held message should follow, got {orch.texts}")
-    print("after-seal keep reply ok")
+    _fail(what)
+
+
+async def test_send_interrupt_keeps_remainder() -> None:
+    import app.napcat.link as linkmod
+
+    original = linkmod.clause_gap_sec
+    linkmod.clause_gap_sec = lambda _text: 0.2
+    link = NapcatLink("42")
+    ws = _Ws()
+    await link.bind(ws)  # type: ignore[arg-type]
+    interrupt = asyncio.Event()
+
+    async def _stop() -> None:
+        await _wait_for(lambda: len(ws.frames) >= 1, "first clause")
+        interrupt.set()
+
+    stopper = asyncio.create_task(_stop())
+    try:
+        outcome = await link.send_text("你好呀。我还在。", interrupt=interrupt)
+        await stopper
+    finally:
+        linkmod.clause_gap_sec = original
+    if not outcome.interrupted or outcome.completed:
+        _fail(f"interrupt outcome {outcome}")
+    if outcome.sent != ("你好呀",) or outcome.remainder != "我还在":
+        _fail(f"split remainder {outcome}")
+    if len(ws.frames) != 1:
+        _fail(f"stopped send should keep one frame, got {ws.frames}")
+    print("send interrupt ok")
+
+
+async def test_quiet_batches_then_delivers() -> None:
+    orch = _PlanOrch()
+    link = _FastLink()
+    pipe = QqPipeline(_qq_state(orch, link), generate_sec=0.06, deliver_sec=0.18)
+    try:
+        await pipe.push("第一句", message_id="1")
+        await pipe.push("第二句", message_id="2")
+        await asyncio.sleep(0.02)
+        if orch.prepares:
+            _fail(f"generate started too early {orch.prepares!r}")
+        await _wait_for(lambda: len(orch.prepares) == 1, "prepare did not start")
+        ctx = orch.prepares[0]["turn_context"]
+        if orch.prepares[0]["content"] != "第一句\n第二句" or ctx.inputs != ("第一句", "第二句"):
+            _fail(f"batched input {orch.prepares[0]!r}")
+        if orch.commits or link.texts:
+            _fail("delivered before the long quiet")
+        await _wait_for(lambda: len(orch.commits) == 1, "commit did not happen")
+    finally:
+        await pipe.close()
+    if link.texts != ["在的"]:
+        _fail(f"sent {link.texts}")
+    commit = orch.commits[0]
+    if not commit["delivered"] or commit["spoken"] != "在的":
+        _fail(f"commit {commit}")
+    if commit["parts"] != [
+        {"message_id": "1", "text": "第一句"},
+        {"message_id": "2", "text": "第二句"},
+    ]:
+        _fail(f"parts {commit['parts']}")
+    if len(orch.prepares) != 1 or len(orch.commits) != 1:
+        _fail(f"one prepare and one commit, got {len(orch.prepares)} {len(orch.commits)}")
+    print("quiet batch ok")
+
+
+async def test_slow_draft_waits_for_text() -> None:
+    orch = _PlanOrch()
+    gate = asyncio.Event()
+    orch.hold = gate
+    link = _FastLink()
+    pipe = QqPipeline(_qq_state(orch, link), generate_sec=0.04, deliver_sec=0.08)
+    try:
+        await pipe.push("在吗", message_id="1")
+        await _wait_for(lambda: bool(orch.prepares), "prepare did not start")
+        await asyncio.sleep(0.12)
+        if link.texts or orch.commits:
+            _fail("must not send before the draft exists")
+        gate.set()
+        await _wait_for(lambda: bool(orch.commits), "commit after slow draft")
+    finally:
+        await pipe.close()
+    if not orch.commits[0]["delivered"]:
+        _fail(f"slow draft {orch.commits}")
+    print("slow draft ok")
+
+
+async def test_message_during_generate_rewrites() -> None:
+    orch = _PlanOrch()
+    gate = asyncio.Event()
+    orch.hold = gate
+    link = _FastLink()
+    pipe = QqPipeline(_qq_state(orch, link), generate_sec=0.05, deliver_sec=0.4)
+    try:
+        await pipe.push("第一句", message_id="1")
+        await _wait_for(lambda: bool(orch.prepares), "first prepare")
+        await pipe.push("第二句", message_id="2")
+        gate.set()
+        await _wait_for(lambda: len(orch.prepares) >= 2, "rewrite prepare")
+        second = orch.prepares[1]
+    finally:
+        await pipe.close()
+    if second["content"] != "第一句\n第二句":
+        _fail(f"rewrite content {second['content']!r}")
+    ctx = second["turn_context"]
+    if ctx.carry != "在的" or ctx.sent:
+        _fail(f"old draft should be the carry, got sent={ctx.sent!r} carry={ctx.carry!r}")
+    print("generate rewrite ok")
+
+
+async def test_message_during_send_keeps_unsent() -> None:
+    import app.napcat.link as linkmod
+
+    original = linkmod.clause_gap_sec
+    linkmod.clause_gap_sec = lambda _text: 0.35
+    orch = _PlanOrch()
+    orch.reply = "你好呀。我还在。"
+    link = NapcatLink("42")
+    ws = _Ws()
+    await link.bind(ws)  # type: ignore[arg-type]
+    pipe = QqPipeline(_qq_state(orch, link), generate_sec=0.04, deliver_sec=0.07)
+    try:
+        await pipe.push("第一句", message_id="1")
+        await _wait_for(lambda: len(ws.frames) >= 1, "first clause on the wire")
+        await pipe.push("第二句", message_id="2")
+        await _wait_for(lambda: len(orch.prepares) >= 2, "rewrite after interrupt")
+        ctx = orch.prepares[1]["turn_context"]
+    finally:
+        linkmod.clause_gap_sec = original
+        await pipe.close()
+    if ctx.sent != "你好呀" or "我还在" not in ctx.carry:
+        _fail(f"partial send context sent={ctx.sent!r} carry={ctx.carry!r}")
+    if orch.prepares[1]["content"] != "第一句\n第二句":
+        _fail(orch.prepares[1]["content"])
+    first = ws.frames[0]["params"]["message"][0]["data"]["text"]
+    if first != "你好呀":
+        _fail(f"first frame {first!r}")
+    print("send interrupt rewrite ok")
+
+
+async def test_recall_regenerates_remaining() -> None:
+    orch = _PlanOrch()
+    link = _FastLink()
+    pipe = QqPipeline(_qq_state(orch, link), generate_sec=0.05, deliver_sec=0.5)
+    try:
+        await pipe.push("留下", message_id="keep")
+        await pipe.push("撤回我", message_id="drop")
+        await pipe.recall("drop")
+        await _wait_for(lambda: bool(orch.prepares), "prepare after buffered recall")
+        if orch.prepares[0]["content"] != "留下":
+            _fail(f"buffered recall content {orch.prepares[0]['content']!r}")
+        await pipe.close()
+
+        orch = _PlanOrch()
+        link = _FastLink()
+        pipe = QqPipeline(_qq_state(orch, link), generate_sec=0.05, deliver_sec=0.5)
+        await pipe.push("进行中", message_id="a")
+        await pipe.push("也留下", message_id="b")
+        await _wait_for(lambda: len(orch.prepares) == 1, "covered draft")
+        await pipe.recall("a")
+        await _wait_for(lambda: len(orch.prepares) >= 2, "regen after covered recall")
+        latest = orch.prepares[-1]
+    finally:
+        await pipe.close()
+    if latest["content"] != "也留下":
+        _fail(f"remaining content {latest['content']!r}")
+    if latest["turn_context"].carry != "在的":
+        _fail(f"recalled draft carry {latest['turn_context']!r}")
+    print("recall regen ok")
+
+
+def test_turn_context_prompt() -> None:
+    from app.planner.prompts import TurnContext, build_planner_user_message
+
+    msg = build_planner_user_message(
+        user_text="第二句",
+        history=[],
+        memories=[],
+        knowledge=[],
+        teacher_method="message",
+        turn_context=TurnContext(inputs=("第一句", "第二句"), sent="已经说了", carry="还没发出"),
+    )
+    if "【老师本轮消息】" not in msg or "[QQ消息] 第一句" not in msg or "[QQ消息] 第二句" not in msg:
+        _fail(f"turn inputs missing\n{msg}")
+    if "【本轮已发出去的回复】" not in msg or "已经说了" not in msg:
+        _fail("sent block missing")
+    if "【上一版尚未发出的回复草稿】" not in msg or "还没发出" not in msg:
+        _fail("carry block missing")
+    if "不得重复" not in msg:
+        _fail("rewrite rule missing")
+    print("turn context prompt ok")
 
 
 def test_emoji_catalog() -> None:
@@ -587,8 +695,8 @@ async def test_emoji_send() -> None:
     ws = _Ws()
     await link.bind(ws)  # type: ignore[arg-type]
     ok = await link.send_text("欢迎回来老师！今天想做什么？", emoji=sticker)
-    if not ok or len(ws.frames) != 3:
-        _fail(f"expected two texts then mface, got {ws.frames}")
+    if not ok.completed or len(ws.frames) != 3:
+        _fail(f"expected two texts then mface, got {ws.frames} outcome={ok}")
     if ws.frames[0]["params"]["message"][0]["type"] != "text":
         _fail("first frame is text")
     if ws.frames[1]["params"]["message"][0]["type"] != "text":
@@ -606,7 +714,8 @@ async def test_emoji_send() -> None:
     alone = NapcatLink("42", gap_sec=0)
     sink = _Ws()
     await alone.bind(sink)  # type: ignore[arg-type]
-    if await alone.send_text("   ", emoji=sticker) or sink.frames:
+    blank = await alone.send_text("   ", emoji=sticker)
+    if blank.completed or sink.frames:
         _fail("no text clause must not send a sticker alone")
     print("emoji send ok")
 
@@ -872,44 +981,23 @@ def test_dialogue_recall() -> None:
     print("dialogue recall ok")
 
 
-async def test_inbox_recall() -> None:
-    orch = _Chat()
-    state = _State(_Orch("sent", "message"), _Engine(_impulse()), _Hub(), None)
-    state.orchestrator = orch
-    state.generation_kind = ""
-    state.generation_owner = ""
-    state.generation_interrupts = {}
-    inbox = QqInbox(state, coalesce_sec=0.05)
-    await inbox.push("留下", message_id="keep")
-    await inbox.push("撤回我", message_id="drop")
-    await inbox.recall("drop")
-    await asyncio.sleep(0.2)
-    if orch.texts != ["留下"]:
-        _fail(f"buffered recall got {orch.texts}")
-
-    gate = _GateChat()
-    state.orchestrator = gate
-    inbox2 = QqInbox(state, coalesce_sec=0.05)
-    await inbox2.push("进行中", message_id="a")
-    await inbox2.push("也留下", message_id="b")
-    await _wait_gates(gate, 1)
-    await inbox2.recall("a")
-    await _wait_gates(gate, 2)
-    for event in gate.gates:
-        event.set()
-    await asyncio.sleep(0.2)
-    if not gate.texts or gate.texts[-1] != "也留下":
-        _fail(f"final turn after recall should be remaining only, got {gate.texts}")
-    print("inbox recall ok")
-
-
 def test_config() -> None:
     cfg = NapcatConfig(user_qq_id=10001, napcat_ws_path="arona", napcat_token=" tok ")
     if cfg.user_qq_id != "10001" or cfg.napcat_ws_path != "/arona" or cfg.napcat_token != "tok":
         _fail(f"napcat config normalize {cfg}")
+    if cfg.idle_generate_sec != 4 or cfg.idle_deliver_sec != 16:
+        _fail(f"quiet defaults {cfg.idle_generate_sec} {cfg.idle_deliver_sec}")
+    try:
+        NapcatConfig(idle_generate_sec=10, idle_deliver_sec=10)
+    except Exception:
+        pass
+    else:
+        _fail("deliver quiet must be longer than generate quiet")
     loaded = load_config()
     if loaded.napcat.napcat_ws_path != "/arona":
         _fail("example yaml should default the napcat path")
+    if loaded.napcat.idle_deliver_sec <= loaded.napcat.idle_generate_sec:
+        _fail("loaded napcat quiet window is inverted")
     print("config ok")
 
 
@@ -928,11 +1016,13 @@ def main() -> None:
     asyncio.run(test_emoji_send())
     asyncio.run(test_get_file_roundtrip())
     asyncio.run(test_offline_impulse())
-    asyncio.run(test_coalesce())
-    asyncio.run(test_inbox_recall())
-    asyncio.run(test_barge_in_merges())
-    asyncio.run(test_after_ready_holds())
-    asyncio.run(test_barge_in_after_seal_keeps_reply())
+    asyncio.run(test_send_interrupt_keeps_remainder())
+    asyncio.run(test_quiet_batches_then_delivers())
+    asyncio.run(test_slow_draft_waits_for_text())
+    asyncio.run(test_message_during_generate_rewrites())
+    asyncio.run(test_message_during_send_keeps_unsent())
+    asyncio.run(test_recall_regenerates_remaining())
+    test_turn_context_prompt()
     print("napcat unit ok")
 
 

@@ -27,10 +27,17 @@ def _fail(msg: str) -> None:
 def _orchestrator() -> Orchestrator:
     model = MagicMock()
     model.generate.side_effect = AssertionError("generate must not be called")
+    conversations = MagicMock()
+    # Silent turns reach the extract gate, so the dialogue counters must be ints.
+    conversations.turn_count.return_value = 0
+    conversations.extract_window_turn_count.return_value = 0
+    conversations.extract_window_transcript.return_value = ""
+    conversations.extract_window_user_texts.return_value = []
+    conversations.get_history.return_value = []
     return Orchestrator(
         AppConfig(model=ModelConfig(enabled=False)),
         model=model,
-        conversations=MagicMock(),
+        conversations=conversations,
         memory_store=MagicMock(),
         extractor=MagicMock(),
         knowledge=MagicMock(),

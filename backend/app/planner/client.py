@@ -31,6 +31,7 @@ from ..safety import is_crisis_text
 from ..logging_utils import update_trace
 from .prompts import (
     PLANNER_SYSTEM_CRISIS,
+    TurnContext,
     build_planner_user_message,
     select_planner_system,
 )
@@ -98,6 +99,7 @@ class PlannerClient:
         motive_block: str = "",
         stage: str = "",
         patch: str = "",
+        turn_context: TurnContext | None = None,
     ) -> IntentCard | None:
         if not self.enabled:
             logger.info("planner skipped reason=disabled_or_no_key")
@@ -122,6 +124,7 @@ class PlannerClient:
             teacher_method=teacher_method,
             channels_block=channels_block,
             motive_block=motive_block,
+            turn_context=turn_context,
         )
         if photos:
             model = (self.config.vision_model or "").strip() or self.config.model

@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 
 from ..channel import method_label
@@ -290,6 +291,79 @@ def build_thought_motive_block(about: str, why: str) -> str:
     )
 
 
+@dataclass(frozen=True)
+class TurnContext:
+    """One QQ round still being rewritten. Empty fields are omitted from the prompt."""
+
+    inputs: tuple[str, ...] = ()
+    sent: str = ""
+    carry: str = ""
+
+
+def fold_turn_context(user_text: str, turn_context: TurnContext | None) -> str:
+    """Local-model user text: every line of this round, plus any unsent draft."""
+    if turn_context is None:
+        return user_text
+    parts = [text.strip() for text in turn_context.inputs if (text or "").strip()]
+    body = "\n".join(parts) if parts else user_text
+    extra: list[str] = []
+    sent = (turn_context.sent or "").strip()
+    carry = (turn_context.carry or "").strip()
+    if sent:
+        extra.append(f"【本轮已发出去的回复】\n{sent}\n不要重复上面已经发出的句子。")
+    if carry:
+        extra.append(
+            "【上一版尚未发出的回复草稿】\n"
+            f"{carry}\n"
+            "请结合新消息整体改写，不要原样重发。"
+        )
+    if not extra:
+        return body
+    return body + "\n\n" + "\n\n".join(extra)
+
+
+def _teacher_turn_section(
+    user_text: str,
+    teacher_method: str | None,
+    turn_context: TurnContext | None,
+) -> str:
+    """List every teacher line of this round, plus any reply already spoken or drafted."""
+    lines: list[str] = []
+    raw_inputs = turn_context.inputs if turn_context is not None else ()
+    for raw in raw_inputs:
+        text = (raw or "").strip()
+        if not text:
+            continue
+        if teacher_method is not None:
+            text = f"[{method_label(teacher_method)}] {text}"
+        lines.append(text)
+    if not lines:
+        teacher_line = (user_text or "").strip()
+        if teacher_method is not None and teacher_line:
+            teacher_line = f"[{method_label(teacher_method)}] {teacher_line}"
+        if teacher_line:
+            lines.append(teacher_line)
+    body = "\n".join(lines) if lines else "（无）"
+    section = f"【老师本轮消息】\n{body}\n\n"
+    if turn_context is None:
+        return section
+    sent = (turn_context.sent or "").strip()
+    carry = (turn_context.carry or "").strip()
+    if sent:
+        section += (
+            "【本轮已发出去的回复】\n"
+            "下面这些句子老师已经看到了，不要重复。\n"
+            f"{sent}\n\n"
+        )
+    if carry:
+        section += (
+            "【上一版尚未发出的回复草稿】\n"
+            "老师在你说话时又补充了消息。请结合本轮全部消息整体改写，不要原样重发。\n"
+            f"{carry}\n\n"
+        )
+    return section
+
+
 def build_planner_user_message(
     *,
     user_text: str,
@@ -308,6 +382,7 @@ def build_planner_user_message(
     teacher_method: str | None = None,
     channels_block: str = "",
     motive_block: str = "",
+    turn_context: TurnContext | None = None,
 ) -> str:
     labeled = (memory_block or "").strip()
     if labeled:
@@ -389,10 +464,15 @@ def build_planner_user_message(
     if motive:
         turn_section = f"{motive}\n\n"
     else:
-        teacher_line = user_text.strip()
-        if teacher_method is not None:
-            teacher_line = f"[{method_label(teacher_method)}] {teacher_line}"
-        turn_section = f"【老师本轮消息】\n{teacher_line}\n\n"
+        turn_section = _teacher_turn_section(user_text, teacher_method, turn_context)
+        sent = (turn_context.sent or "").strip() if turn_context is not None else ""
+        carry = (turn_context.carry or "").strip() if turn_context is not None else ""
+        if sent or carry:
+            closing += (
+                "老师在你说话期间又补充了消息。draft 必须结合【老师本轮消息】里的全部内容重写，"
+                "衔接【本轮已发出去的回复】，不得重复其中已经发出的句子，"
+                "也不要原样重发【上一版尚未发出的回复草稿】。\n"
+            )
     state_section = ""
     if (state_block or "").strip():
         state_section = f"{state_block.strip()}\n\n"

@@ -18,8 +18,8 @@
 """QQ private chat through a Napcat reverse WebSocket."""
 
 from .endpoint import napcat_endpoint
-from .inbox import COALESCE_SEC, QqInbox
-from .link import EMOJI_GAP_SEC, NapcatLink, clause_gap_sec
+from .link import EMOJI_GAP_SEC, NapcatLink, SendOutcome, clause_gap_sec
+from .pipeline import QqPipeline
 from .protocol import (
     build_send_private,
     friend_recall_from_event,
@@ -29,10 +29,10 @@ from .protocol import (
 from .split import split_qq_clauses
 
 __all__ = [
-    "COALESCE_SEC",
     "EMOJI_GAP_SEC",
     "NapcatLink",
-    "QqInbox",
+    "QqPipeline",
+    "SendOutcome",
     "build_send_private",
     "clause_gap_sec",
     "friend_recall_from_event",

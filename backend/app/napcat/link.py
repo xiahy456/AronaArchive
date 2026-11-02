@@ -24,6 +24,7 @@ import json
 import logging
 import random
 import uuid
+from dataclasses import dataclass
 from typing import Any
 
 from fastapi import WebSocket
@@ -34,6 +35,16 @@ from .split import split_qq_clauses
 logger = logging.getLogger(__name__)
 
 EMOJI_GAP_SEC = 0.5
+
+
+@dataclass(frozen=True)
+class SendOutcome:
+    """What a clause stream managed to put on the wire."""
+
+    sent: tuple[str, ...]
+    remainder: str
+    completed: bool
+    interrupted: bool = False
 
 
 def clause_gap_sec(next_text: str) -> float:
@@ -139,31 +150,67 @@ class NapcatLink:
             return None
         return result
 
-    async def send_text(self, text: str, *, emoji: object | None = None) -> bool:
-        """Send every clause, then one sticker. False if text never finishes."""
+    async def _wait_gap(self, seconds: float, interrupt: asyncio.Event | None) -> bool:
+        """True when the gap elapsed. False when interrupt is set."""
+        if interrupt is not None and interrupt.is_set():
+            return False
+        if seconds <= 0:
+            return True
+        if interrupt is None:
+            await asyncio.sleep(seconds)
+            return True
+        try:
+            await asyncio.wait_for(interrupt.wait(), seconds)
+        except asyncio.TimeoutError:
+            return True
+        return False
+
+    async def send_text(
+        self,
+        text: str,
+        *,
+        emoji: object | None = None,
+        interrupt: asyncio.Event | None = None,
+    ) -> SendOutcome:
+        """Send clauses in order. A raised interrupt keeps the unsent tail."""
         clauses = split_qq_clauses(text)
         if not clauses or not self.user_qq_id:
-            return False
+            return SendOutcome((), "", False, False)
+        sent: list[str] = []
         async with self._send_lock:
             ws = self._ws
             if ws is None:
-                return False
+                return SendOutcome((), "\n".join(clauses), False, False)
+
+            def _stop(index: int, *, interrupted: bool) -> SendOutcome:
+                return SendOutcome(
+                    tuple(sent),
+                    "\n".join(clauses[index:]),
+                    False,
+                    interrupted,
+                )
+
             for index, clause in enumerate(clauses):
+                if interrupt is not None and interrupt.is_set():
+                    return _stop(index, interrupted=True)
                 if index and self._gaps_enabled:
-                    await asyncio.sleep(clause_gap_sec(clause))
-                if not await self._send_frame(ws, build_send_private(self.user_qq_id, clause)):
-                    return False
+                    if not await self._wait_gap(clause_gap_sec(clause), interrupt):
+                        return _stop(index, interrupted=True)
+                frame = build_send_private(self.user_qq_id, clause)
+                if not await self._send_frame(ws, frame):
+                    return _stop(index, interrupted=False)
+                sent.append(clause)
             if emoji is None:
-                return True
-            if self._gaps_enabled:
-                await asyncio.sleep(EMOJI_GAP_SEC)
+                return SendOutcome(tuple(sent), "", True, False)
+            if self._gaps_enabled and not await self._wait_gap(EMOJI_GAP_SEC, interrupt):
+                # Text is already out. The new message must be answered separately.
+                return SendOutcome(tuple(sent), "", False, True)
             sticker = _sticker_frame(self.user_qq_id, emoji)
             if sticker is None:
-                return True
+                return SendOutcome(tuple(sent), "", True, False)
             if not await self._send_frame(ws, sticker):
                 logger.info("napcat emoji undelivered after text")
-                return True
-            return True
+            return SendOutcome(tuple(sent), "", True, False)
 
     async def _send_frame(self, ws: WebSocket, frame: dict) -> bool:
         if self._ws is not ws:

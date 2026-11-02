@@ -118,17 +118,26 @@ from .ws_auth import reject_unauthorized
 logger = logging.getLogger(__name__)
 
 
+def _wake_qq(state: AppState) -> None:
+    inbox = state.qq_inbox
+    if inbox is None:
+        return
+    wake = getattr(inbox, "on_client_idle", None) or getattr(inbox, "on_generation_idle", None)
+    if wake is not None:
+        wake()
+
+
 def _mark_generation(state: AppState, session_id: str, kind: str | None) -> None:
     if kind:
         state.generation_kind = kind
         state.generation_owner = session_id
+        if kind != "qq":
+            _wake_qq(state)
         return
     if state.generation_owner == session_id:
         state.generation_kind = ""
         state.generation_owner = ""
-        inbox = state.qq_inbox
-        if inbox is not None:
-            inbox.on_generation_idle()
+        _wake_qq(state)
 
 
 def _qq_busy(state: AppState) -> bool:

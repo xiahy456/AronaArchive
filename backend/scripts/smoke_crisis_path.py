@@ -114,6 +114,9 @@ def _isolate_config(tmp: Path):
     cfg.memory.db_path = str(tmp / "memory.db")
     cfg.memory.chroma_path = str(tmp / "chroma")
     cfg.proactive.relationship.persist_path = str(tmp / "relationship.json")
+    # The assertion checks the crisis user_act, which is only written when the
+    # relationship engine is on. Isolate that from the local yaml switch.
+    cfg.proactive.relationship.enabled = True
     cfg.knowledge.enabled = False
     return cfg
 

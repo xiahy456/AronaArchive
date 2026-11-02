@@ -473,14 +473,16 @@ python scripts/migrate_memory_v2.py --restore data/memory_v1_backup_20261031T014
 
 ### `napcat`
 
-私聊文本先按约 10s 静默窗口合并；窗口到期后送入大模型。生成尚未返回时若老师又发来消息，会丢弃本轮结果、并入本轮后立刻重请求；模型已返回则照常投递，新消息按下一窗口处理。
+私聊按「最后一条消息」计时。静默满 `idle_generate_sec` 才开始生成；生成期间又来消息则本轮草稿作废，连同新消息重新生成。静默满 `idle_deliver_sec` 才把已就绪的草稿分句发出。分句之间有按字数随机的间隔，间隔中仍收消息：新消息会停掉还没发出的分句，已发部分保留，未发部分作为旧生成和新消息一起重新生成。一轮里老师发过的全部消息在落库时写成一条用户记录。
 
 
-| 配置项              | 默认       | 说明                                                                                          |
-| ---------------- | -------- | ------------------------------------------------------------------------------------------- |
-| `user_qq_id`     | 空        | 老师的 QQ 号，只向这个号发私聊。空则挂上反向 WebSocket，但不收不发                                              |
-| `napcat_ws_path` | `/arona` | Napcat 作为 WebSocket 客户端连入的路径，与桌面客户端共用 `server.port`                                       |
-| `napcat_token`   | 空        | Napcat websocket client 的 `token`，请求头为 `Authorization: Bearer`。与 `server.token` 分开。空令牌的放行规则与 `server.token` 相同 |
+| 配置项                  | 默认       | 说明                                                                                          |
+| -------------------- | -------- | ------------------------------------------------------------------------------------------- |
+| `user_qq_id`         | 空        | 老师的 QQ 号，只向这个号发私聊。空则挂上反向 WebSocket，但不收不发                                              |
+| `napcat_ws_path`     | `/arona` | Napcat 作为 WebSocket 客户端连入的路径，与桌面客户端共用 `server.port`                                       |
+| `napcat_token`       | 空        | Napcat websocket client 的 `token`，请求头为 `Authorization: Bearer`。与 `server.token` 分开。空令牌的放行规则与 `server.token` 相同 |
+| `idle_generate_sec`  | `4`      | 距最后一条入站消息静默这么久后开始生成。期间再来消息会顺延                                                       |
+| `idle_deliver_sec`   | `16`     | 距最后一条入站消息静默这么久后才分句发出已就绪的草稿。必须大于 `idle_generate_sec`。危机回复不等这个静默，生成完即发 |
 
 
 
