@@ -178,7 +178,7 @@ def test_backup_migrate_restore() -> None:
         for banned in ("memories", "state_items", "day_summaries"):
             if banned in names:
                 _fail(f"v1 table still present: {banned}")
-        for required in ("events", "states", "commitments", "state_keys", "scan_state"):
+        for required in ("events", "states", "commitments", "scan_state"):
             if required not in names:
                 _fail(f"missing v2 table {required}")
         conn = sqlite3.connect(memory_dir / "memory.db")
@@ -234,9 +234,141 @@ def test_backup_only_cli() -> None:
     print("  ok")
 
 
+def _seed_old_states(memory_dir: Path) -> None:
+    memory_dir.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(memory_dir / "memory.db")
+    conn.execute(
+        """
+        CREATE TABLE events (
+            id TEXT PRIMARY KEY,
+            summary TEXT NOT NULL,
+            occurred_at REAL NOT NULL,
+            recorded_at REAL NOT NULL,
+            importance INTEGER NOT NULL,
+            source_turn TEXT
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO events (id, summary, occurred_at, recorded_at, importance) "
+        "VALUES ('e1', '老师喜欢蓝色。', 1, 1, 5)"
+    )
+    conn.execute(
+        """
+        CREATE TABLE states (
+            id INTEGER PRIMARY KEY,
+            key TEXT,
+            value TEXT,
+            valid_from REAL,
+            valid_until REAL,
+            importance INTEGER,
+            recorded_at REAL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE TABLE state_keys (key TEXT PRIMARY KEY, first_seen REAL)"
+    )
+    conn.execute("INSERT INTO state_keys (key, first_seen) VALUES ('location', 1)")
+    rows = [
+        ("location", "老师人在广州", 10, None, 8, 20),
+        ("location", "老师人在上海", 11, None, 9, 15),
+        ("location", "老师人在北京", 12, None, 9, 30),
+        ("routine", "老师保持远程工作", 1, 100, 7, 10),
+        ("mood", "老师心情平稳", 1, None, 6, 10),
+        ("health", "老师身体稳定", 5, None, 7, 8),
+    ]
+    conn.executemany(
+        """
+        INSERT INTO states (key, value, valid_from, valid_until, importance, recorded_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        rows,
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_states_rebuild() -> None:
+    print("== rebuild states ==")
+    from scripts.migrate_memory_v2_states import main as states_main
+
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        root = Path(tmp)
+        memory_dir = root / "memory"
+        _seed_old_states(memory_dir)
+        before = _sha(memory_dir / "memory.db")
+        states_main(["--backup-only", "--data-dir", str(root), "--no-check-running"])
+        if _sha(memory_dir / "memory.db") != before:
+            _fail("states backup-only modified memory.db")
+        states_main(["--data-dir", str(root), "--no-check-running"])
+        conn = sqlite3.connect(memory_dir / "memory.db")
+        columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(states)")}
+        kept = {
+            str(row[0]): (str(row[1]), float(row[2]), float(row[3]), int(row[4]))
+            for row in conn.execute(
+                "SELECT key, value, created_at, updated_at, active FROM states"
+            )
+        }
+        events = conn.execute("SELECT summary FROM events").fetchone()
+        names = {
+            str(row[0])
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+        }
+        conn.close()
+        if "updated_at" not in columns or "created_at" not in columns:
+            _fail(f"new states columns missing: {columns}")
+        if "state_keys" in names:
+            _fail("state_keys should be dropped")
+        if set(kept) != {"location", "health"}:
+            _fail(f"wrong keys kept: {kept}")
+        if kept["location"][0] != "老师人在北京" or kept["location"][1] != 12 or kept["location"][2] != 30:
+            _fail(f"location should keep the newest high-importance row: {kept['location']}")
+        if kept["health"][0] != "老师身体稳定" or kept["health"][3] != 1:
+            _fail(f"health row was not mapped: {kept['health']}")
+        if events is None or str(events[0]) != "老师喜欢蓝色。":
+            _fail("events must stay untouched")
+        report_path = root / "memory_state_backup_20260101T000000"
+        reports = list(root.glob("memory_state_backup*/states_migration_report.json"))
+        if len(reports) != 1:
+            _fail(f"expected one states report, found {reports}")
+        report = json.loads(reports[0].read_text(encoding="utf-8"))
+        if report["kept"] != 2 or report["source_rows"] != 6 or report["deduped"] != 2:
+            _fail(f"report counts are wrong: {report}")
+        del report_path
+        try:
+            states_main(["--data-dir", str(root), "--no-check-running"])
+        except SystemExit as exc:
+            if "restore" not in str(exc):
+                _fail(f"repeat states migration should mention --restore: {exc}")
+        else:
+            _fail("repeat states migration must be refused")
+        backup = reports[0].parent
+        states_main(["--restore", str(backup), "--data-dir", str(root), "--no-check-running"])
+        restored = _columns_states(memory_dir / "memory.db")
+        if "updated_at" in restored:
+            _fail("restore should bring back the old states table")
+        conn = sqlite3.connect(memory_dir / "memory.db")
+        count = int(conn.execute("SELECT COUNT(*) FROM states").fetchone()[0])
+        conn.close()
+        if count != 6:
+            _fail(f"restore should bring all six rows back, got {count}")
+    print("  ok")
+
+
+def _columns_states(path: Path) -> set[str]:
+    conn = sqlite3.connect(path)
+    try:
+        rows = conn.execute("PRAGMA table_info(states)").fetchall()
+    finally:
+        conn.close()
+    return {str(row[1]) for row in rows}
+
+
 def main() -> None:
     test_backup_migrate_restore()
     test_backup_only_cli()
+    test_states_rebuild()
     print("all migration checks passed")
 
 

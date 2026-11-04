@@ -32,9 +32,8 @@ from app.safety import is_crisis_text
 
 from .commitments import CommitmentBook
 from .events import EventLog
-from .prompts import commitment_system, event_system, state_system
+from .prompts import commitment_system, event_system
 from .retrieve import EventRetriever
-from .states import StateBook
 from .trace import TraceLog
 from .util import (
     api_key_ready,
@@ -43,7 +42,6 @@ from .util import (
     loads_json_object,
     parse_timestamp,
     truncate_at_sentence,
-    valid_state_key,
 )
 
 logger = logging.getLogger(__name__)
@@ -95,7 +93,6 @@ class Extractor:
         self,
         *,
         events: EventLog,
-        states: StateBook,
         commitments: CommitmentBook,
         retriever: EventRetriever,
         trace: TraceLog,
@@ -103,7 +100,6 @@ class Extractor:
         api_key: str,
         model: str,
         timeout_sec: float = 15,
-        state_model: str = "",
         commitment_model: str = "",
         window_max_turns: int = 40,
         window_max_chars: int = 8000,
@@ -117,14 +113,12 @@ class Extractor:
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.events = events
-        self.states = states
         self.commitments = commitments
         self.retriever = retriever
         self.trace = trace
         self.base_url = base_url
         self.api_key = api_key
         self.model = model
-        self.state_model = state_model or model
         self.commitment_model = commitment_model or model
         self.timeout_sec = float(timeout_sec)
         self.window_max_turns = int(window_max_turns)
@@ -197,12 +191,11 @@ class Extractor:
         now = self._clock()
         results = await asyncio.gather(
             self._run_layer("events", lambda: self._extract_events(transcript, now)),
-            self._run_layer("states", lambda: self._extract_states(transcript, now)),
             self._run_layer(
                 "commitments", lambda: self._extract_commitments(transcript, now)
             ),
         )
-        for name, result in zip(("events", "states", "commitments"), results):
+        for name, result in zip(("events", "commitments"), results):
             if isinstance(result, Exception):
                 logger.warning("memory_v2 %s extract failed: %s", name, result)
 
@@ -261,53 +254,6 @@ class Extractor:
                 recorded_at=moment,
             )
             self.retriever.add_vector(event.id, event.summary)
-
-    async def _extract_states(self, transcript: str, now: datetime) -> None:
-        live = self.states.live(now.timestamp())
-        user = transcript
-        if live:
-            user += "\n\n【现有状态】\n" + "\n".join(f"- {line}" for line in live)
-        parsed = await self._call(self.state_model, state_system(), user, now)
-        raw_states = parsed.get("states") or []
-        if not isinstance(raw_states, list):
-            return
-        seen: set[str] = set()
-        moment = now.timestamp()
-        for item in raw_states:
-            if not isinstance(item, dict):
-                continue
-            key = str(item.get("key") or "").strip()
-            value = str(item.get("value") or "").strip().replace("\n", "")
-            if not valid_state_key(key, max_chars=self.states.key_max_chars):
-                self.trace.write({"kind": "extract_drop", "layer": "states", "reason": "key"})
-                continue
-            if key in seen:
-                continue
-            seen.add(key)
-            if not value or is_crisis_text(value) or has_ephemeral_time(value):
-                self.trace.write(
-                    {"kind": "extract_drop", "layer": "states", "reason": "value", "key": key}
-                )
-                continue
-            if len(value) > self.states.max_chars:
-                self.trace.write(
-                    {"kind": "extract_drop", "layer": "states", "reason": "length", "key": key}
-                )
-                continue
-            valid_from = parse_timestamp(item.get("valid_from"), now=now)
-            if valid_from is None:
-                valid_from = moment
-            valid_until = parse_timestamp(item.get("valid_until"), now=now)
-            importance, _clamped = clamp_importance(item.get("importance", 5))
-            self.states.upsert(
-                key=key,
-                value=value,
-                valid_from=valid_from,
-                valid_until=valid_until,
-                importance=importance,
-                source_event=str(item.get("source_event") or ""),
-                recorded_at=moment,
-            )
 
     async def _extract_commitments(self, transcript: str, now: datetime) -> None:
         existing = self.commitments.active_whats()

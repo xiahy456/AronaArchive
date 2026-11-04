@@ -175,6 +175,22 @@ def loads_json_object(raw: str) -> dict:
     return parsed
 
 
+def loads_json_array(raw: str) -> list:
+    """Accept a bare JSON array, or an object that wraps one under ``states``."""
+    text = (raw or "").strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+    parsed = json.loads(text)
+    if isinstance(parsed, list):
+        return parsed
+    if isinstance(parsed, dict):
+        states = parsed.get("states")
+        if isinstance(states, list):
+            return states
+    raise ValueError("state update json is not a list")
+
+
 def approx_chars_for_tokens(tokens: int) -> int:
     return max(32, int(int(tokens) * 1.6))
 

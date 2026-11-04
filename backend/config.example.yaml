@@ -132,6 +132,8 @@ memory_v2:
     max_items: 12
     max_chars_per_item: 48
     key_max_chars: 24
+    lookback_hours: 6
+    catchup_after_hours: 12
   events:
     enabled: true
     inject_top_k: 3

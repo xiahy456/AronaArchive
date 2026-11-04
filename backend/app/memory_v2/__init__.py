@@ -36,6 +36,7 @@ from .inject import format_event_block, format_resident_block
 from .rerank import DEFAULT_RERANK_PATH
 from .retrieve import EventRetriever
 from .scan import CommitmentScanner
+from .state_update import StateUpdater
 from .states import StateBook, assert_state_budget
 from .trace import TraceLog
 from .util import first_sentence
@@ -65,6 +66,8 @@ class MemoryV2:
         )
         if self.db.legacy_v1:
             self._refuse_legacy()
+        if self.db.states_schema_old:
+            self._refuse_old_states()
         states_cfg = config.states
         events_cfg = config.events
         commit_cfg = config.commitment
@@ -100,7 +103,6 @@ class MemoryV2:
         )
         self.extractor = Extractor(
             events=self.events,
-            states=self.states,
             commitments=self.commitments,
             retriever=self.retriever,
             trace=self.trace,
@@ -108,7 +110,6 @@ class MemoryV2:
             api_key=extract_cfg.api_key,
             model=extract_cfg.model,
             timeout_sec=extract_cfg.timeout_sec,
-            state_model=extract_cfg.state_model,
             commitment_model=extract_cfg.commitment_model,
             window_max_turns=extract_cfg.window_max_turns,
             window_max_chars=extract_cfg.window_max_chars,
@@ -118,6 +119,22 @@ class MemoryV2:
             extract_max_new=commit_cfg.extract_max_new,
             current_max_chars=commit_cfg.current_max_chars,
             enabled=extract_cfg.enabled,
+        )
+        state_model = extract_cfg.state_model or extract_cfg.model
+        self.state_updater = StateUpdater(
+            states=self.states,
+            trace=self.trace,
+            dialogue=self._recent_dialogue,
+            base_url=extract_cfg.base_url,
+            api_key=extract_cfg.api_key,
+            model=state_model,
+            timeout_sec=extract_cfg.timeout_sec,
+            retry_max=extract_cfg.retry_max,
+            calls_per_day=extract_cfg.calls_per_day,
+            max_chars=states_cfg.max_chars_per_item,
+            lookback_hours=states_cfg.lookback_hours,
+            catchup_after_hours=states_cfg.catchup_after_hours,
+            enabled=states_cfg.enabled,
         )
         self._pending_lines: list[str] = []
         self._dialogue = dialogue or (lambda _since: [])
@@ -168,6 +185,7 @@ class MemoryV2:
 
     def enqueue_window(self, window: list[dict[str, Any]]) -> None:
         self.extractor.enqueue(window)
+        self.state_updater.enqueue()
 
     def pending_commitment_lines(self) -> list[str]:
         return list(self._pending_lines)
@@ -221,6 +239,16 @@ class MemoryV2:
             "memory.db 仍是 v1 结构（存在 memories 或 state_items，没有 events）。"
             "请先停止后端，运行 python scripts/migrate_memory_v2.py 完成迁移后再启动。"
             "直接继续会忽略尚未迁移的 v1 记忆。"
+        )
+        logger.error("%s", message)
+        print(message, file=sys.stderr)
+        raise SystemExit(message)
+
+    def _refuse_old_states(self) -> None:
+        message = (
+            "states 表仍是旧结构（没有 updated_at）。"
+            "请先停止后端，运行 python scripts/migrate_memory_v2_states.py 后再启动。"
+            "直接继续会读不到现有状态。"
         )
         logger.error("%s", message)
         print(message, file=sys.stderr)

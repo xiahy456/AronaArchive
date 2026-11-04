@@ -63,17 +63,17 @@ def _memory(tmp: Path) -> MemoryV2:
 
 async def _scenario_trip(memory: MemoryV2) -> dict[str, Any]:
     start = 1_761_000_000.0  # inside 2026-10
-    memory.states.upsert(
-        key="location",
-        value="老师在深圳出差",
-        valid_from=start,
-        valid_until=start + DAY,
-        importance=6,
-        recorded_at=start,
+    memory.states.apply_ops(
+        [{"key": "location", "value": "老师在深圳出差", "active": 1}],
+        start,
     )
-    during = "老师在深圳出差" in memory.states.live(start + 3600)
-    after = "老师在深圳出差" in memory.states.live(start + 2 * DAY)
-    return {"resident_during": during, "gone_after_expiry": not after, "ok": during and not after}
+    during = "老师在深圳出差" in memory.states.live()
+    memory.states.apply_ops(
+        [{"key": "location", "value": "", "active": 0}],
+        start + 3600,
+    )
+    after = "老师在深圳出差" in memory.states.live()
+    return {"resident_during": during, "gone_after_delete": not after, "ok": during and not after}
 
 
 async def _scenario_noodles(memory: MemoryV2) -> dict[str, Any]:

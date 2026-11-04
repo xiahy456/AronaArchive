@@ -430,6 +430,8 @@ python scripts/migrate_memory_v2.py --restore data/memory_v1_backup_20261031T014
 
 迁移前先停后端。建议先 `--backup-only`，核对 manifest 的大小和 SHA256，再跑完整迁移。迁移后跑 `python scripts/eval_memory_v2.py`。任一步失败都会留下 `memory.db.new` 和备份，原始 `memory.db` 不动。库已经是 v2（有 `events` 表）时，脚本拒绝再迁，并提示 `--restore`。
 
+已经在用旧状态表（有 `valid_until`、没有 `updated_at`）的库，另跑 `python scripts/migrate_memory_v2_states.py`。它只重建 `states`：留下 `importance > 6` 且仍生效的行，每个 key 只留一条。备份在 `data/memory_state_backup/`。
+
 ## 配置
 
 由 `config.example.yaml` 复制为 `config.yaml`（已 gitignore）。相对路径均相对后端根目录解析（源码为 `backend/`；便携包为解压目录；可用环境变量 `ARONA_BACKEND_DIR` 覆盖）。下表默认值与示例文件一致。
@@ -614,7 +616,7 @@ python scripts/migrate_memory_v2.py --restore data/memory_v1_backup_20261031T014
 
 ### `memory_v2`
 
-与 `memory` 无关。`enabled` 默认 `true`。下面 37 项都在主路径或明确的降级路径上。
+与 `memory` 无关。`enabled` 默认 `true`。下面 39 项都在主路径或明确的降级路径上。
 
 
 | 配置项 | 默认 | 说明 |
@@ -633,11 +635,13 @@ python scripts/migrate_memory_v2.py --restore data/memory_v1_backup_20261031T014
 | `extractor.window_max_turns` | `40` | 待抽取窗口条数上限 |
 | `extractor.window_max_chars` | `8000` | 待抽取窗口字数上限 |
 | `extractor.retry_max` | `2` | 某一层失败后单独重试的次数 |
-| `extractor.calls_per_day` | `3000` | 三层抽取合计的每日上限 |
-| `states.enabled` | `true` | 关闭后不写状态 |
-| `states.max_items` | `12` | 常驻条数上限 |
+| `extractor.calls_per_day` | `3000` | 事件与承诺抽取合计的每日上限；状态更新单独再计一次同样的上限 |
+| `states.enabled` | `true` | 关闭后不再发起状态更新 |
+| `states.max_items` | `12` | 同时有效的状态上限；超出的新增被拒绝 |
 | `states.max_chars_per_item` | `48` | 单句字数上限，超出整句拒绝 |
 | `states.key_max_chars` | `24` | 槽位名长度上限 |
+| `states.lookback_hours` | `6` | 状态更新时附带的对话小时数 |
+| `states.catchup_after_hours` | `12` | 每天 0 点若距上次状态更新超过这么久，再补一次 |
 | `events.enabled` | `true` | 关闭后不写事件 |
 | `events.inject_top_k` | `3` | 【相关回忆】最多几条；预算不够再减条，不砍句子 |
 | `events.summary_max_chars` | `300` | 异常长摘要按句末截断 |

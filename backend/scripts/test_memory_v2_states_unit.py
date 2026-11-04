@@ -16,7 +16,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Bi-temporal states: one live row, expiry, and the startup budget check.
+"""覆盖式状态表：增改删、created_at 保持、重复 key、容量与预算断言。
 
 Run from backend/:
   python scripts/test_memory_v2_states_unit.py
@@ -24,6 +24,7 @@ Run from backend/:
 
 from __future__ import annotations
 
+import sqlite3
 import sys
 import tempfile
 from pathlib import Path
@@ -31,76 +32,145 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from app.memory_v2.db import Database  # noqa: E402
-from app.memory_v2.states import StateBook, StateBudgetError, assert_state_budget  # noqa: E402
+from app.config import MemoryV2Config, MemoryV2StatesConfig, MemoryV2StorageConfig  # noqa: E402
+from app.memory_v2 import MemoryV2  # noqa: E402
 
 
-def _fail(message: str) -> None:
-    raise AssertionError(message)
+def check(name: str, ok: bool, detail: str = "") -> None:
+    print(("OK  " if ok else "FAIL") + " " + name + (("  " + detail) if detail else ""))
+    if not ok:
+        raise SystemExit(1)
 
 
-def test_budget() -> None:
-    print("== state budget ==")
-    assert_state_budget(max_items=12, max_chars_per_item=48, token_budget_state=400)
-    try:
-        assert_state_budget(max_items=20, max_chars_per_item=48, token_budget_state=400)
-    except StateBudgetError as exc:
-        if "拒绝" in str(exc) or "装不下" in str(exc):
-            print("  ok")
-            return
-        _fail(f"budget error should explain the refusal: {exc}")
-    _fail("state_max_items=20 must refuse startup")
-
-
-def test_live_and_expiry() -> None:
-    print("== one live row and expiry ==")
-    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
-        root = Path(tmp)
-        db = Database(root / "memory.db", root / "events_fts")
-        book = StateBook(db, max_items=12, max_chars=48)
-        book.upsert(
-            key="location",
-            value="老师在广州",
-            valid_from=1_000.0,
-            valid_until=None,
-            importance=5,
-            recorded_at=1_000.0,
-        )
-        book.upsert(
-            key="location",
-            value="老师在深圳",
-            valid_from=2_000.0,
-            valid_until=None,
-            importance=6,
-            recorded_at=2_000.0,
-        )
-        live = book.live(2_000.0)
-        if live != ["老师在深圳"]:
-            _fail(f"only the new location should be live: {live}")
-        book.upsert(
-            key="current_task",
-            value="老师在做记忆系统重构",
-            valid_from=1_000.0,
-            valid_until=1_500.0,
-            importance=5,
-            recorded_at=1_000.0,
-        )
-        if "老师在做记忆系统重构" not in book.live(1_200.0):
-            _fail("bounded state should be visible before valid_until")
-        if "老师在做记忆系统重构" in book.live(1_600.0):
-            _fail("expired state must leave the resident block without a timer")
-        rows = db.call(lambda conn: conn.execute(
-            "SELECT COUNT(*) FROM states WHERE key = 'location' AND valid_until IS NULL"
-        ).fetchone()[0])
-        if int(rows) != 1:
-            _fail(f"location should have one open row, got {rows}")
-    print("  ok")
+def _memory(tmp: Path, **states: object) -> MemoryV2:
+    storage = MemoryV2StorageConfig(
+        db_path=str(tmp / "memory.db"),
+        events_fts=str(tmp / "events_fts"),
+        chroma_path=str(tmp / "chroma"),
+    )
+    config = MemoryV2Config(
+        storage=storage,
+        states=MemoryV2StatesConfig(**states),  # type: ignore[arg-type]
+    )
+    return MemoryV2(
+        config,
+        backend_dir=tmp,
+        trace_path=tmp / "trace.jsonl",
+        token_budget_state=400,
+    )
 
 
 def main() -> None:
-    test_budget()
-    test_live_and_expiry()
-    print("all state checks passed")
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        root = Path(tmp)
+        book = _memory(root).states
+        now = 1_700_000_000.0
+        applied = book.apply_ops(
+            [{"key": "location", "value": "老师人在广州", "active": 1}], now,
+        )
+        check("新增", bool(applied["added"]) and applied["added"][0]["key"] == "location")
+        row = book.active()[0]
+        check("created 与 updated 同刻", row.created_at == now and row.updated_at == now)
+
+        later = now + 3600
+        applied = book.apply_ops(
+            [{"key": "location", "value": "老师人在上海", "active": 1}], later,
+        )
+        check(
+            "修改",
+            bool(applied["modified"]) and applied["modified"][0]["before"] == "老师人在广州",
+        )
+        row = book.get("location")
+        check(
+            "created_at 保持",
+            row is not None and row.created_at == now and row.updated_at == later,
+        )
+        check("live 全量", book.live() == ["老师人在上海"])
+
+        applied = book.apply_ops(
+            [{"key": "location", "value": "", "active": 0}], later + 10,
+        )
+        deleted = book.get("location")
+        check(
+            "删除保留旧值",
+            bool(applied["deleted"]) and deleted is not None and deleted.value == "老师人在上海",
+        )
+        check("删除后不注入", book.live() == [])
+
+        revived = later + 20
+        applied = book.apply_ops(
+            [{"key": "location", "value": "老师回到广州", "active": 1}], revived,
+        )
+        check("重新启用走修改", bool(applied["modified"]) and not applied["added"])
+        row = book.get("location")
+        check(
+            "重新启用不改 created_at",
+            row is not None and row.created_at == now and row.active == 1,
+        )
+
+        applied = book.apply_ops(
+            [
+                {"key": "mood", "value": "老师心情低落", "active": 1},
+                {"key": "mood", "value": "老师心情平稳", "active": 1},
+            ],
+            revived + 10,
+        )
+        check(
+            "重复 key 后者优先",
+            bool(applied["dropped"]) and applied["dropped"][0]["reason"] == "duplicate",
+        )
+        mood = book.get("mood")
+        check("重复后的值", mood is not None and mood.value == "老师心情平稳")
+
+        applied = book.apply_ops(
+            [{"key": "missing", "value": "", "active": 0}], revived + 20,
+        )
+        check(
+            "删除不存在的 key",
+            bool(applied["dropped"]) and applied["dropped"][0]["reason"] == "missing",
+        )
+
+        tiny = _memory(root / "cap", max_items=1)
+        base = revived + 40
+        tiny.states.apply_ops(
+            [{"key": "location", "value": "老师人在广州", "active": 1}], base,
+        )
+        applied = tiny.states.apply_ops(
+            [
+                {"key": "routine", "value": "老师保持远程工作", "active": 1},
+                {"key": "location", "value": "老师人在上海", "active": 1},
+            ],
+            base + 1,
+        )
+        check("超容量的新增被拒", any(item["reason"] == "cap" for item in applied["dropped"]))
+        check("修改不受容量限制", any(item["key"] == "location" for item in applied["modified"]))
+        check("容量拒绝后仍只有一条", len(tiny.states.active()) == 1)
+
+    try:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            _memory(Path(tmp), max_items=20)
+    except SystemExit as exc:
+        check("预算断言拒绝 20 条", "装不下" in str(exc))
+    else:
+        check("预算断言拒绝 20 条", False)
+
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        root = Path(tmp)
+        db_path = root / "memory.db"
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "CREATE TABLE states (id INTEGER PRIMARY KEY, key TEXT, value TEXT, "
+            "valid_from REAL, valid_until REAL, importance INTEGER, recorded_at REAL)"
+        )
+        conn.commit()
+        conn.close()
+        try:
+            _memory(root)
+        except SystemExit as exc:
+            check("旧表拒绝启动", "migrate_memory_v2_states.py" in str(exc))
+        else:
+            check("旧表拒绝启动", False)
+    print("ALL PASS")
 
 
 if __name__ == "__main__":

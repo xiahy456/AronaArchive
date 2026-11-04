@@ -354,9 +354,10 @@ def create_app() -> FastAPI:
         if memory_v2 is not None:
             if not memory_v2.extractor.has_api():
                 logger.warning(
-                    "memory_v2 extract and commitment scan disabled: no API key"
+                    "memory_v2 extract, state update, and commitment scan disabled: no API key"
                 )
             await memory_v2.extractor.start()
+            await memory_v2.state_updater.start()
             scan_task = asyncio.create_task(memory_v2.scanner.run())
             logger.info("memory_v2 commitment scan started")
         _enqueue_stale_summary(state)
@@ -406,6 +407,7 @@ def create_app() -> FastAPI:
         if extractor is not None:
             await extractor.stop()
         if memory_v2 is not None:
+            await memory_v2.state_updater.stop()
             await memory_v2.extractor.stop()
         logger.info("AronaArchive backend stopped")
 

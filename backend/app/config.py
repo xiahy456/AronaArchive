@@ -219,6 +219,8 @@ class MemoryV2StatesConfig(BaseModel):
     max_items: int = 12
     max_chars_per_item: int = 48
     key_max_chars: int = 24
+    lookback_hours: float = 6
+    catchup_after_hours: float = 12
 
 
 class MemoryV2EventsConfig(BaseModel):

@@ -48,19 +48,6 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS idx_events_occurred ON events(occurred_at);
 
-CREATE TABLE IF NOT EXISTS states (
-    id            TEXT PRIMARY KEY,
-    key           TEXT NOT NULL,
-    value         TEXT NOT NULL,
-    valid_from    REAL NOT NULL,
-    valid_until   REAL,
-    confidence    REAL NOT NULL DEFAULT 0.8,
-    source_event  TEXT,
-    importance    INTEGER NOT NULL DEFAULT 5,
-    recorded_at   REAL NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_states_live ON states(key, valid_until);
-
 CREATE TABLE IF NOT EXISTS commitments (
     id                       TEXT PRIMARY KEY,
     what                     TEXT NOT NULL,
@@ -76,15 +63,21 @@ CREATE TABLE IF NOT EXISTS commitments (
 CREATE INDEX IF NOT EXISTS idx_commit_live
     ON commitments(active, last_helpful_injected_at);
 
-CREATE TABLE IF NOT EXISTS state_keys (
-    id            TEXT PRIMARY KEY,
-    first_seen_at REAL NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS scan_state (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+"""
+
+_STATES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS states (
+    key        TEXT NOT NULL PRIMARY KEY,
+    value      TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    active     INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_states_active ON states(active, updated_at DESC);
 """
 
 
@@ -101,6 +94,7 @@ class Database:
         self._conn.row_factory = sqlite3.Row
         self.fts_ready = False
         self.fts_tokenize = ""
+        self.states_schema_old = False
         self.legacy_v1 = self._detect_legacy()
         if self.legacy_v1:
             return
@@ -148,9 +142,33 @@ class Database:
     def ensure_schema(self) -> None:
         def _create(conn: sqlite3.Connection) -> None:
             conn.executescript(_SCHEMA)
+            columns = self._states_columns(conn)
+            if columns is None:
+                conn.executescript(_STATES_SCHEMA)
+                self.states_schema_old = False
+            elif "updated_at" not in columns:
+                self.states_schema_old = True
+            else:
+                self.states_schema_old = False
+                conn.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_states_active
+                    ON states(active, updated_at DESC)
+                    """
+                )
             self._ensure_fts(conn)
 
         self.call(_create)
+
+    @staticmethod
+    def _states_columns(conn: sqlite3.Connection) -> set[str] | None:
+        found = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'states'"
+        ).fetchone()
+        if found is None:
+            return None
+        rows = conn.execute("PRAGMA table_info(states)").fetchall()
+        return {str(row[1]) for row in rows}
 
     def _ensure_fts(self, conn: sqlite3.Connection) -> None:
         conn.commit()

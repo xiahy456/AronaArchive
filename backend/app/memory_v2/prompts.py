@@ -15,7 +15,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Four prompts. The three extractors start from the same contract."""
+"""Prompts. Event and commitment extractors, the state updater, and the commitment scan."""
 
 from __future__ import annotations
 
@@ -48,17 +48,21 @@ summary 用若干句中文，写清谁、做了什么、什么时间、结果、
 没有可记的事就输出 {{"events": []}}。
 """
 
-STATE_SYSTEM = f"""{projection("states")}
-你维护老师此刻的处境。只输出一个 JSON 对象。
+def state_update_system(max_chars: int) -> str:
+    limit = max(1, int(max_chars))
+    return f"""{projection("states")}
+你维护一张关于老师的长期状态表。只记录 12 小时后仍然需要的处境。
+12 小时内就会失效的内容（这顿饭、这次车程、今天的心情起伏、正在做的某一步操作）一律不写。
+这张表只放处境，不放已经发生的事件，不放未来计划。
 
-value 是一句可以直接放进提示词的中文，主语用「老师」。禁止键值对，禁止换行。
-value 里禁止相对时间（今天、最近、这几天）和具体日期。时间只写在 valid_from / valid_until。
-key 用 snake_case，不超过 24 个字符。起始槽位：location（在哪）、current_task（正在做的事）、routine（作息）、health（身体）、mood（情绪基调）、social（重要的人）。可以提出新 key。
-同一 key 在这次输出里只出现一次。
+只输出一个 JSON 数组，不要写别的文字。不需要改的条目不要返回。没有要改的就返回 []。
+每个元素是一次操作，只含 key、value、active：
+- 新增：用一个表里没有的 snake_case key，value 写成一句中文，active 为 1。
+- 修改：复用表里已有的 key，value 写改写后的整句，active 为 1。
+- 删除：复用表里已有的 key，value 为空字符串，active 为 0。
 
-输出：
-{{"states": [{{"key": "location", "value": "老师在广州", "valid_from": "2026-10-28T00:00:00", "valid_until": null, "importance": 5, "source_event": ""}}]}}
-没有需要更新的处境就输出 {{"states": []}}。
+value 不超过 {limit} 个字，主语用「老师」，不写相对时间（今天、最近、这几天），也不写具体日期。
+起始槽位：location（在哪）、current_task（正在做的事）、routine（作息）、health（身体）、mood（情绪基调）、social（重要的人）。可以提出新 key。
 """
 
 COMMITMENT_SYSTEM = f"""{projection("commitments")}
@@ -92,10 +96,6 @@ next_after_sec 代表「下一次你考虑向老师提出某条承诺」距离�
 
 def event_system() -> str:
     return EVENT_SYSTEM
-
-
-def state_system() -> str:
-    return STATE_SYSTEM
 
 
 def commitment_system() -> str:

@@ -462,7 +462,7 @@ class CommitmentScanner:
         lines.append("【老师当前情况】")
         live = [
             line
-            for line in self.states.live(now)
+            for line in self.states.live()
             if line.strip() and not is_crisis_text(line)
         ]
         if live:
